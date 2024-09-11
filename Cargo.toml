@@ -30,7 +30,7 @@ tokio-uring = [
 ]
 
 [dependencies]
-async-stream = { version = "0.3.5", optional = true }
+async-stream = { version = "0.3", optional = true }
 bytes = { version = "1", optional = true }
 chrono = { version = "0.4", optional = true, default-features = false, features = [
     "now",
@@ -38,7 +38,7 @@ chrono = { version = "0.4", optional = true, default-features = false, features 
 ] }
 futures-core = { version = "0.3" }
 http = { version = "1", optional = true, default-features = false }
-http-body-util = { version = "0.1.2", optional = true, default-features = false }
+http-body-util = { version = "0.1", optional = true, default-features = false }
 hyper = { version = "1", optional = true, default-features = false, features = [
     "client",
     "http1",
