@@ -1,3 +1,6 @@
+#[cfg(feature = "fs")]
+pub mod fs;
+
 use std::{io, ptr::slice_from_raw_parts};
 
 use tokio::{
