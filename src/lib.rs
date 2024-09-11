@@ -69,12 +69,14 @@ mod tests {
     use crate::dynamic::{DynRead, DynWrite};
     use crate::{Error, IoBuf};
 
+    #[allow(unused)]
     struct CountWrite<W> {
         cnt: usize,
         w: W,
     }
 
     impl<W> CountWrite<W> {
+        #[allow(unused)]
         fn new(w: W) -> Self {
             Self { cnt: 0, w }
         }
@@ -102,12 +104,14 @@ mod tests {
         }
     }
 
+    #[allow(unused)]
     struct CountRead<R> {
         cnt: usize,
         r: R,
     }
 
     impl<R> CountRead<R> {
+        #[allow(unused)]
         fn new(r: R) -> Self {
             Self { cnt: 0, r }
         }
@@ -125,6 +129,7 @@ mod tests {
         }
     }
 
+    #[allow(unused)]
     async fn write_and_read<W, R>(write: W, read: R)
     where
         W: Write,
