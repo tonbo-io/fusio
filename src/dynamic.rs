@@ -1,10 +1,7 @@
-use std::{future::Future, io, path::Path, pin::Pin};
+use std::{future::Future, pin::Pin};
 
 use bytes::Bytes;
-use futures_core::Stream;
 
-#[cfg(feature = "fs")]
-use crate::fs::{FileMeta, Fs};
 use crate::{Error, IoBuf, Read, Write};
 
 #[cfg(not(feature = "no-send"))]
@@ -87,65 +84,82 @@ where
     }
 }
 
-pub trait DynFile: DynRead + DynWrite {}
-
-impl<F> DynFile for F where F: DynRead + DynWrite {}
+#[cfg(feature = "fs")]
+pub use fs::*;
 
 #[cfg(feature = "fs")]
-pub trait DynFs {
-    fn open<'s, 'path: 's>(
-        &'s self,
-        path: &'path Path,
-    ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<Box<dyn DynFile + 's>, Error>> + 's>>;
+pub mod fs {
+    use std::io;
+    use std::path::Path;
+    use std::pin::Pin;
 
-    fn list<'s, 'path: 's>(
-        &'s self,
-        path: &'path Path,
-    ) -> Pin<
-        Box<
-            dyn MaybeSendFuture<
-                    Output = io::Result<Pin<Box<dyn Stream<Item = io::Result<FileMeta>> + 's>>>,
-                > + 's,
-        >,
-    >;
+    use futures_core::Stream;
 
-    fn remove<'s, 'path: 's>(
-        &'s self,
-        path: &'path Path,
-    ) -> Pin<Box<dyn MaybeSendFuture<Output = io::Result<()>> + 's>>;
-}
+    use crate::fs::{FileMeta, Fs};
+    use crate::{DynRead, DynWrite, Error};
 
-impl<F: Fs> DynFs for F {
-    fn open<'s, 'path: 's>(
-        &'s self,
-        path: &'path Path,
-    ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<Box<dyn DynFile + 's>, Error>> + 's>> {
-        Box::pin(async move {
-            let file = F::open(self, path).await?;
-            Ok(Box::new(file) as Box<dyn DynFile>)
-        })
+    use super::MaybeSendFuture;
+
+    pub trait DynFile: DynRead + DynWrite {}
+
+    impl<F> DynFile for F where F: DynRead + DynWrite {}
+
+    pub trait DynFs {
+        fn open<'s, 'path: 's>(
+            &'s self,
+            path: &'path Path,
+        ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<Box<dyn DynFile + 's>, Error>> + 's>>;
+
+        fn list<'s, 'path: 's>(
+            &'s self,
+            path: &'path Path,
+        ) -> Pin<
+            Box<
+                dyn MaybeSendFuture<
+                        Output = io::Result<Pin<Box<dyn Stream<Item = io::Result<FileMeta>> + 's>>>,
+                    > + 's,
+            >,
+        >;
+
+        fn remove<'s, 'path: 's>(
+            &'s self,
+            path: &'path Path,
+        ) -> Pin<Box<dyn MaybeSendFuture<Output = io::Result<()>> + 's>>;
     }
 
-    fn list<'s, 'path: 's>(
-        &'s self,
-        path: &'path Path,
-    ) -> Pin<
-        Box<
-            dyn MaybeSendFuture<
-                    Output = io::Result<Pin<Box<dyn Stream<Item = io::Result<FileMeta>> + 's>>>,
-                > + 's,
-        >,
-    > {
-        Box::pin(async move {
-            let stream = F::list(self, path).await?;
-            Ok(Box::pin(stream) as Pin<Box<dyn Stream<Item = io::Result<FileMeta>>>>)
-        })
-    }
+    impl<F: Fs> DynFs for F {
+        fn open<'s, 'path: 's>(
+            &'s self,
+            path: &'path Path,
+        ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<Box<dyn DynFile + 's>, Error>> + 's>>
+        {
+            Box::pin(async move {
+                let file = F::open(self, path).await?;
+                Ok(Box::new(file) as Box<dyn DynFile>)
+            })
+        }
 
-    fn remove<'s, 'path: 's>(
-        &'s self,
-        path: &'path Path,
-    ) -> Pin<Box<dyn MaybeSendFuture<Output = io::Result<()>> + 's>> {
-        Box::pin(F::remove(self, path))
+        fn list<'s, 'path: 's>(
+            &'s self,
+            path: &'path Path,
+        ) -> Pin<
+            Box<
+                dyn MaybeSendFuture<
+                        Output = io::Result<Pin<Box<dyn Stream<Item = io::Result<FileMeta>> + 's>>>,
+                    > + 's,
+            >,
+        > {
+            Box::pin(async move {
+                let stream = F::list(self, path).await?;
+                Ok(Box::pin(stream) as Pin<Box<dyn Stream<Item = io::Result<FileMeta>>>>)
+            })
+        }
+
+        fn remove<'s, 'path: 's>(
+            &'s self,
+            path: &'path Path,
+        ) -> Pin<Box<dyn MaybeSendFuture<Output = io::Result<()>> + 's>> {
+            Box::pin(F::remove(self, path))
+        }
     }
 }
