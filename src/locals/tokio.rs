@@ -1,14 +1,11 @@
-use std::{
-    io,
-    ptr::{slice_from_raw_parts, slice_from_raw_parts_mut},
-};
+use std::{io, ptr::slice_from_raw_parts};
 
 use tokio::{
     fs::File,
     io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt},
 };
 
-use crate::{Error, IoBuf, IoBufMut, Read, Write};
+use crate::{Error, IoBuf, Read, Write};
 
 impl Write for File {
     async fn write<B: IoBuf>(&mut self, buf: B, pos: u64) -> (Result<usize, Error>, B) {
@@ -42,17 +39,16 @@ impl Write for File {
 }
 
 impl Read for File {
-    async fn read<B: IoBufMut>(&mut self, mut buf: B, pos: u64) -> (Result<usize, Error>, B) {
-        if let Err(error) = self.seek(io::SeekFrom::Start(pos)).await {
-            return (Err(error.into()), buf);
-        }
-        (
-            AsyncReadExt::read(self, unsafe {
-                &mut *slice_from_raw_parts_mut(buf.as_mut_ptr(), buf.bytes_init())
-            })
-            .await
-            .map_err(Error::from),
-            buf,
-        )
+    async fn read(&mut self, pos: u64, len: Option<u64>) -> Result<impl IoBuf, Error> {
+        self.seek(io::SeekFrom::Start(pos)).await?;
+
+        let mut buf = vec![0; len.unwrap_or(0) as usize];
+
+        AsyncReadExt::read(self, &mut buf).await?;
+
+        #[cfg(not(feature = "bytes"))]
+        return Ok(buf);
+        #[cfg(feature = "bytes")]
+        return Ok(bytes::Bytes::from(buf));
     }
 }

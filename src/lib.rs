@@ -42,20 +42,20 @@ pub trait Write {
 
 #[cfg(not(feature = "no-send"))]
 pub trait Read: Send {
-    fn read<B: IoBufMut>(
+    fn read(
         &mut self,
-        buf: B,
         pos: u64,
-    ) -> impl Future<Output = (Result<usize, Error>, B)> + Send;
+        len: Option<u64>,
+    ) -> impl Future<Output = Result<impl IoBuf, Error>> + Send;
 }
 
 #[cfg(feature = "no-send")]
 pub trait Read {
-    fn read<B: IoBufMut>(
+    fn read(
         &mut self,
-        buf: B,
         pos: u64,
-    ) -> impl Future<Output = (Result<usize, Error>, B)>;
+        len: Option<u64>,
+    ) -> impl Future<Output = Result<impl IoBuf, Error>>;
 }
 
 #[cfg(test)]
@@ -111,9 +111,11 @@ mod tests {
     where
         R: Read,
     {
-        async fn read<B: IoBufMut>(&mut self, buf: B, pos: u64) -> (Result<usize, Error>, B) {
-            let result = self.r.read(buf, pos).await;
-            (result.0.inspect(|i| self.cnt += *i), result.1)
+        async fn read(&mut self, pos: u64, len: Option<u64>) -> Result<impl IoBuf, Error> {
+            self.r
+                .read(pos, len)
+                .await
+                .inspect(|buf| self.cnt += buf.bytes_init())
         }
     }
 
@@ -122,17 +124,16 @@ mod tests {
         W: Write,
         R: Read,
     {
-        CountWrite::new(write)
-            .write(&[2, 0, 2, 4][..], 0)
-            .await
-            .0
-            .unwrap();
+        let mut writer = CountWrite::new(write);
+        writer.write(&[2, 0, 2, 4][..], 0).await.0.unwrap();
 
-        let buf = Vec::from([0, 0, 0, 0]);
-        let (i, buf) = CountRead::new(read).read(buf, 0).await;
+        writer.sync_data().await.unwrap();
 
-        assert_eq!(i.unwrap(), 4);
-        assert_eq!(buf, vec![2, 0, 2, 4]);
+        let mut reader = CountRead::new(read);
+        let buf = reader.read(0, Some(4)).await.unwrap();
+
+        assert_eq!(buf.bytes_init(), 4);
+        assert_eq!(buf.as_slice(), &[2, 0, 2, 4]);
     }
 
     #[cfg(feature = "tokio")]

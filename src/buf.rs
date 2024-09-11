@@ -3,6 +3,11 @@ pub unsafe trait IoBuf: Unpin {
     fn as_ptr(&self) -> *const u8;
 
     fn bytes_init(&self) -> usize;
+
+    fn as_slice(&self) -> &[u8] {
+        // SAFETY: The buffer is pinned and the bytes are initialized.
+        unsafe { std::slice::from_raw_parts(self.as_ptr(), self.bytes_init()) }
+    }
 }
 
 #[cfg(all(not(feature = "completion-based"), not(feature = "no-send")))]
@@ -10,6 +15,11 @@ pub unsafe trait IoBuf: Unpin + Send {
     fn as_ptr(&self) -> *const u8;
 
     fn bytes_init(&self) -> usize;
+
+    fn as_slice(&self) -> &[u8] {
+        // SAFETY: The buffer is pinned and the bytes are initialized.
+        unsafe { std::slice::from_raw_parts(self.as_ptr(), self.bytes_init()) }
+    }
 }
 
 /// # Safety
@@ -19,6 +29,11 @@ pub unsafe trait IoBuf: Unpin + 'static {
     fn as_ptr(&self) -> *const u8;
 
     fn bytes_init(&self) -> usize;
+
+    fn as_slice(&self) -> &[u8] {
+        // SAFETY: The buffer is pinned and the bytes are initialized.
+        unsafe { std::slice::from_raw_parts(self.as_ptr(), self.bytes_init()) }
+    }
 }
 
 /// # Safety
