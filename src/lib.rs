@@ -1,14 +1,14 @@
 mod buf;
 mod error;
 mod locals;
+#[cfg(feature = "dyn")]
+pub mod object;
 pub mod remotes;
 
-use std::{future::Future, io};
+use std::future::Future;
 
 pub use buf::{IoBuf, IoBufMut};
 pub use error::Error;
-
-pub type WriteResult<T, B> = Result<T, (io::Error, B)>;
 
 #[cfg(not(feature = "no-send"))]
 pub trait Write: Send + Sync {
@@ -60,8 +60,10 @@ pub trait Read {
 
 #[cfg(test)]
 mod tests {
-    #![allow(dead_code)]
-    use super::*;
+    use super::{Read, Write};
+    #[cfg(feature = "dyn")]
+    use crate::object::{DynRead, DynWrite};
+    use crate::{Error, IoBuf};
 
     struct CountWrite<W> {
         cnt: usize,
@@ -124,11 +126,25 @@ mod tests {
         W: Write,
         R: Read,
     {
+        #[cfg(feature = "dyn")]
+        let mut writer = Box::new(CountWrite::new(write)) as Box<dyn DynWrite>;
+        #[cfg(not(feature = "dyn"))]
         let mut writer = CountWrite::new(write);
+
+        #[cfg(feature = "dyn")]
+        writer
+            .write(bytes::Bytes::from(&[2, 0, 2, 4][..]), 0)
+            .await
+            .0
+            .unwrap();
+        #[cfg(not(feature = "dyn"))]
         writer.write(&[2, 0, 2, 4][..], 0).await.0.unwrap();
 
         writer.sync_data().await.unwrap();
 
+        #[cfg(feature = "dyn")]
+        let mut reader = Box::new(CountRead::new(read)) as Box<dyn DynRead>;
+        #[cfg(not(feature = "dyn"))]
         let mut reader = CountRead::new(read);
         let buf = reader.read(0, Some(4)).await.unwrap();
 

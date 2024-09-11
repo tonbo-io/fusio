@@ -8,6 +8,11 @@ pub unsafe trait IoBuf: Unpin {
         // SAFETY: The buffer is pinned and the bytes are initialized.
         unsafe { std::slice::from_raw_parts(self.as_ptr(), self.bytes_init()) }
     }
+
+    #[cfg(feature = "bytes")]
+    fn as_bytes(&self) -> bytes::Bytes {
+        bytes::Bytes::copy_from_slice(self.as_slice())
+    }
 }
 
 #[cfg(all(not(feature = "completion-based"), not(feature = "no-send")))]
@@ -19,6 +24,11 @@ pub unsafe trait IoBuf: Unpin + Send {
     fn as_slice(&self) -> &[u8] {
         // SAFETY: The buffer is pinned and the bytes are initialized.
         unsafe { std::slice::from_raw_parts(self.as_ptr(), self.bytes_init()) }
+    }
+
+    #[cfg(feature = "bytes")]
+    fn as_bytes(&self) -> bytes::Bytes {
+        bytes::Bytes::copy_from_slice(self.as_slice())
     }
 }
 
@@ -33,6 +43,11 @@ pub unsafe trait IoBuf: Unpin + 'static {
     fn as_slice(&self) -> &[u8] {
         // SAFETY: The buffer is pinned and the bytes are initialized.
         unsafe { std::slice::from_raw_parts(self.as_ptr(), self.bytes_init()) }
+    }
+
+    #[cfg(feature = "bytes")]
+    fn as_bytes(&self) -> bytes::Bytes {
+        bytes::Bytes::copy_from_slice(self.as_slice())
     }
 }
 
@@ -152,6 +167,10 @@ unsafe impl IoBuf for bytes::Bytes {
     fn bytes_init(&self) -> usize {
         self.len()
     }
+
+    fn as_bytes(&self) -> bytes::Bytes {
+        self.clone()
+    }
 }
 
 #[cfg(feature = "bytes")]
@@ -162,6 +181,9 @@ unsafe impl IoBuf for bytes::BytesMut {
 
     fn bytes_init(&self) -> usize {
         self.len()
+    }
+    fn as_bytes(&self) -> bytes::Bytes {
+        self.clone().freeze()
     }
 }
 
