@@ -28,7 +28,7 @@ pub trait Write: Send {
 
     fn sync_all(&self) -> BoxFuture<Result<(), Error>>;
 
-    fn close(self) -> BoxFuture<'static, Result<(), Error>>;
+    fn close<'s>(self) -> BoxFuture<'s, Result<(), Error>> where Self: 's;
 }
 
 #[cfg(feature = "no-send")]
@@ -39,7 +39,7 @@ pub trait Write {
 
     fn sync_all(&self) -> BoxFuture<Result<(), Error>>;
 
-    fn close(self) -> BoxFuture<Result<(), Error>>;
+    fn close<'s>(mut self) -> BoxFuture<'s, Result<(), Error>> where Self: 's;
 }
 
 #[cfg(not(feature = "no-send"))]
@@ -90,7 +90,7 @@ mod tests {
             self.w.sync_all()
         }
 
-        fn close(self) -> BoxFuture<'static, Result<(), Error>> {
+        fn close<'s>(self) -> BoxFuture<'s, Result<(), Error>> where Self: 's {
             self.w.close()
         }
     }

@@ -1,4 +1,4 @@
-use std::{future::Future, io, pin::Pin, ptr::slice_from_raw_parts};
+use std::{io, ptr::slice_from_raw_parts};
 
 use bytes::Bytes;
 use monoio::buf::IoBuf;
@@ -40,7 +40,7 @@ impl Write for File {
         })
     }
 
-    fn close(mut self) -> BoxFuture<'static, Result<(), Error>> {
+    fn close<'s>(mut self) -> BoxFuture<'s, Result<(), Error>> where Self: 's {
         Box::pin(async move {
             File::shutdown(&mut self).await?;
             Ok(())
