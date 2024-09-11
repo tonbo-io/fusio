@@ -1,13 +1,17 @@
 mod buf;
-mod error;
-mod locals;
 #[cfg(feature = "dyn")]
-pub mod object;
+pub mod dynamic;
+mod error;
+#[cfg(feature = "fs")]
+pub mod fs;
+pub mod local;
 pub mod remotes;
 
 use std::future::Future;
 
 pub use buf::{IoBuf, IoBufMut};
+#[cfg(feature = "dyn")]
+pub use dynamic::{DynRead, DynWrite};
 pub use error::Error;
 
 #[cfg(not(feature = "no-send"))]
@@ -62,7 +66,7 @@ pub trait Read {
 mod tests {
     use super::{Read, Write};
     #[cfg(feature = "dyn")]
-    use crate::object::{DynRead, DynWrite};
+    use crate::dynamic::{DynRead, DynWrite};
     use crate::{Error, IoBuf};
 
     struct CountWrite<W> {
