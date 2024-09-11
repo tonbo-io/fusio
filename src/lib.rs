@@ -187,6 +187,7 @@ mod tests {
     #[cfg(all(feature = "tokio-uring", target_os = "linux"))]
     #[test]
     fn test_tokio_uring() {
+        use tempfile::tempfile;
         use tokio_uring::fs::File;
 
         tokio_uring::start(async {

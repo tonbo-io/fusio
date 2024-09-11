@@ -2,7 +2,10 @@ use std::{io, path::Path};
 
 use async_stream::stream;
 use futures_core::Stream;
-use tokio::{fs::File, task::spawn_blocking};
+use tokio::{
+    fs::{remove_file, File},
+    task::spawn_blocking,
+};
 
 use crate::fs::{FileMeta, Fs};
 
@@ -33,6 +36,6 @@ impl Fs for TokioFs {
     }
 
     async fn remove(&self, path: impl AsRef<Path>) -> io::Result<()> {
-        tokio::fs::remove_file(path).await
+        remove_file(path).await
     }
 }

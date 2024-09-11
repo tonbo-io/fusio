@@ -19,10 +19,15 @@ http = [
     "tokio/net",
     "tokio/rt",
 ]
-monoio = ["completion-based", "dep:monoio", "no-send"]
+monoio = ["completion-based", "dep:async-stream", "dep:monoio", "no-send"]
 no-send = []
 tokio = ["dep:async-stream", "dep:tokio"]
-tokio-uring = ["completion-based", "dep:tokio-uring", "no-send"]
+tokio-uring = [
+    "completion-based",
+    "dep:async-stream",
+    "dep:tokio-uring",
+    "no-send",
+]
 
 [dependencies]
 async-stream = { version = "0.3.5", optional = true }

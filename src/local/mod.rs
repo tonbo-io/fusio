@@ -12,4 +12,5 @@ pub use monoio::fs::*;
 #[allow(unused)]
 pub use tokio::fs::*;
 #[cfg(all(feature = "tokio-uring", target_os = "linux", feature = "fs"))]
-pub use tokio_uring::fs;
+#[allow(unused)]
+pub use tokio_uring::fs::*;

@@ -1,5 +1,4 @@
-use std::io;
-use std::path::Path;
+use std::{io, path::Path};
 
 use async_stream::stream;
 use futures_core::Stream;

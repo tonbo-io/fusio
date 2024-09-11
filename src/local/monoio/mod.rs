@@ -64,7 +64,7 @@ impl Write for File {
 
 impl Read for File {
     async fn read(&mut self, pos: u64, len: Option<u64>) -> Result<impl IoBuf, Error> {
-        let buf = Vec::with_capacity(len.unwrap_or(0) as usize);
+        let buf = vec![0; len.unwrap_or(0) as usize];
 
         let (result, buf) = self.read_at(MonoioBuf { buf }, pos).await;
         result?;
