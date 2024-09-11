@@ -5,11 +5,11 @@ mod tokio;
 #[cfg(all(feature = "tokio-uring", target_os = "linux"))]
 mod tokio_uring;
 
-#[cfg(feature = "monoio")]
+#[cfg(all(feature = "monoio", feature = "fs"))]
 #[allow(unused)]
 pub use monoio::fs::*;
-#[cfg(feature = "tokio")]
+#[cfg(all(feature = "tokio", feature = "fs"))]
 #[allow(unused)]
 pub use tokio::fs::*;
-#[cfg(all(feature = "tokio-uring", target_os = "linux"))]
+#[cfg(all(feature = "tokio-uring", target_os = "linux", feature = "fs"))]
 pub use tokio_uring::fs;

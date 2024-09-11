@@ -1,3 +1,4 @@
+#[cfg(feature = "fs")]
 pub mod fs;
 
 use monoio::fs::File;
