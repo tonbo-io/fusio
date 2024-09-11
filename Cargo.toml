@@ -5,8 +5,7 @@ name = "fusio"
 version = "0.1.0"
 
 [features]
-aws = ["bytes", "dep:chrono", "dep:percent-encoding", "dep:ring", "http"]
-bytes = ["dep:bytes"]
+aws = ["dep:chrono", "dep:percent-encoding", "dep:ring", "http"]
 completion-based = []
 http = [
     "dep:http",
@@ -20,13 +19,15 @@ monoio = ["completion-based", "dep:monoio", "no-send"]
 no-send = []
 tokio = ["dep:tokio"]
 tokio-uring = ["completion-based", "dep:tokio-uring", "no-send"]
+parquet = ["dep:futures", "dep:parquet"]
 
 [dependencies]
-bytes = { version = "1", optional = true, default-features = false }
+bytes = { version = "1" }
 chrono = { version = "0.4", optional = true, default-features = false, features = [
     "now",
     "std",
 ] }
+futures = { version = "0.3", optional = true, default-features = false }
 http = { version = "1", optional = true, default-features = false }
 http-body-util = { version = "0.1.2", optional = true, default-features = false }
 hyper = { version = "1", optional = true, default-features = false, features = [
@@ -37,6 +38,7 @@ hyper = { version = "1", optional = true, default-features = false, features = [
 monoio = { version = "0.2", optional = true, default-features = false }
 percent-encoding = { version = "2", optional = true, default-features = false }
 pin-project-lite = "0.2"
+parquet = { version = "53", optional = true, default-features = false, features = ["async", "arrow"] }
 ring = { version = "0.17", optional = true, default-features = false }
 thiserror = "1"
 tokio = { version = "1", optional = true, default-features = false, features = [

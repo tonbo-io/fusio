@@ -2,65 +2,62 @@ mod buf;
 mod error;
 mod locals;
 pub mod remotes;
+// #[cfg(feature = "parquet")]
+// #[cfg(not(feature = "no-send"))]
+// pub mod parquet;
 
-use std::{future::Future, io};
+use std::{future::Future, io, pin::Pin};
 
 pub use buf::{IoBuf, IoBufMut};
+use bytes::Bytes;
 pub use error::Error;
 
 pub type WriteResult<T, B> = Result<T, (io::Error, B)>;
 
 #[cfg(not(feature = "no-send"))]
-pub trait Write: Send + Sync {
-    fn write<B: IoBuf>(
-        &mut self,
-        buf: B,
-        pos: u64,
-    ) -> impl Future<Output = (Result<usize, Error>, B)> + Send;
+pub type BoxFuture<'a, O> = Pin<Box<dyn Future<Output = O> + Send + 'a>>;
 
-    fn sync_data(&self) -> impl Future<Output = Result<(), Error>> + Send;
+#[cfg(feature = "no-send")]
+pub type BoxFuture<'a, O> = Pin<Box<dyn Future<Output = O> + 'a>>;
 
-    fn sync_all(&self) -> impl Future<Output = Result<(), Error>> + Send;
+#[cfg(not(feature = "no-send"))]
+pub trait Write: Send {
+    fn write(&mut self, buf: Bytes, pos: u64) -> BoxFuture<(Result<usize, Error>, Bytes)>;
 
-    fn close(self) -> impl Future<Output = Result<(), Error>> + Send;
+    fn sync_data(&self) -> BoxFuture<Result<(), Error>>;
+
+    fn sync_all(&self) -> BoxFuture<Result<(), Error>>;
+
+    fn close(self) -> BoxFuture<'static, Result<(), Error>>;
 }
 
 #[cfg(feature = "no-send")]
 pub trait Write {
-    fn write<B: IoBuf>(
-        &mut self,
-        buf: B,
-        pos: u64,
-    ) -> impl Future<Output = (Result<usize, Error>, B)>;
+    fn write(&mut self, buf: Bytes, pos: u64) -> BoxFuture<(Result<usize, Error>, Bytes)>;
 
-    fn sync_data(&self) -> impl Future<Output = Result<(), Error>>;
+    fn sync_data(&self) -> BoxFuture<Result<(), Error>>;
 
-    fn sync_all(&self) -> impl Future<Output = Result<(), Error>>;
+    fn sync_all(&self) -> BoxFuture<Result<(), Error>>;
 
-    fn close(self) -> impl Future<Output = Result<(), Error>>;
+    fn close(self) -> BoxFuture<Result<(), Error>>;
 }
 
 #[cfg(not(feature = "no-send"))]
 pub trait Read: Send {
-    fn read(
-        &mut self,
-        pos: u64,
-        len: Option<u64>,
-    ) -> impl Future<Output = Result<impl IoBuf, Error>> + Send;
+    fn read(&mut self, pos: u64, len: Option<u64>) -> BoxFuture<Result<Bytes, Error>>;
 }
 
 #[cfg(feature = "no-send")]
 pub trait Read {
-    fn read(
-        &mut self,
-        pos: u64,
-        len: Option<u64>,
-    ) -> impl Future<Output = Result<impl IoBuf, Error>>;
+    fn read(&mut self, pos: u64, len: Option<u64>) -> BoxFuture<Result<Bytes, Error>>;
 }
 
 #[cfg(test)]
 mod tests {
     #![allow(dead_code)]
+
+    use monoio::buf::IoBuf;
+
     use super::*;
 
     struct CountWrite<W> {
@@ -78,21 +75,23 @@ mod tests {
     where
         W: Write,
     {
-        async fn write<B: IoBuf>(&mut self, buf: B, pos: u64) -> (Result<usize, Error>, B) {
-            let (result, buf) = self.w.write(buf, pos).await;
-            (result.inspect(|i| self.cnt += *i), buf)
+        fn write(&mut self, buf: Bytes, pos: u64) -> BoxFuture<(Result<usize, Error>, Bytes)> {
+            Box::pin(async move {
+                let (result, buf) = self.w.write(buf, pos).await;
+                (result.inspect(|i| self.cnt += *i), buf)
+            })
         }
 
-        async fn sync_data(&self) -> Result<(), Error> {
-            self.w.sync_data().await
+        fn sync_data(&self) -> BoxFuture<Result<(), Error>> {
+            self.w.sync_data()
         }
 
-        async fn sync_all(&self) -> Result<(), Error> {
-            self.w.sync_all().await
+        fn sync_all(&self) -> BoxFuture<Result<(), Error>> {
+            self.w.sync_all()
         }
 
-        async fn close(self) -> Result<(), Error> {
-            self.w.close().await
+        fn close(self) -> BoxFuture<'static, Result<(), Error>> {
+            self.w.close()
         }
     }
 
@@ -111,11 +110,13 @@ mod tests {
     where
         R: Read,
     {
-        async fn read(&mut self, pos: u64, len: Option<u64>) -> Result<impl IoBuf, Error> {
-            self.r
-                .read(pos, len)
-                .await
-                .inspect(|buf| self.cnt += buf.bytes_init())
+        fn read(&mut self, pos: u64, len: Option<u64>) -> BoxFuture<Result<Bytes, Error>> {
+            Box::pin(async move {
+                self.r
+                    .read(pos, len)
+                    .await
+                    .inspect(|buf| self.cnt += buf.bytes_init())
+            })
         }
     }
 
@@ -125,7 +126,11 @@ mod tests {
         R: Read,
     {
         let mut writer = CountWrite::new(write);
-        writer.write(&[2, 0, 2, 4][..], 0).await.0.unwrap();
+        writer
+            .write(Bytes::from(vec![2, 0, 2, 4]), 0)
+            .await
+            .0
+            .unwrap();
 
         writer.sync_data().await.unwrap();
 
@@ -133,7 +138,7 @@ mod tests {
         let buf = reader.read(0, Some(4)).await.unwrap();
 
         assert_eq!(buf.bytes_init(), 4);
-        assert_eq!(buf.as_slice(), &[2, 0, 2, 4]);
+        assert_eq!(buf.as_ref(), &[2, 0, 2, 4]);
     }
 
     #[cfg(feature = "tokio")]

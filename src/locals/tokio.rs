@@ -1,54 +1,63 @@
-use std::{io, ptr::slice_from_raw_parts};
+use std::{future::Future, io, pin::Pin, ptr::slice_from_raw_parts};
 
+use bytes::Bytes;
+use monoio::buf::IoBuf;
 use tokio::{
     fs::File,
     io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt},
 };
 
-use crate::{Error, IoBuf, Read, Write};
+use crate::{BoxFuture, Error, Read, Write};
 
 impl Write for File {
-    async fn write<B: IoBuf>(&mut self, buf: B, pos: u64) -> (Result<usize, Error>, B) {
-        if let Err(error) = self.seek(io::SeekFrom::Start(pos)).await {
-            return (Err(error.into()), buf);
-        }
-        (
-            AsyncWriteExt::write(self, unsafe {
-                &*slice_from_raw_parts(buf.as_ptr(), buf.bytes_init())
-            })
-            .await
-            .map_err(Error::from),
-            buf,
-        )
+    fn write(&mut self, buf: Bytes, pos: u64) -> BoxFuture<(Result<usize, Error>, Bytes)> {
+        Box::pin(async move {
+            if let Err(error) = self.seek(io::SeekFrom::Start(pos)).await {
+                return (Err(error.into()), buf);
+            }
+            (
+                AsyncWriteExt::write(self, unsafe {
+                    &*slice_from_raw_parts(buf.as_ptr(), buf.bytes_init())
+                })
+                .await
+                .map_err(Error::from),
+                buf,
+            )
+        })
     }
 
-    async fn sync_data(&self) -> Result<(), Error> {
-        File::sync_data(self).await?;
-        Ok(())
+    fn sync_data(&self) -> BoxFuture<Result<(), Error>> {
+        Box::pin(async {
+            File::sync_data(self).await?;
+            Ok(())
+        })
     }
 
-    async fn sync_all(&self) -> Result<(), Error> {
-        File::sync_all(self).await?;
-        Ok(())
+    fn sync_all(&self) -> BoxFuture<Result<(), Error>> {
+        Box::pin(async {
+            File::sync_all(self).await?;
+            Ok(())
+        })
     }
 
-    async fn close(mut self) -> Result<(), Error> {
-        File::shutdown(&mut self).await?;
-        Ok(())
+    fn close(mut self) -> BoxFuture<'static, Result<(), Error>> {
+        Box::pin(async move {
+            File::shutdown(&mut self).await?;
+            Ok(())
+        })
     }
 }
 
 impl Read for File {
-    async fn read(&mut self, pos: u64, len: Option<u64>) -> Result<impl IoBuf, Error> {
-        self.seek(io::SeekFrom::Start(pos)).await?;
+    fn read(&mut self, pos: u64, len: Option<u64>) -> BoxFuture<Result<Bytes, Error>> {
+        Box::pin(async move {
+            self.seek(io::SeekFrom::Start(pos)).await?;
 
-        let mut buf = vec![0; len.unwrap_or(0) as usize];
+            let mut buf = vec![0; len.unwrap_or(0) as usize];
 
-        AsyncReadExt::read(self, &mut buf).await?;
+            AsyncReadExt::read(self, &mut buf).await?;
 
-        #[cfg(not(feature = "bytes"))]
-        return Ok(buf);
-        #[cfg(feature = "bytes")]
-        return Ok(bytes::Bytes::from(buf));
+            return Ok(bytes::Bytes::from(buf));
+        })
     }
 }
