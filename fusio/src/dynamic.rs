@@ -89,16 +89,15 @@ pub use fs::*;
 
 #[cfg(feature = "fs")]
 pub mod fs {
-    use std::io;
-    use std::path::Path;
-    use std::pin::Pin;
+    use std::{io, path::Path, pin::Pin};
 
     use futures_core::Stream;
 
-    use crate::fs::{FileMeta, Fs};
-    use crate::{DynRead, DynWrite, Error};
-
     use super::MaybeSendFuture;
+    use crate::{
+        fs::{FileMeta, Fs},
+        DynRead, DynWrite, Error,
+    };
 
     pub trait DynFile: DynRead + DynWrite {}
 

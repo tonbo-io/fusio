@@ -1,0 +1,70 @@
+[package]
+edition.workspace = true
+license.workspace = true
+name = "fusio"
+repository.workspace = true
+version = "0.1.0"
+
+[features]
+aws = ["bytes", "dep:chrono", "dep:percent-encoding", "dep:ring", "http"]
+bytes = ["dep:bytes"]
+completion-based = []
+default = ["dyn", "fs"]
+dyn = ["bytes"]
+fs = ["tokio?/rt"]
+http = [
+    "dep:http",
+    "dep:http-body-util",
+    "dep:hyper",
+    "dep:url",
+    "tokio/net",
+    "tokio/rt",
+]
+monoio = ["completion-based", "dep:async-stream", "dep:monoio", "no-send"]
+no-send = []
+tokio = ["dep:async-stream", "dep:tokio"]
+tokio-uring = [
+    "completion-based",
+    "dep:async-stream",
+    "dep:tokio-uring",
+    "no-send",
+]
+
+[dependencies]
+async-stream = { version = "0.3", optional = true }
+bytes = { workspace = true, optional = true }
+chrono = { version = "0.4", optional = true, default-features = false, features = [
+    "now",
+    "std",
+] }
+futures-core = { version = "0.3" }
+http = { version = "1", optional = true, default-features = false }
+http-body-util = { version = "0.1", optional = true, default-features = false }
+hyper = { version = "1", optional = true, default-features = false, features = [
+    "client",
+    "http1",
+    "http2",
+] }
+monoio = { version = "0.2", optional = true, default-features = false }
+percent-encoding = { version = "2", optional = true, default-features = false }
+pin-project-lite = "0.2"
+ring = { version = "0.17", optional = true, default-features = false }
+thiserror = "1"
+tokio = { version = "1", optional = true, default-features = false, features = [
+    "fs",
+    "io-util",
+] }
+url = { version = "2", optional = true, default-features = false }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+tokio-uring = { version = "0.5", default-features = false, optional = true }
+
+[dev-dependencies]
+hyper = { version = "1", features = ["full"] }
+hyper-util = { version = "0.1", features = ["full"] }
+monoio = { version = "0.2" }
+tempfile = "3"
+tokio = { version = "1", features = ["full"] }
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+tokio-uring = { version = "0.5" }
