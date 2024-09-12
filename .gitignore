@@ -1,1 +1,5 @@
 /target
+.idea
+
+Cargo.lock
+parquet/Cargo.lock
