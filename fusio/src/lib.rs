@@ -26,7 +26,7 @@ pub trait Write: Send + Sync {
 
     fn sync_all(&self) -> impl Future<Output = Result<(), Error>> + Send;
 
-    fn close(self) -> impl Future<Output = Result<(), Error>> + Send;
+    fn close(&mut self) -> impl Future<Output = Result<(), Error>> + Send;
 }
 
 #[cfg(feature = "no-send")]
@@ -41,7 +41,7 @@ pub trait Write {
 
     fn sync_all(&self) -> impl Future<Output = Result<(), Error>>;
 
-    fn close(self) -> impl Future<Output = Result<(), Error>>;
+    fn close(&mut self) -> impl Future<Output = Result<(), Error>>;
 }
 
 #[cfg(not(feature = "no-send"))]
@@ -99,7 +99,7 @@ mod tests {
             self.w.sync_all().await
         }
 
-        async fn close(self) -> Result<(), Error> {
+        async fn close(&mut self) -> Result<(), Error> {
             self.w.close().await
         }
     }
@@ -179,12 +179,14 @@ mod tests {
         use monoio::fs::File;
         use tempfile::tempfile;
 
+        use crate::local::MonoioFile;
+
         let read = tempfile().unwrap();
         let write = read.try_clone().unwrap();
 
         write_and_read(
-            File::from_std(write).unwrap(),
-            File::from_std(read).unwrap(),
+            MonoioFile::from(File::from_std(write).unwrap()),
+            MonoioFile::from(File::from_std(read).unwrap()),
         )
         .await;
     }

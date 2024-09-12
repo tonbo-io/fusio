@@ -5,13 +5,15 @@ use futures_core::Stream;
 
 use crate::fs::Fs;
 
+use super::MonoioFile;
+
 pub struct MonoIoFs;
 
 impl Fs for MonoIoFs {
-    type File = monoio::fs::File;
+    type File = MonoioFile;
 
     async fn open(&self, path: impl AsRef<Path>) -> io::Result<Self::File> {
-        monoio::fs::File::open(path).await
+        Ok(monoio::fs::File::open(path).await?.into())
     }
 
     async fn list(

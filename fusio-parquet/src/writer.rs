@@ -30,7 +30,7 @@ impl AsyncFileWriter for AsyncWriter {
 
     fn complete(&mut self) -> BoxFuture<'_, parquet::errors::Result<()>> {
         Box::pin(async move {
-            if let Some(writer) = self.inner.take() {
+            if let Some(mut writer) = self.inner.take() {
                 writer
                     .sync_all()
                     .await
