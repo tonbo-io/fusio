@@ -1,0 +1,16 @@
+[package]
+edition.workspace = true
+license.workspace = true
+name = "fusio-parquet"
+repository.workspace = true
+version = "0.1.0"
+
+[dependencies]
+bytes = { workspace = true }
+fusio = { version = "0.1", path = "../fusio", features = ["dyn"] }
+futures = { version = "0.3", optional = true }
+parquet = { version = "53", features = ["arrow", "async"] }
+tokio = { version = "1.40" }
+
+[dev-dependencies]
+tempfile = "3.12.0"
