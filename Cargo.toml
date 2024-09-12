@@ -8,7 +8,9 @@ version = "0.1.0"
 aws = ["bytes", "dep:chrono", "dep:percent-encoding", "dep:ring", "http"]
 bytes = ["dep:bytes"]
 completion-based = []
+default = ["dyn", "fs"]
 dyn = ["bytes"]
+fs = ["tokio?/rt"]
 http = [
     "dep:http",
     "dep:http-body-util",
@@ -17,19 +19,26 @@ http = [
     "tokio/net",
     "tokio/rt",
 ]
-monoio = ["completion-based", "dep:monoio", "no-send"]
+monoio = ["completion-based", "dep:async-stream", "dep:monoio", "no-send"]
 no-send = []
-tokio = ["dep:tokio"]
-tokio-uring = ["completion-based", "dep:tokio-uring", "no-send"]
+tokio = ["dep:async-stream", "dep:tokio"]
+tokio-uring = [
+    "completion-based",
+    "dep:async-stream",
+    "dep:tokio-uring",
+    "no-send",
+]
 
 [dependencies]
+async-stream = { version = "0.3", optional = true }
 bytes = { version = "1", optional = true }
 chrono = { version = "0.4", optional = true, default-features = false, features = [
     "now",
     "std",
 ] }
+futures-core = { version = "0.3" }
 http = { version = "1", optional = true, default-features = false }
-http-body-util = { version = "0.1.2", optional = true, default-features = false }
+http-body-util = { version = "0.1", optional = true, default-features = false }
 hyper = { version = "1", optional = true, default-features = false, features = [
     "client",
     "http1",
