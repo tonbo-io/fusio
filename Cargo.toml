@@ -1,3 +1,5 @@
+workspace = { members = ["parquet"] }
+
 [package]
 edition = "2021"
 license = "Apache-2.0"
