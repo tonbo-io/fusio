@@ -30,9 +30,7 @@ pub trait DynWrite {
 
     fn sync_all(&self) -> Pin<Box<dyn MaybeSendFuture<Output = Result<(), Error>> + '_>>;
 
-    fn close<'s>(self) -> Pin<Box<dyn MaybeSendFuture<Output = Result<(), Error>> + 's>>
-    where
-        Self: 's;
+    fn close(&mut self) -> Pin<Box<dyn MaybeSendFuture<Output = Result<(), Error>> + '_>>;
 }
 
 impl<W: Write> DynWrite for W {
@@ -52,10 +50,7 @@ impl<W: Write> DynWrite for W {
         Box::pin(W::sync_all(self))
     }
 
-    fn close<'s>(self) -> Pin<Box<dyn MaybeSendFuture<Output = Result<(), Error>> + 's>>
-    where
-        Self: 's,
-    {
+    fn close(&mut self) -> Pin<Box<dyn MaybeSendFuture<Output = Result<(), Error>> + '_>> {
         Box::pin(W::close(self))
     }
 }

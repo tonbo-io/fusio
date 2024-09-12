@@ -35,8 +35,8 @@ impl Write for File {
         Ok(())
     }
 
-    async fn close(mut self) -> Result<(), Error> {
-        File::shutdown(&mut self).await?;
+    async fn close(&mut self) -> Result<(), Error> {
+        File::shutdown(self).await?;
         Ok(())
     }
 }

@@ -7,10 +7,15 @@ version = "0.1.0"
 
 [dependencies]
 bytes = { workspace = true }
-fusio = { version = "0.1", path = "../fusio", features = ["dyn"] }
-futures = { version = "0.3", optional = true }
+fusio = { version = "0.1", path = "../fusio", features = ["dyn", "tokio"] }
+futures = { version = "0.3" }
 parquet = { version = "53", features = ["arrow", "async"] }
 tokio = { version = "1.40" }
 
 [dev-dependencies]
+arrow = "53"
 tempfile = "3.12.0"
+rand = "0.8"
+
+[lib]
+path = "src/lib.rs"
