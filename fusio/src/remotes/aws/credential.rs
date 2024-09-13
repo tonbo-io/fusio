@@ -1,48 +1,42 @@
 use std::collections::BTreeMap;
-use std::future::Future;
 use std::io;
-use std::str::FromStr;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use bytes::Bytes;
+use bytes::{Buf, Bytes};
 use chrono::{DateTime, Utc};
 use http::header::{self, AUTHORIZATION};
 use http::{HeaderMap, HeaderName, HeaderValue, Method, Request, StatusCode};
-use http_body_util::{BodyExt, Empty};
+use http_body_util::BodyExt;
 use hyper::body::Body;
-use hyper::rt::{Executor, Read, Write};
 use percent_encoding::utf8_percent_encode;
+use serde::Deserialize;
 use thiserror::Error;
 use url::Url;
 
+use crate::error::BoxError;
 use crate::remotes::aws::{STRICT_ENCODE_SET, STRICT_PATH_ENCODE_SET};
-use crate::remotes::http::{Client, HttpError, HyperClient};
+use crate::remotes::http::{Empty, HttpClient};
 
 const EMPTY_SHA256_HASH: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
 const UNSIGNED_PAYLOAD: &str = "UNSIGNED-PAYLOAD";
 const STREAMING_PAYLOAD: &str = "STREAMING-AWS4-HMAC-SHA256-PAYLOAD";
 
 #[derive(Debug)]
-pub struct AwsCredential<'c> {
+pub struct AwsCredential {
     /// AWS_ACCESS_KEY_ID
-    pub key_id: &'c str,
+    pub key_id: String,
     /// AWS_SECRET_ACCESS_KEY
-    pub secret_key: &'c str,
+    pub secret_key: String,
     /// AWS_SESSION_TOKEN
-    pub token: Option<&'c str>,
+    pub token: Option<String>,
 }
 
-impl<'c> AwsCredential<'c> {
+impl AwsCredential {
     /// Signs a string
     ///
     /// <https://docs.aws.amazon.com/general/latest/gr/sigv4-calculate-signature.html>
-    fn sign(
-        &self,
-        to_sign: &'c str,
-        date: DateTime<Utc>,
-        region: &'c str,
-        service: &'c str,
-    ) -> String {
+    fn sign(&self, to_sign: &str, date: DateTime<Utc>, region: &str, service: &str) -> String {
         let date_string = date.format("%Y%m%d").to_string();
         let date_hmac = hmac_sha256(format!("AWS4{}", self.secret_key), date_string);
         let region_hmac = hmac_sha256(date_hmac, region);
@@ -73,7 +67,7 @@ fn hex_encode(bytes: &[u8]) -> String {
 #[derive(Debug)]
 pub struct AwsAuthorizer<'a> {
     date: Option<DateTime<Utc>>,
-    credential: &'a AwsCredential<'a>,
+    credential: &'a AwsCredential,
     service: &'a str,
     region: &'a str,
     token_header: Option<HeaderName>,
@@ -131,7 +125,7 @@ impl<'a> AwsAuthorizer<'a> {
         request: &mut Request<B>,
         pre_calculated_digest: Option<&[u8]>,
     ) -> Result<(), AutohrizeError> {
-        if let Some(token) = self.credential.token {
+        if let Some(token) = &self.credential.token {
             let token_val = HeaderValue::from_str(token)?;
             let header = self.token_header.as_ref().unwrap_or(&TOKEN_HEADER);
             request.headers_mut().insert(header, token_val);
@@ -228,7 +222,7 @@ impl<'a> AwsAuthorizer<'a> {
 
         // For S3, you must include the X-Amz-Security-Token query parameter in the URL if
         // using credentials sourced from the STS service.
-        if let Some(token) = self.credential.token {
+        if let Some(token) = &self.credential.token {
             url.query_pairs_mut()
                 .append_pair("X-Amz-Security-Token", token);
         }
@@ -411,11 +405,11 @@ enum AutohrizeError {
 }
 
 /// <https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/iam-roles-for-amazon-ec2.html#instance-metadata-security-credentials>
-async fn instance_creds<'c, C: Client>(
-    client: &'c HyperClient<C>,
+async fn instance_creds<'c, C: HttpClient>(
+    client: &'c C,
     endpoint: &'c str,
     imdsv1_fallback: bool,
-) -> Result<(AwsCredential<'c>, Option<Instant>), HttpError> {
+) -> Result<TemporaryToken<Arc<AwsCredential>>, BoxError> {
     const CREDENTIALS_PATH: &str = "latest/meta-data/iam/security-credentials";
     const AWS_EC2_METADATA_TOKEN_HEADER: &str = "X-aws-ec2-metadata-token";
 
@@ -426,18 +420,28 @@ async fn instance_creds<'c, C: Client>(
         .uri(token_url)
         .header("host", endpoint)
         .header("X-aws-ec2-metadata-token-ttl-seconds", "600")
-        .body(Empty::<Bytes>::new())?;
+        .body(Empty {})?;
 
-    let token_result = client.send(request).await?;
+    let token_result = client
+        .send_request(request)
+        .await
+        .map_err(io::Error::other)?;
 
     let token = match token_result.status() {
-        StatusCode::OK => Some(token_result.collect().await?.to_bytes()),
+        StatusCode::OK => Some(
+            token_result
+                .collect()
+                .await
+                .map_err(io::Error::other)?
+                .to_bytes(),
+        ),
         StatusCode::FORBIDDEN if imdsv1_fallback => None,
         _ => {
-            return Err(HttpError::Io(io::Error::new(
-                io::ErrorKind::Other,
-                "Invalid token",
-            )))
+            return Err(format!(
+                "Failed to get instance metadata token, status: {}",
+                token_result.status()
+            )
+            .into());
         }
     };
 
@@ -455,28 +459,69 @@ async fn instance_creds<'c, C: Client>(
     }
 
     let role = client
-        .send(role_request.body(Empty::<Bytes>::new())?)
-        .await?
+        .send_request(role_request.body(Empty {}).map_err(io::Error::other)?)
+        .await
+        .map_err(io::Error::other)?
         .collect()
-        .await?
+        .await
+        .map_err(io::Error::other)?
         .to_bytes();
+    let role = String::from_utf8(role.to_vec()).map_err(io::Error::other)?;
 
-    // let creds_url = format!("{endpoint}/{CREDENTIALS_PATH}/{role}");
-    // let mut creds_request = client.request(Method::GET, creds_url);
-    // if let Some(token) = &token {
-    //     creds_request = creds_request.header(AWS_EC2_METADATA_TOKEN_HEADER, token);
-    // }
+    let creds_url = format!("{endpoint}/{CREDENTIALS_PATH}/{role}");
+    let mut creds_request = Request::builder().uri(creds_url).method(Method::GET);
+    if let Some(token) = &token {
+        creds_request = creds_request.header(
+            AWS_EC2_METADATA_TOKEN_HEADER,
+            String::from_utf8(token.to_vec()).map_err(io::Error::other)?,
+        );
+    }
 
-    // let creds: InstanceCredentials = creds_request.send_retry(retry_config).await?.json().await?;
+    let response = client
+        .send_request(creds_request.body(Empty {}).map_err(io::Error::other)?)
+        .await
+        .map_err(io::Error::other)?
+        .collect()
+        .await
+        .map_err(io::Error::other)?
+        .aggregate()
+        .reader();
 
-    // let now = Utc::now();
-    // let ttl = (creds.expiration - now).to_std().unwrap_or_default();
-    // Ok(TemporaryToken {
-    //     token: Arc::new(creds.into()),
-    //     expiry: Some(Instant::now() + ttl),
-    // })
+    let creds: InstanceCredentials = serde_json::from_reader(response).map_err(io::Error::other)?;
 
-    todo!()
+    let now = Utc::now();
+    let ttl = (creds.expiration - now).to_std().unwrap_or_default();
+    Ok(TemporaryToken {
+        token: Arc::new(creds.into()),
+        expiry: Some(Instant::now() + ttl),
+    })
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct InstanceCredentials {
+    access_key_id: String,
+    secret_access_key: String,
+    token: String,
+    expiration: DateTime<Utc>,
+}
+
+impl From<InstanceCredentials> for AwsCredential {
+    fn from(s: InstanceCredentials) -> Self {
+        Self {
+            key_id: s.access_key_id,
+            secret_key: s.secret_access_key,
+            token: Some(s.token),
+        }
+    }
+}
+
+struct TemporaryToken<T> {
+    /// The temporary credential
+    pub token: T,
+    /// The instant at which this credential is no longer valid
+    /// None means the credential does not expire
+    pub expiry: Option<Instant>,
 }
 
 #[cfg(test)]
@@ -493,15 +538,16 @@ mod tests {
     use tokio::net::TcpStream;
     use url::Url;
 
-    use crate::remotes::aws::credential::{AwsAuthorizer, AwsCredential};
+    use crate::remotes::aws::credential::{instance_creds, AwsAuthorizer, AwsCredential};
+    use crate::remotes::http::tokio::TokioClient;
 
     // Test generated using https://docs.aws.amazon.com/general/latest/gr/sigv4-signed-request-examples.html
     #[tokio::test]
     async fn test_sign_with_signed_payload() {
         // Test credentials from https://docs.aws.amazon.com/AmazonS3/latest/userguide/RESTAuthentication.html
         let credential = AwsCredential {
-            key_id: "AKIAIOSFODNN7EXAMPLE",
-            secret_key: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+            key_id: "AKIAIOSFODNN7EXAMPLE".into(),
+            secret_key: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY".into(),
             token: None,
         };
 
@@ -538,8 +584,8 @@ mod tests {
     async fn test_sign_with_unsigned_payload() {
         // Test credentials from https://docs.aws.amazon.com/AmazonS3/latest/userguide/RESTAuthentication.html
         let credential = AwsCredential {
-            key_id: "AKIAIOSFODNN7EXAMPLE",
-            secret_key: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+            key_id: "AKIAIOSFODNN7EXAMPLE".into(),
+            secret_key: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY".into(),
             token: None,
         };
 
@@ -576,8 +622,8 @@ mod tests {
     fn signed_get_url() {
         // Values from https://docs.aws.amazon.com/AmazonS3/latest/API/sigv4-query-string-auth.html
         let credential = AwsCredential {
-            key_id: "AKIAIOSFODNN7EXAMPLE",
-            secret_key: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+            key_id: "AKIAIOSFODNN7EXAMPLE".into(),
+            secret_key: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY".into(),
             token: None,
         };
 
@@ -615,8 +661,8 @@ mod tests {
     #[tokio::test]
     async fn test_sign_port() {
         let credential = AwsCredential {
-            key_id: "H20ABqCkLZID4rLe",
-            secret_key: "jMqRDgxSsBqqznfmddGdu1TmmZOJQxdM",
+            key_id: "H20ABqCkLZID4rLe".into(),
+            secret_key: "jMqRDgxSsBqqznfmddGdu1TmmZOJQxdM".into(),
             token: None,
         };
 
@@ -667,7 +713,7 @@ mod tests {
         let request = Request::builder()
             .uri(format!("http://{endpoint}/latest/meta-data/ami-id"))
             .method(Method::GET)
-            .header("host", endpoint)
+            .header("host", &endpoint)
             .body(Empty::<Bytes>::new())
             .unwrap();
 
@@ -678,9 +724,9 @@ mod tests {
             "Ensure metadata endpoint is set to only allow IMDSv2"
         );
 
-        // let creds = instance_creds(&client, &retry_config, &endpoint, false)
-        //     .await
-        //     .unwrap();
+        // let client = TokioClient::new();
+
+        // let creds = instance_creds(&client, &endpoint, false).await.unwrap();
 
         // let id = &creds.token.key_id;
         // let secret = &creds.token.secret_key;

@@ -6,7 +6,16 @@ repository.workspace = true
 version = "0.1.0"
 
 [features]
-aws = ["bytes", "chrono", "http", "percent-encoding", "ring"]
+aws = [
+    "bytes",
+    "chrono",
+    "chrono?/serde",
+    "http",
+    "percent-encoding",
+    "ring",
+    "serde",
+    "serde_json",
+]
 bytes = ["dep:bytes"]
 completion-based = []
 default = ["dyn", "fs"]
@@ -52,6 +61,8 @@ reqwest = { version = "0.12.7", optional = true, features = ["stream"] }
 ring = { version = "0.17", optional = true, default-features = false, features = [
     "std",
 ] }
+serde = { version = "1", optional = true, features = ["derive"] }
+serde_json = { version = "1", optional = true }
 thiserror = "1"
 tokio = { version = "1", optional = true, default-features = false, features = [
     "fs",

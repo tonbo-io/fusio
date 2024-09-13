@@ -18,14 +18,3 @@ impl S3 {
         }
     }
 }
-
-impl Read for S3 {
-    async fn read<B: IoBufMut>(&mut self, buf: B, pos: u64) -> (Result<usize, Error>, B) {
-        let path = utf8_percent_encode(self.path.as_ref(), &STRICT_PATH_ENCODE_SET);
-        let url = format!("{}/{}", self.bucket_endpoint, path);
-        match Request::builder().uri(url).body(()) {
-            Ok(req) => todo!(),
-            Err(e) => (Err(e.into()), buf),
-        }
-    }
-}
