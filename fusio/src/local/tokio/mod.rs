@@ -13,7 +13,7 @@ use crate::{Error, IoBuf, Read, Write};
 impl Write for File {
     async fn write<B: IoBuf>(&mut self, buf: B, pos: u64) -> (Result<usize, Error>, B) {
         if let Err(error) = self.seek(io::SeekFrom::Start(pos)).await {
-            return (Err(error.into()), buf);
+            return (Err(error), buf);
         }
         (
             AsyncWriteExt::write(self, unsafe {

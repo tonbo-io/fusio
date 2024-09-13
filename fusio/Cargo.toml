@@ -6,29 +6,37 @@ repository.workspace = true
 version = "0.1.0"
 
 [features]
-aws = ["bytes", "dep:chrono", "dep:percent-encoding", "dep:ring", "http"]
+aws = [
+    "bytes",
+    "chrono",
+    "chrono?/serde",
+    "http",
+    "percent-encoding",
+    "ring",
+    "serde",
+    "serde_json",
+]
 bytes = ["dep:bytes"]
 completion-based = []
 default = ["dyn", "fs"]
 dyn = ["bytes"]
 fs = ["tokio?/rt"]
+h2 = ["dep:h2"]
 http = [
     "dep:http",
-    "dep:http-body-util",
-    "dep:hyper",
-    "dep:url",
-    "tokio/net",
-    "tokio/rt",
+    "http-body",
+    "http-body-util",
+    "monoio?/poll-io",
+    "tokio?/net",
+    "tokio?/rt",
+    "url",
 ]
-monoio = ["completion-based", "dep:async-stream", "dep:monoio", "no-send"]
+monoio = ["async-stream", "completion-based", "dep:monoio", "no-send"]
+monoio-http = ["h2", "http", "hyper"]
 no-send = []
-tokio = ["dep:async-stream", "dep:tokio"]
-tokio-uring = [
-    "completion-based",
-    "dep:async-stream",
-    "dep:tokio-uring",
-    "no-send",
-]
+tokio = ["async-stream", "dep:tokio"]
+tokio-http = ["dep:reqwest", "http"]
+tokio-uring = ["async-stream", "completion-based", "dep:tokio-uring", "no-send"]
 
 [dependencies]
 async-stream = { version = "0.3", optional = true }
@@ -38,7 +46,9 @@ chrono = { version = "0.4", optional = true, default-features = false, features 
     "std",
 ] }
 futures-core = { version = "0.3" }
+h2 = { version = "0.4.6", optional = true }
 http = { version = "1", optional = true, default-features = false }
+http-body = { version = "1", optional = true }
 http-body-util = { version = "0.1", optional = true, default-features = false }
 hyper = { version = "1", optional = true, default-features = false, features = [
     "client",
@@ -47,8 +57,12 @@ hyper = { version = "1", optional = true, default-features = false, features = [
 ] }
 monoio = { version = "0.2", optional = true, default-features = false }
 percent-encoding = { version = "2", optional = true, default-features = false }
-pin-project-lite = "0.2"
-ring = { version = "0.17", optional = true, default-features = false }
+reqwest = { version = "0.12.7", optional = true, features = ["stream"] }
+ring = { version = "0.17", optional = true, default-features = false, features = [
+    "std",
+] }
+serde = { version = "1", optional = true, features = ["derive"] }
+serde_json = { version = "1", optional = true }
 thiserror = "1"
 tokio = { version = "1", optional = true, default-features = false, features = [
     "fs",
@@ -60,6 +74,7 @@ url = { version = "2", optional = true, default-features = false }
 tokio-uring = { version = "0.5", default-features = false, optional = true }
 
 [dev-dependencies]
+futures-util = { version = "0.3" }
 hyper = { version = "1", features = ["full"] }
 hyper-util = { version = "0.1", features = ["full"] }
 monoio = { version = "0.2" }
