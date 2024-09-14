@@ -12,7 +12,7 @@ use std::future::Future;
 
 pub use buf::{IoBuf, IoBufMut};
 #[cfg(feature = "dyn")]
-pub use dynamic::{DynRead, DynWrite};
+pub use dynamic::{DynRead, DynWrite, DynFs};
 pub use error::Error;
 
 #[cfg(not(feature = "no-send"))]
