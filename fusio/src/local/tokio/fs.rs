@@ -1,4 +1,4 @@
-use std::{io, path::Path};
+use std::{future::Future, io};
 
 use async_stream::stream;
 use futures_core::Stream;
@@ -7,35 +7,50 @@ use tokio::{
     task::spawn_blocking,
 };
 
-use crate::fs::{FileMeta, Fs};
+use crate::{
+    fs::{FileMeta, Fs},
+    path::{path_to_local, Path},
+    Error,
+};
 
 pub struct TokioFs;
 
 impl Fs for TokioFs {
-    type File = File;
+    type Read = File;
+    type Write = File;
 
-    async fn open(&self, path: impl AsRef<Path>) -> io::Result<Self::File> {
-        File::open(path).await
+    async fn open_read(&self, path: &Path) -> Result<Self::Read, Error> {
+        let path = path_to_local(path)?;
+
+        Ok(File::open(&path).await?)
+    }
+
+    fn open_write(&self, path: &Path) -> impl Future<Output = Result<Self::Write, Error>> {
+        self.open_read(path)
     }
 
     async fn list(
         &self,
-        path: impl AsRef<Path>,
-    ) -> io::Result<impl Stream<Item = io::Result<FileMeta>>> {
-        let path = path.as_ref().to_owned();
-        let stream = spawn_blocking(move || {
+        path: &Path,
+    ) -> Result<impl Stream<Item = Result<FileMeta, Error>>, Error> {
+        let path = path_to_local(path)?;
+
+        spawn_blocking(move || {
             let entries = path.read_dir()?;
-            Ok::<_, io::Error>(stream! {
+            Ok::<_, Error>(stream! {
                 for entry in entries {
-                    yield Ok(FileMeta { path: entry?.path() });
+                    yield Ok(FileMeta { path: Path::from_filesystem_path(entry?.path())? });
                 }
             })
         })
-        .await??;
-        Ok(stream)
+        .await
+        .map_err(io::Error::from)?
     }
 
-    async fn remove(&self, path: impl AsRef<Path>) -> io::Result<()> {
-        remove_file(path).await
+    async fn remove(&self, path: &Path) -> Result<(), Error> {
+        let path = path_to_local(path)?;
+
+        remove_file(&path).await?;
+        Ok(())
     }
 }

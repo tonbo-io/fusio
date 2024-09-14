@@ -1,12 +1,16 @@
-use std::collections::BTreeMap;
-use std::io;
-use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::{
+    collections::BTreeMap,
+    io,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use bytes::{Buf, Bytes};
 use chrono::{DateTime, Utc};
-use http::header::{self, AUTHORIZATION};
-use http::{HeaderMap, HeaderName, HeaderValue, Method, Request, StatusCode};
+use http::{
+    header::{self, AUTHORIZATION},
+    HeaderMap, HeaderName, HeaderValue, Method, Request, StatusCode,
+};
 use http_body_util::BodyExt;
 use hyper::body::Body;
 use percent_encoding::utf8_percent_encode;
@@ -14,9 +18,13 @@ use serde::Deserialize;
 use thiserror::Error;
 use url::Url;
 
-use crate::error::BoxError;
-use crate::remotes::aws::{STRICT_ENCODE_SET, STRICT_PATH_ENCODE_SET};
-use crate::remotes::http::{Empty, HttpClient};
+use crate::{
+    error::BoxError,
+    remotes::{
+        aws::{STRICT_ENCODE_SET, STRICT_PATH_ENCODE_SET},
+        http::{Empty, HttpClient},
+    },
+};
 
 const EMPTY_SHA256_HASH: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
 const UNSIGNED_PAYLOAD: &str = "UNSIGNED-PAYLOAD";
@@ -526,20 +534,20 @@ struct TemporaryToken<T> {
 
 #[cfg(test)]
 mod tests {
-    use std::env;
-    use std::time::Duration;
+    use std::{env, time::Duration};
 
     use bytes::Bytes;
     use chrono::{DateTime, Utc};
-    use http::header::AUTHORIZATION;
-    use http::{Method, Request, StatusCode};
+    use http::{header::AUTHORIZATION, Method, Request, StatusCode};
     use http_body_util::Empty;
     use hyper_util::rt::TokioIo;
     use tokio::net::TcpStream;
     use url::Url;
 
-    use crate::remotes::aws::credential::{instance_creds, AwsAuthorizer, AwsCredential};
-    use crate::remotes::http::tokio::TokioClient;
+    use crate::remotes::{
+        aws::credential::{instance_creds, AwsAuthorizer, AwsCredential},
+        http::tokio::TokioClient,
+    };
 
     // Test generated using https://docs.aws.amazon.com/general/latest/gr/sigv4-signed-request-examples.html
     #[tokio::test]
@@ -577,7 +585,13 @@ mod tests {
         };
 
         signer.authorize(&mut request, None).await.unwrap();
-        assert_eq!(request.headers().get(&AUTHORIZATION).unwrap(), "AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/20220806/us-east-1/ec2/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date, Signature=a3c787a7ed37f7fdfbfd2d7056a3d7c9d85e6d52a2bfbec73793c0be6e7862d4")
+        assert_eq!(
+            request.headers().get(&AUTHORIZATION).unwrap(),
+            "AWS4-HMAC-SHA256 \
+             Credential=AKIAIOSFODNN7EXAMPLE/20220806/us-east-1/ec2/aws4_request, \
+             SignedHeaders=host;x-amz-content-sha256;x-amz-date, \
+             Signature=a3c787a7ed37f7fdfbfd2d7056a3d7c9d85e6d52a2bfbec73793c0be6e7862d4"
+        )
     }
 
     #[tokio::test]
@@ -615,7 +629,13 @@ mod tests {
         };
 
         authorizer.authorize(&mut request, None).await.unwrap();
-        assert_eq!(request.headers().get(&AUTHORIZATION).unwrap(), "AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/20220806/us-east-1/ec2/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date, Signature=653c3d8ea261fd826207df58bc2bb69fbb5003e9eb3c0ef06e4a51f2a81d8699");
+        assert_eq!(
+            request.headers().get(&AUTHORIZATION).unwrap(),
+            "AWS4-HMAC-SHA256 \
+             Credential=AKIAIOSFODNN7EXAMPLE/20220806/us-east-1/ec2/aws4_request, \
+             SignedHeaders=host;x-amz-content-sha256;x-amz-date, \
+             Signature=653c3d8ea261fd826207df58bc2bb69fbb5003e9eb3c0ef06e4a51f2a81d8699"
+        );
     }
 
     #[test]
@@ -686,7 +706,12 @@ mod tests {
         };
 
         authorizer.authorize(&mut request, None).await.unwrap();
-        assert_eq!(request.headers().get(&AUTHORIZATION).unwrap(), "AWS4-HMAC-SHA256 Credential=H20ABqCkLZID4rLe/20220809/us-east-1/s3/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date, Signature=9ebf2f92872066c99ac94e573b4e1b80f4dbb8a32b1e8e23178318746e7d1b4d")
+        assert_eq!(
+            request.headers().get(&AUTHORIZATION).unwrap(),
+            "AWS4-HMAC-SHA256 Credential=H20ABqCkLZID4rLe/20220809/us-east-1/s3/aws4_request, \
+             SignedHeaders=host;x-amz-content-sha256;x-amz-date, \
+             Signature=9ebf2f92872066c99ac94e573b4e1b80f4dbb8a32b1e8e23178318746e7d1b4d"
+        )
     }
 
     #[tokio::test]

@@ -5,6 +5,7 @@ mod error;
 #[cfg(feature = "fs")]
 pub mod fs;
 pub mod local;
+pub mod path;
 pub mod remotes;
 
 use std::future::Future;
@@ -15,31 +16,28 @@ pub use dynamic::{DynRead, DynWrite};
 pub use error::Error;
 
 #[cfg(not(feature = "no-send"))]
-pub trait Write: Send + Sync {
-    fn write<B: IoBuf>(
-        &mut self,
-        buf: B,
-        pos: u64,
-    ) -> impl Future<Output = (Result<usize, Error>, B)> + Send;
+pub trait Write: Send {
+    fn write<B: IoBuf>(&mut self, buf: B)
+        -> impl Future<Output = (Result<usize, Error>, B)> + Send;
 
-    fn sync_data(&self) -> impl Future<Output = Result<(), Error>> + Send;
+    fn sync_data(&mut self) -> impl Future<Output = Result<(), Error>> + Send;
 
-    fn sync_all(&self) -> impl Future<Output = Result<(), Error>> + Send;
+    fn sync_all(&mut self) -> impl Future<Output = Result<(), Error>> + Send;
+
+    fn flush(&mut self) -> impl Future<Output = Result<(), Error>> + Send;
 
     fn close(&mut self) -> impl Future<Output = Result<(), Error>> + Send;
 }
 
 #[cfg(feature = "no-send")]
 pub trait Write {
-    fn write<B: IoBuf>(
-        &mut self,
-        buf: B,
-        pos: u64,
-    ) -> impl Future<Output = (Result<usize, Error>, B)>;
+    fn write<B: IoBuf>(&mut self, buf: B) -> impl Future<Output = (Result<usize, Error>, B)>;
 
-    fn sync_data(&self) -> impl Future<Output = Result<(), Error>>;
+    fn sync_data(&mut self) -> impl Future<Output = Result<(), Error>>;
 
-    fn sync_all(&self) -> impl Future<Output = Result<(), Error>>;
+    fn sync_all(&mut self) -> impl Future<Output = Result<(), Error>>;
+
+    fn flush(&mut self) -> impl Future<Output = Result<(), Error>>;
 
     fn close(&mut self) -> impl Future<Output = Result<(), Error>>;
 }
@@ -86,17 +84,21 @@ mod tests {
     where
         W: Write,
     {
-        async fn write<B: IoBuf>(&mut self, buf: B, pos: u64) -> (Result<usize, Error>, B) {
-            let (result, buf) = self.w.write(buf, pos).await;
+        async fn write<B: IoBuf>(&mut self, buf: B) -> (Result<usize, Error>, B) {
+            let (result, buf) = self.w.write(buf).await;
             (result.inspect(|i| self.cnt += *i), buf)
         }
 
-        async fn sync_data(&self) -> Result<(), Error> {
+        async fn sync_data(&mut self) -> Result<(), Error> {
             self.w.sync_data().await
         }
 
-        async fn sync_all(&self) -> Result<(), Error> {
+        async fn sync_all(&mut self) -> Result<(), Error> {
             self.w.sync_all().await
+        }
+
+        async fn flush(&mut self) -> Result<(), Error> {
+            self.w.flush().await
         }
 
         async fn close(&mut self) -> Result<(), Error> {
@@ -142,12 +144,12 @@ mod tests {
 
         #[cfg(feature = "dyn")]
         writer
-            .write(bytes::Bytes::from(&[2, 0, 2, 4][..]), 0)
+            .write(bytes::Bytes::from(&[2, 0, 2, 4][..]))
             .await
             .0
             .unwrap();
         #[cfg(not(feature = "dyn"))]
-        writer.write(&[2, 0, 2, 4][..], 0).await.0.unwrap();
+        writer.write(&[2, 0, 2, 4][..]).await.0.unwrap();
 
         writer.sync_data().await.unwrap();
 

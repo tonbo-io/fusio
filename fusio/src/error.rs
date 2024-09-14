@@ -1,5 +1,16 @@
 use std::io;
 
-pub type Error = io::Error;
+use thiserror::Error;
+
+#[derive(Debug, Error)]
+#[error(transparent)]
+pub enum Error {
+    Io(#[from] io::Error),
+    #[cfg(feature = "http")]
+    Http(#[from] hyper::http::Error),
+    #[cfg(feature = "object_store")]
+    ObjectStore(#[from] object_store::Error),
+    Path(#[from] crate::path::Error),
+}
 
 pub type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;

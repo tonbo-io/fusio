@@ -23,12 +23,11 @@ pub trait DynWrite {
     fn write(
         &mut self,
         buf: Bytes,
-        pos: u64,
     ) -> Pin<Box<dyn MaybeSendFuture<Output = (Result<usize, Error>, Bytes)> + '_>>;
 
-    fn sync_data(&self) -> Pin<Box<dyn MaybeSendFuture<Output = Result<(), Error>> + '_>>;
+    fn sync_data(&mut self) -> Pin<Box<dyn MaybeSendFuture<Output = Result<(), Error>> + '_>>;
 
-    fn sync_all(&self) -> Pin<Box<dyn MaybeSendFuture<Output = Result<(), Error>> + '_>>;
+    fn sync_all(&mut self) -> Pin<Box<dyn MaybeSendFuture<Output = Result<(), Error>> + '_>>;
 
     fn close(&mut self) -> Pin<Box<dyn MaybeSendFuture<Output = Result<(), Error>> + '_>>;
 }
@@ -37,16 +36,15 @@ impl<W: Write> DynWrite for W {
     fn write(
         &mut self,
         buf: Bytes,
-        pos: u64,
     ) -> Pin<Box<dyn MaybeSendFuture<Output = (Result<usize, Error>, Bytes)> + '_>> {
-        Box::pin(W::write(self, buf, pos))
+        Box::pin(W::write(self, buf))
     }
 
-    fn sync_data(&self) -> Pin<Box<dyn MaybeSendFuture<Output = Result<(), Error>> + '_>> {
+    fn sync_data(&mut self) -> Pin<Box<dyn MaybeSendFuture<Output = Result<(), Error>> + '_>> {
         Box::pin(W::sync_data(self))
     }
 
-    fn sync_all(&self) -> Pin<Box<dyn MaybeSendFuture<Output = Result<(), Error>> + '_>> {
+    fn sync_all(&mut self) -> Pin<Box<dyn MaybeSendFuture<Output = Result<(), Error>> + '_>> {
         Box::pin(W::sync_all(self))
     }
 
@@ -84,25 +82,27 @@ pub use fs::*;
 
 #[cfg(feature = "fs")]
 pub mod fs {
-    use std::{io, path::Path, pin::Pin};
+    use std::pin::Pin;
 
     use futures_core::Stream;
 
     use super::MaybeSendFuture;
     use crate::{
         fs::{FileMeta, Fs},
+        path::Path,
         DynRead, DynWrite, Error,
     };
 
-    pub trait DynFile: DynRead + DynWrite {}
-
-    impl<F> DynFile for F where F: DynRead + DynWrite {}
-
     pub trait DynFs {
-        fn open<'s, 'path: 's>(
+        fn open_read<'s, 'path: 's>(
             &'s self,
             path: &'path Path,
-        ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<Box<dyn DynFile + 's>, Error>> + 's>>;
+        ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<Box<dyn DynRead + 's>, Error>> + 's>>;
+
+        fn open_write<'s, 'path: 's>(
+            &'s self,
+            path: &'path Path,
+        ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<Box<dyn DynWrite + 's>, Error>> + 's>>;
 
         fn list<'s, 'path: 's>(
             &'s self,
@@ -110,7 +110,10 @@ pub mod fs {
         ) -> Pin<
             Box<
                 dyn MaybeSendFuture<
-                        Output = io::Result<Pin<Box<dyn Stream<Item = io::Result<FileMeta>> + 's>>>,
+                        Output = Result<
+                            Pin<Box<dyn Stream<Item = Result<FileMeta, Error>> + 's>>,
+                            Error,
+                        >,
                     > + 's,
             >,
         >;
@@ -118,18 +121,29 @@ pub mod fs {
         fn remove<'s, 'path: 's>(
             &'s self,
             path: &'path Path,
-        ) -> Pin<Box<dyn MaybeSendFuture<Output = io::Result<()>> + 's>>;
+        ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<(), Error>> + 's>>;
     }
 
     impl<F: Fs> DynFs for F {
-        fn open<'s, 'path: 's>(
+        fn open_read<'s, 'path: 's>(
             &'s self,
             path: &'path Path,
-        ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<Box<dyn DynFile + 's>, Error>> + 's>>
+        ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<Box<dyn DynRead + 's>, Error>> + 's>>
         {
             Box::pin(async move {
-                let file = F::open(self, path).await?;
-                Ok(Box::new(file) as Box<dyn DynFile>)
+                let file = F::open_read(self, path).await?;
+                Ok(Box::new(file) as Box<dyn DynRead>)
+            })
+        }
+
+        fn open_write<'s, 'path: 's>(
+            &'s self,
+            path: &'path Path,
+        ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<Box<dyn DynWrite + 's>, Error>> + 's>>
+        {
+            Box::pin(async move {
+                let file = F::open_write(self, path).await?;
+                Ok(Box::new(file) as Box<dyn DynWrite>)
             })
         }
 
@@ -139,20 +153,23 @@ pub mod fs {
         ) -> Pin<
             Box<
                 dyn MaybeSendFuture<
-                        Output = io::Result<Pin<Box<dyn Stream<Item = io::Result<FileMeta>> + 's>>>,
+                        Output = Result<
+                            Pin<Box<dyn Stream<Item = Result<FileMeta, Error>> + 's>>,
+                            Error,
+                        >,
                     > + 's,
             >,
         > {
             Box::pin(async move {
                 let stream = F::list(self, path).await?;
-                Ok(Box::pin(stream) as Pin<Box<dyn Stream<Item = io::Result<FileMeta>>>>)
+                Ok(Box::pin(stream) as Pin<Box<dyn Stream<Item = Result<FileMeta, Error>>>>)
             })
         }
 
         fn remove<'s, 'path: 's>(
             &'s self,
             path: &'path Path,
-        ) -> Pin<Box<dyn MaybeSendFuture<Output = io::Result<()>> + 's>> {
+        ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<(), Error>> + 's>> {
             Box::pin(F::remove(self, path))
         }
     }

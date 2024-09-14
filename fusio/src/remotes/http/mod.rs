@@ -3,14 +3,17 @@ mod monoio;
 #[cfg(feature = "tokio-http")]
 pub(crate) mod tokio;
 
+use std::{
+    convert::Infallible,
+    future::Future,
+    pin::Pin,
+    task::{Context, Poll},
+};
+
 use bytes::Bytes;
 use futures_core::{Stream, TryStream};
 use http::{Method, Request, Response};
 use http_body::Body;
-use std::convert::Infallible;
-use std::future::Future;
-use std::pin::Pin;
-use std::task::{Context, Poll};
 
 use crate::error::BoxError;
 
@@ -52,10 +55,9 @@ mod tests {
     #[cfg(feature = "tokio-http")]
     #[tokio::test]
     async fn test_tokio_client() {
-        use super::tokio::TokioClient;
-        use super::Empty;
-        use super::HttpClient;
         use http::{Request, StatusCode};
+
+        use super::{tokio::TokioClient, Empty, HttpClient};
 
         let request = Request::get("https://hyper.rs/").body(Empty {}).unwrap();
         let client = TokioClient::new();

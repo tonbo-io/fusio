@@ -1,9 +1,11 @@
 #[cfg(feature = "fs")]
 pub mod fs;
 
+use std::future::Future;
+
 use monoio::fs::File;
 
-use crate::{Error, IoBuf, IoBufMut, Read, Write};
+use crate::{DynWrite, Error, IoBuf, IoBufMut, Read, Write};
 
 #[repr(transparent)]
 struct MonoioBuf<B> {
@@ -42,32 +44,43 @@ where
 
 pub struct MonoioFile {
     file: Option<File>,
+    pos: u64,
 }
 
 impl From<File> for MonoioFile {
     fn from(file: File) -> Self {
-        Self { file: Some(file) }
+        Self {
+            file: Some(file),
+            pos: 0,
+        }
     }
 }
 
 impl Write for MonoioFile {
-    async fn write<B: IoBuf>(&mut self, buf: B, pos: u64) -> (Result<usize, Error>, B) {
+    async fn write<B: IoBuf>(&mut self, buf: B) -> (Result<usize, Error>, B) {
         let (result, buf) = self
             .file
             .as_ref()
             .expect("read file after closed")
-            .write_at(MonoioBuf { buf }, pos)
+            .write_at(MonoioBuf { buf }, self.pos)
             .await;
+        if let Ok(len) = result.as_ref() {
+            self.pos += *len as u64
+        }
         (result.map_err(Error::from), buf.buf)
     }
 
-    async fn sync_data(&self) -> Result<(), Error> {
+    async fn sync_data(&mut self) -> Result<(), Error> {
         File::sync_data(self.file.as_ref().expect("read file after closed")).await?;
         Ok(())
     }
 
-    async fn sync_all(&self) -> Result<(), Error> {
+    async fn sync_all(&mut self) -> Result<(), Error> {
         File::sync_all(self.file.as_ref().expect("read file after closed")).await?;
+        Ok(())
+    }
+
+    async fn flush(&mut self) -> Result<(), Error> {
         Ok(())
     }
 

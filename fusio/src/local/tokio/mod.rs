@@ -11,10 +11,7 @@ use tokio::{
 use crate::{Error, IoBuf, Read, Write};
 
 impl Write for File {
-    async fn write<B: IoBuf>(&mut self, buf: B, pos: u64) -> (Result<usize, Error>, B) {
-        if let Err(error) = self.seek(io::SeekFrom::Start(pos)).await {
-            return (Err(error), buf);
-        }
+    async fn write<B: IoBuf>(&mut self, buf: B) -> (Result<usize, Error>, B) {
         (
             AsyncWriteExt::write(self, unsafe {
                 &*slice_from_raw_parts(buf.as_ptr(), buf.bytes_init())
@@ -25,13 +22,19 @@ impl Write for File {
         )
     }
 
-    async fn sync_data(&self) -> Result<(), Error> {
+    async fn sync_data(&mut self) -> Result<(), Error> {
         File::sync_data(self).await?;
         Ok(())
     }
 
-    async fn sync_all(&self) -> Result<(), Error> {
+    async fn sync_all(&mut self) -> Result<(), Error> {
         File::sync_all(self).await?;
+        Ok(())
+    }
+
+    async fn flush(&mut self) -> Result<(), Error> {
+        AsyncWriteExt::flush(self).await?;
+
         Ok(())
     }
 
