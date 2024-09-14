@@ -6,7 +6,7 @@ use tokio::{
     fs::{remove_file, File},
     task::spawn_blocking,
 };
-
+use tokio::fs::create_dir;
 use crate::{
     fs::{FileMeta, Fs},
     path::{path_to_local, Path},
@@ -27,6 +27,13 @@ impl Fs for TokioFs {
 
     fn open_write(&self, path: &Path) -> impl Future<Output = Result<Self::Write, Error>> {
         self.open_read(path)
+    }
+
+    async fn create_dir(path: &Path) -> Result<(), Error> {
+        let path = path_to_local(path)?;
+        create_dir(path).await?;
+
+        Ok(())
     }
 
     async fn list(

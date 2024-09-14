@@ -17,6 +17,8 @@ pub trait Fs: Send + Sync {
 
     fn open_write(&self, path: &Path) -> impl Future<Output = Result<Self::Write, Error>> + Send;
 
+    fn create_dir(path: &Path) -> impl Future<Output = Result<(), Error>>;
+
     fn list(
         &self,
         path: &Path,
@@ -33,6 +35,8 @@ pub trait Fs {
     fn open_read(&self, path: &Path) -> impl Future<Output = Result<Self::Read, Error>>;
 
     fn open_write(&self, path: &Path) -> impl Future<Output = Result<Self::Write, Error>>;
+
+    fn create_dir(path: &Path) -> impl Future<Output = Result<(), Error>>;
 
     fn list(
         &self,

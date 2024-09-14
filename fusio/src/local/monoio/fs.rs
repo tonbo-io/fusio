@@ -1,5 +1,5 @@
 use std::{future::Future, io};
-
+use std::fs::create_dir;
 use async_stream::stream;
 use futures_core::Stream;
 
@@ -24,6 +24,13 @@ impl Fs for MonoIoFs {
 
     fn open_write(&self, path: &Path) -> impl Future<Output = Result<Self::Write, Error>> {
         self.open_read(path)
+    }
+
+    fn create_dir(path: &Path) -> impl Future<Output=Result<(), Error>> {
+        let path = path_to_local(path)?;
+        create_dir(path)?;
+
+        Ok(())
     }
 
     async fn list(

@@ -33,6 +33,10 @@ impl Fs for S3Store {
         })
     }
 
+    async fn create_dir(_: &Path) -> Result<(), Error> {
+        Ok(())
+    }
+
     async fn list(
         &self,
         path: &Path,
