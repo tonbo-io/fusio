@@ -101,6 +101,14 @@ pub mod fs {
         fn open<'s, 'path: 's>(
             &'s self,
             path: &'path Path,
+        ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<Box<dyn DynFile + 's>, Error>> + 's>>
+        {
+            self.open_options(path, OpenOptions::default())
+        }
+
+        fn open_options<'s, 'path: 's>(
+            &'s self,
+            path: &'path Path,
             options: OpenOptions,
         ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<Box<dyn DynFile + 's>, Error>> + 's>>;
 
@@ -130,7 +138,7 @@ pub mod fs {
     }
 
     impl<F: Fs> DynFs for F {
-        fn open<'s, 'path: 's>(
+        fn open_options<'s, 'path: 's>(
             &'s self,
             path: &'path Path,
             options: OpenOptions,
