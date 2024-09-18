@@ -5,14 +5,12 @@ use parquet::{arrow::async_writer::AsyncFileWriter, errors::ParquetError};
 
 pub struct AsyncWriter {
     inner: Option<Box<dyn DynWrite + Send>>,
-    pos: u64,
 }
 
 impl AsyncWriter {
     pub fn new(writer: Box<dyn DynWrite + Send>) -> Self {
         Self {
             inner: Some(writer),
-            pos: 0,
         }
     }
 }
@@ -21,8 +19,8 @@ impl AsyncFileWriter for AsyncWriter {
     fn write(&mut self, bs: Bytes) -> BoxFuture<'_, parquet::errors::Result<()>> {
         Box::pin(async move {
             if let Some(writer) = self.inner.as_mut() {
-                let (result, _) = writer.write(bs, self.pos).await;
-                self.pos += result.map_err(|err| ParquetError::External(Box::new(err)))? as u64;
+                let (result, _) = writer.write(bs).await;
+                result.map_err(|err| ParquetError::External(Box::new(err)))?;
             }
             Ok(())
         })
