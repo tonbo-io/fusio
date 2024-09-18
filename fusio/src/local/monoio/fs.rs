@@ -1,11 +1,11 @@
-use std::{fs::create_dir, future::Future, io};
+use std::fs::create_dir;
 
 use async_stream::stream;
 use futures_core::Stream;
 
 use super::MonoioFile;
 use crate::{
-    fs::Fs,
+    fs::{Fs, OpenOptions, WriteMode},
     path::{path_to_local, Path},
     Error,
 };
@@ -15,13 +15,21 @@ pub struct MonoIoFs;
 impl Fs for MonoIoFs {
     type File = MonoioFile;
 
-    async fn open(&self, path: &Path) -> Result<Self::File, Error> {
+    async fn open_options(&self, path: &Path, options: OpenOptions) -> Result<Self::File, Error> {
         let path = path_to_local(path)?;
 
-        Ok(monoio::fs::File::open(path).await?.into())
+        Ok(monoio::fs::OpenOptions::new()
+            .read(options.read)
+            .write(options.write.is_some())
+            .create(options.create)
+            .append(options.write == Some(WriteMode::Append))
+            .truncate(options.write == Some(WriteMode::Overwrite))
+            .open(&path)
+            .await?
+            .into())
     }
 
-    fn create_dir(path: &Path) -> impl Future<Output = Result<(), Error>> {
+    async fn create_dir(path: &Path) -> Result<(), Error> {
         let path = path_to_local(path)?;
         create_dir(path)?;
 

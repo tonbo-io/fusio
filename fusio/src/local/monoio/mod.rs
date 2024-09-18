@@ -1,11 +1,9 @@
 #[cfg(feature = "fs")]
 pub mod fs;
 
-use std::future::Future;
-
 use monoio::fs::File;
 
-use crate::{DynWrite, Error, IoBuf, IoBufMut, Read, Write};
+use crate::{Error, IoBuf, IoBufMut, Read, Write};
 
 #[repr(transparent)]
 struct MonoioBuf<B> {
@@ -77,10 +75,6 @@ impl Write for MonoioFile {
 
     async fn sync_all(&mut self) -> Result<(), Error> {
         File::sync_all(self.file.as_ref().expect("read file after closed")).await?;
-        Ok(())
-    }
-
-    async fn flush(&mut self) -> Result<(), Error> {
         Ok(())
     }
 

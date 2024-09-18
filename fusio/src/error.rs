@@ -11,6 +11,9 @@ pub enum Error {
     #[cfg(feature = "object_store")]
     ObjectStore(#[from] object_store::Error),
     Path(#[from] crate::path::Error),
+    #[error("unsupported operation")]
+    Unsupported,
 }
 
+#[allow(unused)]
 pub type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
