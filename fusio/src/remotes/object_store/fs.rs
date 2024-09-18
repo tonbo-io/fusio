@@ -6,7 +6,7 @@ use futures_util::stream::StreamExt;
 use object_store::{aws::AmazonS3, ObjectStore};
 
 use crate::{
-    fs::{FileMeta, Fs},
+    fs::{FileMeta, Fs, OpenOptions, WriteMode},
     path::Path,
     remotes::object_store::S3File,
     Error,
@@ -19,7 +19,10 @@ pub struct S3Store {
 impl Fs for S3Store {
     type File = S3File;
 
-    async fn open(&self, path: &Path) -> Result<Self::File, Error> {
+    async fn open_options(&self, path: &Path, options: OpenOptions) -> Result<Self::File, Error> {
+        if let Some(WriteMode::Append) = options.write {
+            return Err(Error::Unsupported);
+        }
         Ok(S3File {
             inner: self.inner.clone(),
             path: path.clone().into(),

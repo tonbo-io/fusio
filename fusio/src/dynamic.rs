@@ -88,7 +88,7 @@ pub mod fs {
 
     use super::MaybeSendFuture;
     use crate::{
-        fs::{FileMeta, Fs},
+        fs::{FileMeta, Fs, OpenOptions},
         path::Path,
         DynRead, DynWrite, Error,
     };
@@ -101,6 +101,7 @@ pub mod fs {
         fn open<'s, 'path: 's>(
             &'s self,
             path: &'path Path,
+            options: OpenOptions,
         ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<Box<dyn DynFile + 's>, Error>> + 's>>;
 
         fn create_dir<'s, 'path: 's>(
@@ -132,10 +133,11 @@ pub mod fs {
         fn open<'s, 'path: 's>(
             &'s self,
             path: &'path Path,
+            options: OpenOptions,
         ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<Box<dyn DynFile + 's>, Error>> + 's>>
         {
             Box::pin(async move {
-                let file = F::open(self, path).await?;
+                let file = F::open_options(self, path, options).await?;
                 Ok(Box::new(file) as Box<dyn DynFile>)
             })
         }

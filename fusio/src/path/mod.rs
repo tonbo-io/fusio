@@ -79,6 +79,8 @@ impl Path {
             source: err,
         })?;
 
+        dbg!(&absolute);
+
         Self::from_absolute_path(absolute)
     }
 
@@ -170,9 +172,9 @@ impl Path {
 }
 
 #[cfg(feature = "object_store")]
-impl Into<object_store::path::Path> for Path {
-    fn into(self) -> object_store::path::Path {
-        object_store::path::Path::from(self.as_ref())
+impl From<Path> for object_store::path::Path {
+    fn from(value: Path) -> Self {
+        object_store::path::Path::from(value.as_ref())
     }
 }
 
@@ -513,6 +515,6 @@ mod tests {
         let this_path = Path::from_filesystem_path(temp_file.path()).unwrap();
         let std_path = path_to_local(&this_path).unwrap();
 
-        assert_eq!(std_path, temp_file.path());
+        assert_eq!(std_path, std::fs::canonicalize(temp_file.path()).unwrap());
     }
 }
