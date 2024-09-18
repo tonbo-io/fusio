@@ -2,28 +2,13 @@ mod fs;
 
 use std::{ops::Range, sync::Arc};
 
-use object_store::{
-    aws::AmazonS3, buffered::BufWriter, path::Path, GetOptions, GetRange, ObjectStore,
-};
-use tokio::io::AsyncWriteExt;
+use object_store::{aws::AmazonS3, path::Path, GetOptions, GetRange, ObjectStore, PutPayload};
 
 use crate::{Error, IoBuf, Read, Write};
 
 pub struct S3File {
     inner: Arc<AmazonS3>,
     path: Path,
-}
-
-pub struct S3FileWriter {
-    inner: BufWriter,
-}
-
-impl S3File {
-    pub fn writer(&self) -> S3FileWriter {
-        S3FileWriter {
-            inner: BufWriter::new(self.inner.clone(), self.path.clone().into()),
-        }
-    }
 }
 
 impl Read for S3File {
@@ -48,9 +33,15 @@ impl Read for S3File {
     }
 }
 
-impl Write for S3FileWriter {
+impl Write for S3File {
     async fn write<B: IoBuf>(&mut self, buf: B) -> (Result<usize, Error>, B) {
-        let result = self.inner.write(buf.as_slice()).await.map_err(Error::from);
+        let payload = PutPayload::from_bytes(buf.as_bytes());
+        let result = self
+            .inner
+            .put(&self.path, payload)
+            .await
+            .map(|_| buf.as_slice().len())
+            .map_err(Error::ObjectStore);
 
         (result, buf)
     }
@@ -63,15 +54,7 @@ impl Write for S3FileWriter {
         Ok(())
     }
 
-    async fn flush(&mut self) -> Result<(), Error> {
-        self.inner.flush().await?;
-
-        Ok(())
-    }
-
     async fn close(&mut self) -> Result<(), Error> {
-        self.inner.shutdown().await?;
-
         Ok(())
     }
 }
@@ -115,12 +98,9 @@ mod tests {
                 inner: Arc::new(s3),
                 path,
             };
-            let mut writer = store.writer();
-            let (result, bytes) = writer.write(Bytes::from("hello! Fusio!")).await;
+            let (result, bytes) = store.write(Bytes::from("hello! Fusio!")).await;
             assert_eq!(result.unwrap(), bytes.len());
             assert_eq!(bytes, Bytes::from("hello! Fusio!"));
-            writer.flush().await.unwrap();
-            writer.close().await.unwrap();
 
             let buf = store.read(0, None).await.unwrap();
             assert_eq!(buf.as_bytes(), bytes);

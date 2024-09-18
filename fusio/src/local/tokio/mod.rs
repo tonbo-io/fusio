@@ -32,12 +32,6 @@ impl Write for File {
         Ok(())
     }
 
-    async fn flush(&mut self) -> Result<(), Error> {
-        AsyncWriteExt::flush(self).await?;
-
-        Ok(())
-    }
-
     async fn close(&mut self) -> Result<(), Error> {
         File::shutdown(self).await?;
         Ok(())

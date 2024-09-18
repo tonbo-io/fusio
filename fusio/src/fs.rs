@@ -10,12 +10,9 @@ pub struct FileMeta {
 
 #[cfg(not(feature = "no-send"))]
 pub trait Fs: Send + Sync {
-    type Read: Read;
-    type Write: Write;
+    type File: Read + Write;
 
-    fn open_read(&self, path: &Path) -> impl Future<Output = Result<Self::Read, Error>> + Send;
-
-    fn open_write(&self, path: &Path) -> impl Future<Output = Result<Self::Write, Error>> + Send;
+    fn open(&self, path: &Path) -> impl Future<Output = Result<Self::File, Error>> + Send;
 
     fn create_dir(path: &Path) -> impl Future<Output = Result<(), Error>>;
 
@@ -29,12 +26,9 @@ pub trait Fs: Send + Sync {
 
 #[cfg(feature = "no-send")]
 pub trait Fs {
-    type Read: Read;
-    type Write: Write;
+    type File: Read + Write;
 
-    fn open_read(&self, path: &Path) -> impl Future<Output = Result<Self::Read, Error>>;
-
-    fn open_write(&self, path: &Path) -> impl Future<Output = Result<Self::Write, Error>>;
+    fn open(&self, path: &Path) -> impl Future<Output = Result<Self::File, Error>>;
 
     fn create_dir(path: &Path) -> impl Future<Output = Result<(), Error>>;
 

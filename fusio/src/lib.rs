@@ -12,7 +12,7 @@ use std::future::Future;
 
 pub use buf::{IoBuf, IoBufMut};
 #[cfg(feature = "dyn")]
-pub use dynamic::{DynRead, DynWrite, DynFs};
+pub use dynamic::{DynFs, DynRead, DynWrite};
 pub use error::Error;
 
 #[cfg(not(feature = "no-send"))]
@@ -24,8 +24,6 @@ pub trait Write: Send {
 
     fn sync_all(&mut self) -> impl Future<Output = Result<(), Error>> + Send;
 
-    fn flush(&mut self) -> impl Future<Output = Result<(), Error>> + Send;
-
     fn close(&mut self) -> impl Future<Output = Result<(), Error>> + Send;
 }
 
@@ -36,8 +34,6 @@ pub trait Write {
     fn sync_data(&mut self) -> impl Future<Output = Result<(), Error>>;
 
     fn sync_all(&mut self) -> impl Future<Output = Result<(), Error>>;
-
-    fn flush(&mut self) -> impl Future<Output = Result<(), Error>>;
 
     fn close(&mut self) -> impl Future<Output = Result<(), Error>>;
 }
@@ -95,10 +91,6 @@ mod tests {
 
         async fn sync_all(&mut self) -> Result<(), Error> {
             self.w.sync_all().await
-        }
-
-        async fn flush(&mut self) -> Result<(), Error> {
-            self.w.flush().await
         }
 
         async fn close(&mut self) -> Result<(), Error> {

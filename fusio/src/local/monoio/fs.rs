@@ -1,5 +1,5 @@
-use std::{future::Future, io};
-use std::fs::create_dir;
+use std::{fs::create_dir, future::Future, io};
+
 use async_stream::stream;
 use futures_core::Stream;
 
@@ -13,20 +13,15 @@ use crate::{
 pub struct MonoIoFs;
 
 impl Fs for MonoIoFs {
-    type Read = MonoioFile;
-    type Write = MonoioFile;
+    type File = MonoioFile;
 
-    async fn open_read(&self, path: &Path) -> Result<Self::File, Error> {
+    async fn open(&self, path: &Path) -> Result<Self::File, Error> {
         let path = path_to_local(path)?;
 
         Ok(monoio::fs::File::open(path).await?.into())
     }
 
-    fn open_write(&self, path: &Path) -> impl Future<Output = Result<Self::Write, Error>> {
-        self.open_read(path)
-    }
-
-    fn create_dir(path: &Path) -> impl Future<Output=Result<(), Error>> {
+    fn create_dir(path: &Path) -> impl Future<Output = Result<(), Error>> {
         let path = path_to_local(path)?;
         create_dir(path)?;
 

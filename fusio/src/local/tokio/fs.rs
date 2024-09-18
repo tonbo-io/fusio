@@ -1,12 +1,12 @@
-use std::{future::Future, io};
+use std::io;
 
 use async_stream::stream;
 use futures_core::Stream;
 use tokio::{
-    fs::{remove_file, File},
+    fs::{create_dir, remove_file, File},
     task::spawn_blocking,
 };
-use tokio::fs::create_dir;
+
 use crate::{
     fs::{FileMeta, Fs},
     path::{path_to_local, Path},
@@ -16,17 +16,12 @@ use crate::{
 pub struct TokioFs;
 
 impl Fs for TokioFs {
-    type Read = File;
-    type Write = File;
+    type File = File;
 
-    async fn open_read(&self, path: &Path) -> Result<Self::Read, Error> {
+    async fn open(&self, path: &Path) -> Result<Self::File, Error> {
         let path = path_to_local(path)?;
 
         Ok(File::open(&path).await?)
-    }
-
-    fn open_write(&self, path: &Path) -> impl Future<Output = Result<Self::Write, Error>> {
-        self.open_read(path)
     }
 
     async fn create_dir(path: &Path) -> Result<(), Error> {

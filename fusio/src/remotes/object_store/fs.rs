@@ -3,12 +3,12 @@ use std::sync::Arc;
 use async_stream::stream;
 use futures_core::Stream;
 use futures_util::stream::StreamExt;
-use object_store::{aws::AmazonS3, buffered::BufWriter, ObjectStore};
+use object_store::{aws::AmazonS3, ObjectStore};
 
 use crate::{
     fs::{FileMeta, Fs},
     path::Path,
-    remotes::object_store::{S3File, S3FileWriter},
+    remotes::object_store::S3File,
     Error,
 };
 
@@ -17,19 +17,12 @@ pub struct S3Store {
 }
 
 impl Fs for S3Store {
-    type Read = S3File;
-    type Write = S3FileWriter;
+    type File = S3File;
 
-    async fn open_read(&self, path: &Path) -> Result<Self::Read, Error> {
+    async fn open(&self, path: &Path) -> Result<Self::File, Error> {
         Ok(S3File {
             inner: self.inner.clone(),
             path: path.clone().into(),
-        })
-    }
-
-    async fn open_write(&self, path: &Path) -> Result<Self::Write, Error> {
-        Ok(S3FileWriter {
-            inner: BufWriter::new(self.inner.clone(), path.clone().into()),
         })
     }
 
