@@ -103,6 +103,11 @@ pub mod fs {
             path: &'path Path,
         ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<Box<dyn DynFile + 's>, Error>> + 's>>;
 
+        fn create_dir<'s, 'path: 's>(
+            &'s self,
+            path: &'path Path,
+        ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<(), Error>> + 's>>;
+
         fn list<'s, 'path: 's>(
             &'s self,
             path: &'path Path,
@@ -133,6 +138,13 @@ pub mod fs {
                 let file = F::open(self, path).await?;
                 Ok(Box::new(file) as Box<dyn DynFile>)
             })
+        }
+
+        fn create_dir<'s, 'path: 's>(
+            &'s self,
+            path: &'path Path,
+        ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<(), Error>> + 's>> {
+            Box::pin(F::create_dir(path))
         }
 
         fn list<'s, 'path: 's>(
