@@ -6,10 +6,10 @@ use futures_util::stream::StreamExt;
 use object_store::{aws::AmazonS3, ObjectStore};
 
 use crate::{
-    fs::{FileMeta, Fs, OpenOptions, WriteMode},
+    fs::{Fs, OpenOptions, WriteMode},
     path::Path,
     remotes::object_store::S3File,
-    Error,
+    Error, FileMeta,
 };
 
 pub struct S3Store {
@@ -26,6 +26,7 @@ impl Fs for S3Store {
         Ok(S3File {
             inner: self.inner.clone(),
             path: path.clone().into(),
+            pos: 0,
         })
     }
 
@@ -42,7 +43,7 @@ impl Fs for S3Store {
 
         Ok(stream! {
             while let Some(meta) = stream.next().await.transpose()? {
-                yield Ok(FileMeta { path: meta.location.into() });
+                yield Ok(FileMeta { path: meta.location.into(), size: meta.size as u64 });
             }
         })
     }

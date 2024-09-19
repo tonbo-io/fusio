@@ -2,7 +2,7 @@ use std::{future::Future, pin::Pin};
 
 use bytes::Bytes;
 
-use crate::{Error, IoBuf, MaybeSend, MaybeSync, Read, Seek, Write};
+use crate::{Error, FileMeta, IoBuf, MaybeSend, MaybeSync, Read, Seek, Write};
 
 pub trait MaybeSendFuture: Future + MaybeSend {}
 
@@ -42,11 +42,13 @@ impl<W: Write> DynWrite for W {
     }
 }
 
-pub trait DynRead: MaybeSend {
+pub trait DynRead: MaybeSend + MaybeSync {
     fn read(
         &mut self,
         len: Option<u64>,
     ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<Bytes, Error>> + '_>>;
+
+    fn metadata(&self) -> Pin<Box<dyn MaybeSendFuture<Output = Result<FileMeta, Error>> + '_>>;
 }
 
 pub trait DynSeek: MaybeSend {
@@ -65,6 +67,10 @@ where
             let buf = R::read(self, len).await?;
             Ok(buf.as_bytes())
         })
+    }
+
+    fn metadata(&self) -> Pin<Box<dyn MaybeSendFuture<Output = Result<FileMeta, Error>> + '_>> {
+        Box::pin(R::metadata(self))
     }
 }
 
@@ -88,9 +94,9 @@ pub mod fs {
 
     use super::{DynSeek, MaybeSendFuture};
     use crate::{
-        fs::{FileMeta, Fs, OpenOptions},
+        fs::{Fs, OpenOptions},
         path::Path,
-        DynRead, DynWrite, Error,
+        DynRead, DynWrite, Error, FileMeta,
     };
 
     pub trait DynFile: DynRead + DynSeek + DynWrite + 'static {}

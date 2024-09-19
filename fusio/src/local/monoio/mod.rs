@@ -1,11 +1,9 @@
 #[cfg(feature = "fs")]
 pub mod fs;
 
-use std::future::Future;
-
 use monoio::fs::File;
 
-use crate::{Error, IoBuf, IoBufMut, MaybeSend, Read, Seek, Write};
+use crate::{path::Path, Error, IoBuf, IoBufMut, Read, Seek, Write};
 
 #[repr(transparent)]
 struct MonoioBuf<B> {
@@ -43,13 +41,15 @@ where
 }
 
 pub struct MonoioFile {
+    path: Path,
     file: Option<File>,
     pos: u64,
 }
 
-impl From<File> for MonoioFile {
-    fn from(file: File) -> Self {
+impl MonoioFile {
+    pub(crate) fn new(path: Path, file: File) -> Self {
         Self {
+            path,
             file: Some(file),
             pos: 0,
         }
@@ -102,6 +102,14 @@ impl Read for MonoioFile {
         return Ok(buf.buf);
         #[cfg(feature = "bytes")]
         return Ok(bytes::Bytes::from(buf.buf));
+    }
+
+    async fn metadata(&self) -> Result<crate::FileMeta, Error> {
+        let metadata = File::metadata(self.file.as_ref().expect("read file after closed")).await?;
+        Ok(crate::FileMeta {
+            path: self.path.clone(),
+            size: metadata.len(),
+        })
     }
 }
 

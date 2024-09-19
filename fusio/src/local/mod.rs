@@ -1,9 +1,7 @@
 #[cfg(feature = "monoio")]
-mod monoio;
-#[cfg(feature = "monoio")]
-pub use monoio::MonoioFile;
+pub(crate) mod monoio;
 #[cfg(feature = "tokio")]
-mod tokio;
+pub(crate) mod tokio;
 #[cfg(all(feature = "tokio-uring", target_os = "linux"))]
 mod tokio_uring;
 
