@@ -1,22 +1,7 @@
-#[cfg(all(not(feature = "completion-based"), feature = "no-send"))]
-pub unsafe trait IoBuf: Unpin {
-    fn as_ptr(&self) -> *const u8;
-
-    fn bytes_init(&self) -> usize;
-
-    fn as_slice(&self) -> &[u8] {
-        // SAFETY: The buffer is pinned and the bytes are initialized.
-        unsafe { std::slice::from_raw_parts(self.as_ptr(), self.bytes_init()) }
-    }
-
-    #[cfg(feature = "bytes")]
-    fn as_bytes(&self) -> bytes::Bytes {
-        bytes::Bytes::copy_from_slice(self.as_slice())
-    }
-}
-
-#[cfg(all(not(feature = "completion-based"), not(feature = "no-send")))]
-pub unsafe trait IoBuf: Unpin + Send {
+/// # Safety
+/// Completion-based I/O operations require the buffer to be pinned.
+#[cfg(not(feature = "completion-based"))]
+pub unsafe trait IoBuf: Unpin + crate::MaybeSend {
     fn as_ptr(&self) -> *const u8;
 
     fn bytes_init(&self) -> usize;

@@ -16,44 +16,46 @@ pub use dynamic::{DynFs, DynRead, DynWrite};
 pub use error::Error;
 
 #[cfg(not(feature = "no-send"))]
-pub trait Write: Send {
-    fn write<B: IoBuf>(&mut self, buf: B)
-        -> impl Future<Output = (Result<usize, Error>, B)> + Send;
-
-    fn sync_data(&mut self) -> impl Future<Output = Result<(), Error>> + Send;
-
-    fn sync_all(&mut self) -> impl Future<Output = Result<(), Error>> + Send;
-
-    fn close(&mut self) -> impl Future<Output = Result<(), Error>> + Send;
-}
+pub unsafe trait MaybeSend: Send {}
 
 #[cfg(feature = "no-send")]
-pub trait Write {
-    fn write<B: IoBuf>(&mut self, buf: B) -> impl Future<Output = (Result<usize, Error>, B)>;
-
-    fn sync_data(&mut self) -> impl Future<Output = Result<(), Error>>;
-
-    fn sync_all(&mut self) -> impl Future<Output = Result<(), Error>>;
-
-    fn close(&mut self) -> impl Future<Output = Result<(), Error>>;
-}
+pub unsafe trait MaybeSend {}
 
 #[cfg(not(feature = "no-send"))]
-pub trait Read: Send {
-    fn read(
-        &mut self,
-        pos: u64,
-        len: Option<u64>,
-    ) -> impl Future<Output = Result<impl IoBuf, Error>> + Send;
-}
+unsafe impl<T: Send> MaybeSend for T {}
+#[cfg(feature = "no-send")]
+unsafe impl<T> MaybeSend for T {}
+
+#[cfg(not(feature = "no-send"))]
+pub unsafe trait MaybeSync: Sync {}
 
 #[cfg(feature = "no-send")]
-pub trait Read {
+pub unsafe trait MaybeSync {}
+
+#[cfg(not(feature = "no-send"))]
+unsafe impl<T: Sync> MaybeSync for T {}
+#[cfg(feature = "no-send")]
+unsafe impl<T> MaybeSync for T {}
+
+pub trait Write: MaybeSend {
+    fn write<B: IoBuf>(
+        &mut self,
+        buf: B,
+    ) -> impl Future<Output = (Result<usize, Error>, B)> + MaybeSend;
+
+    fn sync_data(&mut self) -> impl Future<Output = Result<(), Error>> + MaybeSend;
+
+    fn sync_all(&mut self) -> impl Future<Output = Result<(), Error>> + MaybeSend;
+
+    fn close(&mut self) -> impl Future<Output = Result<(), Error>> + MaybeSend;
+}
+
+pub trait Read: MaybeSend {
     fn read(
         &mut self,
         pos: u64,
         len: Option<u64>,
-    ) -> impl Future<Output = Result<impl IoBuf, Error>>;
+    ) -> impl Future<Output = Result<impl IoBuf, Error>> + MaybeSend;
 }
 
 #[cfg(test)]

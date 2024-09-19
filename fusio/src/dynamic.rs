@@ -2,18 +2,7 @@ use std::{future::Future, pin::Pin};
 
 use bytes::Bytes;
 
-use crate::{Error, IoBuf, Read, Write};
-
-#[cfg(not(feature = "no-send"))]
-pub trait MaybeSend: Send {}
-
-#[cfg(feature = "no-send")]
-pub trait MaybeSend {}
-
-#[cfg(not(feature = "no-send"))]
-impl<T: Send> MaybeSend for T {}
-#[cfg(feature = "no-send")]
-impl<T> MaybeSend for T {}
+use crate::{Error, IoBuf, MaybeSend, Read, Write};
 
 pub trait MaybeSendFuture: Future + MaybeSend {}
 
@@ -93,16 +82,15 @@ pub mod fs {
         DynRead, DynWrite, Error,
     };
 
-    pub trait DynFile: DynRead + DynWrite {}
+    pub trait DynFile: DynRead + DynWrite + 'static {}
 
-    impl<F> DynFile for F where F: DynRead + DynWrite {}
+    impl<F> DynFile for F where F: DynRead + DynWrite + 'static {}
 
     pub trait DynFs {
         fn open<'s, 'path: 's>(
             &'s self,
             path: &'path Path,
-        ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<Box<dyn DynFile + 's>, Error>> + 's>>
-        {
+        ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<Box<dyn DynFile>, Error>> + 's>> {
             self.open_options(path, OpenOptions::default())
         }
 
@@ -110,7 +98,7 @@ pub mod fs {
             &'s self,
             path: &'path Path,
             options: OpenOptions,
-        ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<Box<dyn DynFile + 's>, Error>> + 's>>;
+        ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<Box<dyn DynFile>, Error>> + 's>>;
 
         fn create_dir<'s, 'path: 's>(
             &'s self,
@@ -142,8 +130,7 @@ pub mod fs {
             &'s self,
             path: &'path Path,
             options: OpenOptions,
-        ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<Box<dyn DynFile + 's>, Error>> + 's>>
-        {
+        ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<Box<dyn DynFile>, Error>> + 's>> {
             Box::pin(async move {
                 let file = F::open_options(self, path, options).await?;
                 Ok(Box::new(file) as Box<dyn DynFile>)

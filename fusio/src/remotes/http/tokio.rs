@@ -2,6 +2,8 @@ use bytes::Bytes;
 use futures_core::TryStream;
 use http::{Request, Response};
 
+use crate::MaybeSend;
+
 use super::{BoxError, HttpClient};
 
 pub(crate) struct TokioClient {
@@ -24,7 +26,7 @@ impl HttpClient for TokioClient {
     ) -> Result<Response<Self::RespBody>, BoxError>
     where
         E: std::error::Error + Send + Sync + 'static,
-        B: TryStream<Ok = Bytes, Error = E> + Send + 'static,
+        B: TryStream<Ok = Bytes, Error = E> + MaybeSend + 'static,
     {
         let (parts, body) = request.into_parts();
         let request = Request::from_parts(parts, reqwest::Body::wrap_stream(body));

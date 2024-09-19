@@ -14,43 +14,25 @@ use http::{Method, Request, Response};
 use http_body::{Body, SizeHint};
 
 use crate::error::BoxError;
+use crate::{MaybeSend, MaybeSync};
 
-#[cfg(feature = "no-send")]
-pub trait HttpClient: Send + Sync {
-    type RespBody: Body<Data = Bytes, Error: std::error::Error + Send + Sync + 'static> + 'static;
-
-    fn send_request<E, B>(
-        &self,
-        request: Request<B>,
-    ) -> impl Future<Output = Result<Response<Self::RespBody>, BoxError>>
-    where
-        E: std::error::Error + Send + Sync + 'static,
-        B: TryStream<Ok = Bytes, Error = E> + 'static;
-
-    fn get(&self, url: &str) -> impl Future<Output = Result<Response<Self::RespBody>, BoxError>> {
-        async move {
-            let request = Request::get(url).method(Method::GET).body(Empty {})?;
-            self.send_request(request).await
-        }
-    }
-}
-
-#[cfg(not(feature = "no-send"))]
-pub trait HttpClient: Send + Sync {
+pub trait HttpClient: MaybeSend + MaybeSync {
     type RespBody: Body<Data = Bytes, Error: std::error::Error + Send + Sync + 'static>
-        + Send
-        + Sync
+        + MaybeSend
         + 'static;
 
     fn send_request<E, B>(
         &self,
         request: Request<B>,
-    ) -> impl Future<Output = Result<Response<Self::RespBody>, BoxError>> + Send
+    ) -> impl Future<Output = Result<Response<Self::RespBody>, BoxError>> + MaybeSend
     where
         E: std::error::Error + Send + Sync + 'static,
-        B: TryStream<Ok = Bytes, Error = E> + Send + 'static;
+        B: TryStream<Ok = Bytes, Error = E> + MaybeSend + 'static;
 
-    fn get(&self, url: &str) -> impl Future<Output = Result<Response<Self::RespBody>, BoxError>> {
+    fn get(
+        &self,
+        url: &str,
+    ) -> impl Future<Output = Result<Response<Self::RespBody>, BoxError>> + MaybeSend {
         async move {
             let request = Request::get(url).method(Method::GET).body(Empty {})?;
             self.send_request(request).await
