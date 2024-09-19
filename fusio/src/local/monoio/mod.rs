@@ -68,12 +68,12 @@ impl Write for MonoioFile {
         (result.map_err(Error::from), buf.buf)
     }
 
-    async fn sync_data(&mut self) -> Result<(), Error> {
+    async fn sync_data(&self) -> Result<(), Error> {
         File::sync_data(self.file.as_ref().expect("read file after closed")).await?;
         Ok(())
     }
 
-    async fn sync_all(&mut self) -> Result<(), Error> {
+    async fn sync_all(&self) -> Result<(), Error> {
         File::sync_all(self.file.as_ref().expect("read file after closed")).await?;
         Ok(())
     }

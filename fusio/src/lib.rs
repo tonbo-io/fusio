@@ -37,15 +37,15 @@ unsafe impl<T: Sync> MaybeSync for T {}
 #[cfg(feature = "no-send")]
 unsafe impl<T> MaybeSync for T {}
 
-pub trait Write: MaybeSend {
+pub trait Write: MaybeSend + MaybeSync {
     fn write<B: IoBuf>(
         &mut self,
         buf: B,
     ) -> impl Future<Output = (Result<usize, Error>, B)> + MaybeSend;
 
-    fn sync_data(&mut self) -> impl Future<Output = Result<(), Error>> + MaybeSend;
+    fn sync_data(&self) -> impl Future<Output = Result<(), Error>> + MaybeSend;
 
-    fn sync_all(&mut self) -> impl Future<Output = Result<(), Error>> + MaybeSend;
+    fn sync_all(&self) -> impl Future<Output = Result<(), Error>> + MaybeSend;
 
     fn close(&mut self) -> impl Future<Output = Result<(), Error>> + MaybeSend;
 }
@@ -87,11 +87,11 @@ mod tests {
             (result.inspect(|i| self.cnt += *i), buf)
         }
 
-        async fn sync_data(&mut self) -> Result<(), Error> {
+        async fn sync_data(&self) -> Result<(), Error> {
             self.w.sync_data().await
         }
 
-        async fn sync_all(&mut self) -> Result<(), Error> {
+        async fn sync_all(&self) -> Result<(), Error> {
             self.w.sync_all().await
         }
 

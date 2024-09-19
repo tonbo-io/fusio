@@ -22,12 +22,12 @@ impl Write for File {
         )
     }
 
-    async fn sync_data(&mut self) -> Result<(), Error> {
+    async fn sync_data(&self) -> Result<(), Error> {
         File::sync_data(self).await?;
         Ok(())
     }
 
-    async fn sync_all(&mut self) -> Result<(), Error> {
+    async fn sync_all(&self) -> Result<(), Error> {
         File::sync_all(self).await?;
         Ok(())
     }

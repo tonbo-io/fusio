@@ -46,11 +46,11 @@ impl Write for S3File {
         (result, buf)
     }
 
-    async fn sync_data(&mut self) -> Result<(), Error> {
+    async fn sync_data(&self) -> Result<(), Error> {
         Ok(())
     }
 
-    async fn sync_all(&mut self) -> Result<(), Error> {
+    async fn sync_all(&self) -> Result<(), Error> {
         Ok(())
     }
 

@@ -2,9 +2,8 @@ use bytes::Bytes;
 use futures_core::TryStream;
 use http::{Request, Response};
 
-use crate::MaybeSend;
-
 use super::{BoxError, HttpClient};
+use crate::MaybeSend;
 
 pub(crate) struct TokioClient {
     client: reqwest::Client,

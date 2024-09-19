@@ -13,8 +13,7 @@ use futures_core::{Stream, TryStream};
 use http::{Method, Request, Response};
 use http_body::{Body, SizeHint};
 
-use crate::error::BoxError;
-use crate::{MaybeSend, MaybeSync};
+use crate::{error::BoxError, MaybeSend, MaybeSync};
 
 pub trait HttpClient: MaybeSend + MaybeSync {
     type RespBody: Body<Data = Bytes, Error: std::error::Error + Send + Sync + 'static>

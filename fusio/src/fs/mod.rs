@@ -5,15 +5,14 @@ use std::future::Future;
 use futures_core::Stream;
 pub use options::*;
 
-use crate::{path::Path, Error, Read, Write};
-use crate::{MaybeSend, MaybeSync};
+use crate::{path::Path, Error, MaybeSend, MaybeSync, Read, Write};
 
 pub struct FileMeta {
     pub path: Path,
 }
 
 pub trait Fs: MaybeSend + MaybeSync {
-    type File: Read + Write + 'static;
+    type File: Read + Write + MaybeSend + MaybeSync + 'static;
 
     fn open(&self, path: &Path) -> impl Future<Output = Result<Self::File, Error>> {
         self.open_options(path, OpenOptions::default())

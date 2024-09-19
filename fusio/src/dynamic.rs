@@ -2,21 +2,21 @@ use std::{future::Future, pin::Pin};
 
 use bytes::Bytes;
 
-use crate::{Error, IoBuf, MaybeSend, Read, Write};
+use crate::{Error, IoBuf, MaybeSend, MaybeSync, Read, Write};
 
 pub trait MaybeSendFuture: Future + MaybeSend {}
 
 impl<F: Future + MaybeSend> MaybeSendFuture for F {}
 
-pub trait DynWrite {
+pub trait DynWrite: MaybeSend + MaybeSync {
     fn write(
         &mut self,
         buf: Bytes,
     ) -> Pin<Box<dyn MaybeSendFuture<Output = (Result<usize, Error>, Bytes)> + '_>>;
 
-    fn sync_data(&mut self) -> Pin<Box<dyn MaybeSendFuture<Output = Result<(), Error>> + '_>>;
+    fn sync_data(&self) -> Pin<Box<dyn MaybeSendFuture<Output = Result<(), Error>> + '_>>;
 
-    fn sync_all(&mut self) -> Pin<Box<dyn MaybeSendFuture<Output = Result<(), Error>> + '_>>;
+    fn sync_all(&self) -> Pin<Box<dyn MaybeSendFuture<Output = Result<(), Error>> + '_>>;
 
     fn close(&mut self) -> Pin<Box<dyn MaybeSendFuture<Output = Result<(), Error>> + '_>>;
 }
@@ -29,11 +29,11 @@ impl<W: Write> DynWrite for W {
         Box::pin(W::write(self, buf))
     }
 
-    fn sync_data(&mut self) -> Pin<Box<dyn MaybeSendFuture<Output = Result<(), Error>> + '_>> {
+    fn sync_data(&self) -> Pin<Box<dyn MaybeSendFuture<Output = Result<(), Error>> + '_>> {
         Box::pin(W::sync_data(self))
     }
 
-    fn sync_all(&mut self) -> Pin<Box<dyn MaybeSendFuture<Output = Result<(), Error>> + '_>> {
+    fn sync_all(&self) -> Pin<Box<dyn MaybeSendFuture<Output = Result<(), Error>> + '_>> {
         Box::pin(W::sync_all(self))
     }
 
@@ -42,7 +42,7 @@ impl<W: Write> DynWrite for W {
     }
 }
 
-pub trait DynRead {
+pub trait DynRead: MaybeSend {
     fn read(
         &mut self,
         pos: u64,
