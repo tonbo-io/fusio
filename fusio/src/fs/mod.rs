@@ -5,11 +5,7 @@ use std::future::Future;
 use futures_core::Stream;
 pub use options::*;
 
-use crate::{path::Path, Error, MaybeSend, MaybeSync, Read, Seek, Write};
-
-pub struct FileMeta {
-    pub path: Path,
-}
+use crate::{path::Path, Error, FileMeta, MaybeSend, MaybeSync, Read, Seek, Write};
 
 pub trait Fs: MaybeSend + MaybeSync {
     type File: Read + Seek + Write + MaybeSend + MaybeSync + 'static;

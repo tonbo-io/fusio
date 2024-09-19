@@ -7,7 +7,7 @@ use thiserror::Error;
 pub enum Error {
     Io(#[from] io::Error),
     #[cfg(feature = "http")]
-    Http(#[from] hyper::http::Error),
+    Http(#[from] http::Error),
     #[cfg(feature = "object_store")]
     ObjectStore(#[from] object_store::Error),
     Path(#[from] crate::path::Error),

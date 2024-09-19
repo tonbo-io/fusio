@@ -1,6 +1,5 @@
-use http::{header::RANGE, Method};
+use http::{header::RANGE, Method, Request};
 use http_body_util::BodyExt;
-use hyper::Request;
 use percent_encoding::utf8_percent_encode;
 
 use super::{
@@ -19,12 +18,13 @@ pub struct S3File<C: HttpClient> {
     credential: AwsCredential,
     region: String,
     sign_payload: bool,
+    pos: u64,
 
     client: C,
 }
 
 impl<C: HttpClient> Read for S3File<C> {
-    async fn read(&mut self, pos: u64, len: Option<u64>) -> Result<impl IoBuf, Error> {
+    async fn read(&mut self, len: Option<u64>) -> Result<impl IoBuf, Error> {
         let url = format!(
             "{}/{}",
             self.bucket_endpoint,
@@ -39,8 +39,8 @@ impl<C: HttpClient> Read for S3File<C> {
             .header(
                 RANGE,
                 match len {
-                    Some(len) => format!("bytes={}-{}", pos, pos + len),
-                    None => format!("bytes={}-", pos),
+                    Some(len) => format!("bytes={}-{}", self.pos, self.pos + len),
+                    None => format!("bytes={}-", self.pos),
                 },
             )
             .body(Empty {})?;
@@ -68,6 +68,10 @@ impl<C: HttpClient> Read for S3File<C> {
                 format!("failed to read from S3, HTTP status: {}", response.status()).into(),
             ))
         }
+    }
+
+    async fn metadata(&self) -> Result<crate::FileMeta, Error> {
+        todo!()
     }
 }
 
@@ -105,10 +109,11 @@ mod tests {
             },
             region: region.into(),
             sign_payload: true,
+            pos: 0,
             client,
         };
 
-        let buf = s3.read(0, None).await.unwrap();
+        let buf = s3.read(None).await.unwrap();
         assert_eq!(buf.as_slice(), b"hello, world");
     }
 }

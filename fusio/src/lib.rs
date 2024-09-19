@@ -14,6 +14,7 @@ pub use buf::{IoBuf, IoBufMut};
 #[cfg(feature = "dyn")]
 pub use dynamic::{DynFs, DynRead, DynWrite};
 pub use error::Error;
+use path::Path;
 
 #[cfg(not(feature = "no-send"))]
 pub unsafe trait MaybeSend: Send {}
@@ -50,11 +51,18 @@ pub trait Write: MaybeSend + MaybeSync {
     fn close(&mut self) -> impl Future<Output = Result<(), Error>> + MaybeSend;
 }
 
-pub trait Read: MaybeSend {
+pub struct FileMeta {
+    pub path: Path,
+    pub size: u64,
+}
+
+pub trait Read: MaybeSend + MaybeSync {
     fn read(
         &mut self,
         len: Option<u64>,
     ) -> impl Future<Output = Result<impl IoBuf, Error>> + MaybeSend;
+
+    fn metadata(&self) -> impl Future<Output = Result<FileMeta, Error>> + MaybeSend;
 }
 
 pub trait Seek: MaybeSend {
@@ -66,7 +74,7 @@ mod tests {
     use super::{Read, Write};
     #[cfg(feature = "dyn")]
     use crate::dynamic::{DynRead, DynWrite};
-    use crate::{Error, IoBuf};
+    use crate::{dynamic::DynSeek, Error, IoBuf, Seek};
 
     #[allow(unused)]
     struct CountWrite<W> {
@@ -126,13 +134,23 @@ mod tests {
                 .await
                 .inspect(|buf| self.cnt += buf.bytes_init())
         }
+
+        async fn metadata(&self) -> Result<crate::FileMeta, Error> {
+            self.r.metadata().await
+        }
+    }
+
+    impl<R: Seek> Seek for CountRead<R> {
+        async fn seek(&mut self, pos: u64) -> Result<(), Error> {
+            self.r.seek(pos).await
+        }
     }
 
     #[allow(unused)]
     async fn write_and_read<W, R>(write: W, read: R)
     where
         W: Write,
-        R: Read,
+        R: Read + Seek,
     {
         #[cfg(feature = "dyn")]
         let mut writer = Box::new(CountWrite::new(write)) as Box<dyn DynWrite>;
@@ -150,11 +168,18 @@ mod tests {
 
         writer.sync_data().await.unwrap();
 
+        trait ReadSeek: DynRead + DynSeek {}
+
+        impl<R: Read + Seek> ReadSeek for R {}
+
         #[cfg(feature = "dyn")]
-        let mut reader = Box::new(CountRead::new(read)) as Box<dyn DynRead>;
+        let mut reader = Box::new(CountRead::new(read)) as Box<dyn ReadSeek>;
         #[cfg(not(feature = "dyn"))]
         let mut reader = CountRead::new(read);
-        let buf = reader.read(0, Some(4)).await.unwrap();
+
+        reader.seek(0).await.unwrap();
+
+        let buf = reader.read(Some(4)).await.unwrap();
 
         assert_eq!(buf.bytes_init(), 4);
         assert_eq!(buf.as_slice(), &[2, 0, 2, 4]);
@@ -166,10 +191,16 @@ mod tests {
         use tempfile::tempfile;
         use tokio::fs::File;
 
+        use crate::local::tokio::PathFile;
+
         let read = tempfile().unwrap();
         let write = read.try_clone().unwrap();
 
-        write_and_read(File::from_std(write), File::from_std(read)).await;
+        write_and_read(
+            PathFile::new("".into(), File::from_std(write)),
+            PathFile::new("".into(), File::from_std(read)),
+        )
+        .await;
     }
 
     #[cfg(feature = "monoio")]
@@ -178,14 +209,14 @@ mod tests {
         use monoio::fs::File;
         use tempfile::tempfile;
 
-        use crate::local::MonoioFile;
+        use crate::local::monoio::MonoioFile;
 
         let read = tempfile().unwrap();
         let write = read.try_clone().unwrap();
 
         write_and_read(
-            MonoioFile::from(File::from_std(write).unwrap()),
-            MonoioFile::from(File::from_std(read).unwrap()),
+            MonoioFile::new("".into(), File::from_std(write).unwrap()),
+            MonoioFile::new("".into(), File::from_std(read).unwrap()),
         )
         .await;
     }

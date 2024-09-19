@@ -10,8 +10,8 @@ use chrono::{DateTime, Utc};
 use http::{
     header::AUTHORIZATION, HeaderMap, HeaderName, HeaderValue, Method, Request, StatusCode,
 };
+use http_body::Body;
 use http_body_util::BodyExt;
-use hyper::body::Body;
 use percent_encoding::utf8_percent_encode;
 use serde::Deserialize;
 use thiserror::Error;

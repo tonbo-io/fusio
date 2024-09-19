@@ -4,16 +4,17 @@ use std::{ops::Range, sync::Arc};
 
 use object_store::{aws::AmazonS3, path::Path, GetOptions, GetRange, ObjectStore, PutPayload};
 
-use crate::{Error, IoBuf, Read, Write};
+use crate::{Error, FileMeta, IoBuf, Read, Seek, Write};
 
 pub struct S3File {
     inner: Arc<AmazonS3>,
     path: Path,
+    pos: u64,
 }
 
 impl Read for S3File {
-    async fn read(&mut self, pos: u64, len: Option<u64>) -> Result<impl IoBuf, Error> {
-        let pos = pos as usize;
+    async fn read(&mut self, len: Option<u64>) -> Result<impl IoBuf, Error> {
+        let pos = self.pos as usize;
 
         let mut opts = GetOptions::default();
 
@@ -29,7 +30,25 @@ impl Read for S3File {
         let result = self.inner.get_opts(&self.path, opts).await?;
         let bytes = result.bytes().await?;
 
+        self.pos += bytes.len() as u64;
         Ok(bytes)
+    }
+
+    async fn metadata(&self) -> Result<FileMeta, Error> {
+        let mut options = GetOptions::default();
+        options.head = true;
+        let response = self.inner.get_opts(&self.path, options).await?;
+        Ok(FileMeta {
+            path: self.path.clone().into(),
+            size: response.meta.size as u64,
+        })
+    }
+}
+
+impl Seek for S3File {
+    async fn seek(&mut self, pos: u64) -> Result<(), Error> {
+        self.pos = pos;
+        Ok(())
     }
 }
 
@@ -97,18 +116,19 @@ mod tests {
             let mut store = S3File {
                 inner: Arc::new(s3),
                 path,
+                pos: 0,
             };
             let (result, bytes) = store.write(Bytes::from("hello! Fusio!")).await;
             assert_eq!(result.unwrap(), bytes.len());
             assert_eq!(bytes, Bytes::from("hello! Fusio!"));
 
-            let buf = store.read(0, None).await.unwrap();
+            let buf = store.read(None).await.unwrap();
             assert_eq!(buf.as_bytes(), bytes);
             drop(buf);
-            let buf = store.read(0, Some(6)).await.unwrap();
+            let buf = store.read(Some(6)).await.unwrap();
             assert_eq!(buf.as_bytes(), Bytes::from("hello!"));
             drop(buf);
-            let buf = store.read(7, Some(6)).await.unwrap();
+            let buf = store.read(Some(6)).await.unwrap();
             assert_eq!(buf.as_bytes(), Bytes::from("Fusio!"));
             drop(buf);
         }
