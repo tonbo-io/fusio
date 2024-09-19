@@ -2,7 +2,7 @@ use std::{future::Future, pin::Pin};
 
 use bytes::Bytes;
 
-use crate::{Error, IoBuf, MaybeSend, MaybeSync, Read, Write};
+use crate::{Error, IoBuf, MaybeSend, MaybeSync, Read, Seek, Write};
 
 pub trait MaybeSendFuture: Future + MaybeSend {}
 
@@ -45,9 +45,12 @@ impl<W: Write> DynWrite for W {
 pub trait DynRead: MaybeSend {
     fn read(
         &mut self,
-        pos: u64,
         len: Option<u64>,
     ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<Bytes, Error>> + '_>>;
+}
+
+pub trait DynSeek: MaybeSend {
+    fn seek(&mut self, pos: u64) -> Pin<Box<dyn MaybeSendFuture<Output = Result<(), Error>> + '_>>;
 }
 
 impl<R> DynRead for R
@@ -56,13 +59,21 @@ where
 {
     fn read(
         &mut self,
-        pos: u64,
         len: Option<u64>,
     ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<Bytes, Error>> + '_>> {
         Box::pin(async move {
-            let buf = R::read(self, pos, len).await?;
+            let buf = R::read(self, len).await?;
             Ok(buf.as_bytes())
         })
+    }
+}
+
+impl<S> DynSeek for S
+where
+    S: Seek,
+{
+    fn seek(&mut self, pos: u64) -> Pin<Box<dyn MaybeSendFuture<Output = Result<(), Error>> + '_>> {
+        Box::pin(S::seek(self, pos))
     }
 }
 
@@ -75,16 +86,16 @@ pub mod fs {
 
     use futures_core::Stream;
 
-    use super::MaybeSendFuture;
+    use super::{DynSeek, MaybeSendFuture};
     use crate::{
         fs::{FileMeta, Fs, OpenOptions},
         path::Path,
         DynRead, DynWrite, Error,
     };
 
-    pub trait DynFile: DynRead + DynWrite + 'static {}
+    pub trait DynFile: DynRead + DynSeek + DynWrite + 'static {}
 
-    impl<F> DynFile for F where F: DynRead + DynWrite + 'static {}
+    impl<F> DynFile for F where F: DynRead + DynSeek + DynWrite + 'static {}
 
     pub trait DynFs {
         fn open<'s, 'path: 's>(

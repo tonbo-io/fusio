@@ -1,7 +1,7 @@
 use bytes::Bytes;
+use fusio::dynamic::DynFile;
 use futures::future::BoxFuture;
 use parquet::{arrow::async_writer::AsyncFileWriter, errors::ParquetError};
-use fusio::dynamic::DynFile;
 
 pub struct AsyncWriter {
     inner: Option<Box<dyn DynFile>>,

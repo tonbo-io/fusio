@@ -53,9 +53,12 @@ pub trait Write: MaybeSend + MaybeSync {
 pub trait Read: MaybeSend {
     fn read(
         &mut self,
-        pos: u64,
         len: Option<u64>,
     ) -> impl Future<Output = Result<impl IoBuf, Error>> + MaybeSend;
+}
+
+pub trait Seek: MaybeSend {
+    fn seek(&mut self, pos: u64) -> impl Future<Output = Result<(), Error>> + MaybeSend;
 }
 
 #[cfg(test)]
@@ -117,9 +120,9 @@ mod tests {
     where
         R: Read,
     {
-        async fn read(&mut self, pos: u64, len: Option<u64>) -> Result<impl IoBuf, Error> {
+        async fn read(&mut self, len: Option<u64>) -> Result<impl IoBuf, Error> {
             self.r
-                .read(pos, len)
+                .read(len)
                 .await
                 .inspect(|buf| self.cnt += buf.bytes_init())
         }

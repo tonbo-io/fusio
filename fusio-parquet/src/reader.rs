@@ -48,7 +48,11 @@ impl AsyncFileReader for AsyncReader {
             let len = range.end - range.start;
 
             self.inner
-                .read(range.start as u64, Some(len as u64))
+                .seek(range.start as u64)
+                .await
+                .map_err(|err| ParquetError::External(Box::new(err)))?;
+            self.inner
+                .read(Some(len as u64))
                 .await
                 .map_err(|err| ParquetError::External(Box::new(err)))
         }
@@ -59,9 +63,13 @@ impl AsyncFileReader for AsyncReader {
         async move {
             let footer_size = self.prefetch_footer_size as u64;
 
+            self.inner
+                .seek(self.content_length - footer_size)
+                .await
+                .map_err(|err| ParquetError::External(Box::new(err)))?;
             let prefetched_footer_content = self
                 .inner
-                .read(self.content_length - footer_size, Some(footer_size))
+                .read(Some(footer_size))
                 .await
                 .map_err(|err| ParquetError::External(Box::new(err)))?;
             let prefetched_footer_slice = prefetched_footer_content.as_ref();
@@ -84,12 +92,13 @@ impl AsyncFileReader for AsyncReader {
                     ..(prefetched_footer_length - FOOTER_SIZE)];
                 Ok(Arc::new(decode_metadata(buf)?))
             } else {
+                self.inner
+                    .seek(self.content_length - metadata_length as u64 - FOOTER_SIZE as u64)
+                    .await
+                    .map_err(|err| ParquetError::External(Box::new(err)))?;
                 let bytes = self
                     .inner
-                    .read(
-                        self.content_length - metadata_length as u64 - FOOTER_SIZE as u64,
-                        Some(metadata_length as u64),
-                    )
+                    .read(Some(metadata_length as u64))
                     .await
                     .map_err(|err| ParquetError::External(Box::new(err)))?;
                 Ok(Arc::new(decode_metadata(&bytes)?))

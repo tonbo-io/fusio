@@ -1,14 +1,14 @@
 #[cfg(feature = "fs")]
 pub mod fs;
 
-use std::{io, ptr::slice_from_raw_parts};
+use std::{io::SeekFrom, ptr::slice_from_raw_parts};
 
 use tokio::{
     fs::File,
     io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt},
 };
 
-use crate::{Error, IoBuf, Read, Write};
+use crate::{Error, IoBuf, Read, Seek, Write};
 
 impl Write for File {
     async fn write<B: IoBuf>(&mut self, buf: B) -> (Result<usize, Error>, B) {
@@ -39,9 +39,7 @@ impl Write for File {
 }
 
 impl Read for File {
-    async fn read(&mut self, pos: u64, len: Option<u64>) -> Result<impl IoBuf, Error> {
-        self.seek(io::SeekFrom::Start(pos)).await?;
-
+    async fn read(&mut self, len: Option<u64>) -> Result<impl IoBuf, Error> {
         let mut buf = vec![0; len.unwrap_or(0) as usize];
 
         AsyncReadExt::read(self, &mut buf).await?;
@@ -50,5 +48,13 @@ impl Read for File {
         return Ok(buf);
         #[cfg(feature = "bytes")]
         return Ok(bytes::Bytes::from(buf));
+    }
+}
+
+impl Seek for File {
+    async fn seek(&mut self, pos: u64) -> Result<(), Error> {
+        AsyncSeekExt::seek(self, SeekFrom::Start(pos)).await?;
+
+        Ok(())
     }
 }
