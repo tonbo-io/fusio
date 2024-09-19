@@ -8,8 +8,7 @@ use std::{
 use bytes::{Buf, Bytes};
 use chrono::{DateTime, Utc};
 use http::{
-    header::{self, AUTHORIZATION},
-    HeaderMap, HeaderName, HeaderValue, Method, Request, StatusCode,
+    header::AUTHORIZATION, HeaderMap, HeaderName, HeaderValue, Method, Request, StatusCode,
 };
 use http_body_util::BodyExt;
 use hyper::body::Body;
@@ -107,11 +106,11 @@ impl<'a> AwsAuthorizer<'a> {
         self
     }
 
-    /// Overrides the header name for security tokens, defaults to `x-amz-security-token`
-    pub(crate) fn with_token_header(mut self, header: HeaderName) -> Self {
-        self.token_header = Some(header);
-        self
-    }
+    // /// Overrides the header name for security tokens, defaults to `x-amz-security-token`
+    // pub(crate) fn with_token_header(mut self, header: HeaderName) -> Self {
+    //     self.token_header = Some(header);
+    //     self
+    // }
 
     /// Authorize `request` with an optional pre-calculated SHA256 digest by attaching
     /// the relevant [AWS SigV4] headers
@@ -126,7 +125,7 @@ impl<'a> AwsAuthorizer<'a> {
     /// * Otherwise it is set to the hex encoded SHA256 of the request body
     ///
     /// [AWS SigV4]: https://docs.aws.amazon.com/IAM/latest/UserGuide/create-signed-request.html
-    async fn authorize<
+    pub(crate) async fn authorize<
         B: Body<Data = Bytes, Error: std::error::Error + Send + Sync + 'static> + Unpin,
     >(
         &self,
@@ -399,7 +398,7 @@ fn hex_digest(bytes: &[u8]) -> String {
 }
 
 #[derive(Debug, Error)]
-enum AutohrizeError {
+pub enum AutohrizeError {
     #[error("Invalid header value: {0}")]
     InvalidHeaderValue(#[from] http::header::InvalidHeaderValue),
     #[error("Invalid URL: {0}")]
@@ -426,7 +425,6 @@ async fn instance_creds<'c, C: HttpClient>(
     let request = Request::builder()
         .method(Method::PUT)
         .uri(token_url)
-        .header("host", endpoint)
         .header("X-aws-ec2-metadata-token-ttl-seconds", "600")
         .body(Empty {})?;
 
@@ -454,10 +452,7 @@ async fn instance_creds<'c, C: HttpClient>(
     };
 
     let role_url = format!("{endpoint}/{CREDENTIALS_PATH}/");
-    let mut role_request = Request::builder()
-        .method(Method::GET)
-        .uri(role_url)
-        .header("host", endpoint);
+    let mut role_request = Request::builder().method(Method::GET).uri(role_url);
 
     if let Some(token) = &token {
         role_request = role_request.header(
@@ -524,12 +519,13 @@ impl From<InstanceCredentials> for AwsCredential {
     }
 }
 
-struct TemporaryToken<T> {
+pub(crate) struct TemporaryToken<T> {
     /// The temporary credential
-    pub token: T,
+    pub(crate) token: T,
     /// The instant at which this credential is no longer valid
     /// None means the credential does not expire
-    pub expiry: Option<Instant>,
+    #[allow(unused)]
+    pub(crate) expiry: Option<Instant>,
 }
 
 #[cfg(test)]
@@ -540,13 +536,11 @@ mod tests {
     use chrono::{DateTime, Utc};
     use http::{header::AUTHORIZATION, Method, Request, StatusCode};
     use http_body_util::Empty;
-    use hyper_util::rt::TokioIo;
-    use tokio::net::TcpStream;
     use url::Url;
 
     use crate::remotes::{
         aws::credential::{instance_creds, AwsAuthorizer, AwsCredential},
-        http::tokio::TokioClient,
+        http::{tokio::TokioClient, HttpClient},
     };
 
     // Test generated using https://docs.aws.amazon.com/general/latest/gr/sigv4-signed-request-examples.html
@@ -721,44 +715,31 @@ mod tests {
             return;
         }
 
+        let client = TokioClient::new();
         // For example https://github.com/aws/amazon-ec2-metadata-mock
         let endpoint = env::var("EC2_METADATA_ENDPOINT").unwrap();
-        println!("{:?}", format!("{endpoint}/latest/meta-data/ami-id"));
-
-        let stream = TcpStream::connect(endpoint.clone()).await.unwrap();
-        let io = TokioIo::new(stream);
-
-        let (mut sender, conn) = hyper::client::conn::http1::handshake(io).await.unwrap();
-        tokio::task::spawn(async move {
-            if let Err(err) = conn.await {
-                println!("Connection failed: {:?}", err);
-            }
-        });
 
         let request = Request::builder()
-            .uri(format!("http://{endpoint}/latest/meta-data/ami-id"))
+            .uri(format!("{endpoint}/latest/meta-data/ami-id"))
             .method(Method::GET)
-            .header("host", &endpoint)
-            .body(Empty::<Bytes>::new())
+            .body(crate::remotes::http::Empty {})
             .unwrap();
 
-        let resp = sender.send_request(request).await.unwrap();
+        let resp = client.send_request(request).await.unwrap();
         assert_eq!(
             resp.status(),
             StatusCode::UNAUTHORIZED,
             "Ensure metadata endpoint is set to only allow IMDSv2"
         );
 
-        // let client = TokioClient::new();
+        let creds = instance_creds(&client, &endpoint, false).await.unwrap();
 
-        // let creds = instance_creds(&client, &endpoint, false).await.unwrap();
+        let id = &creds.token.key_id;
+        let secret = &creds.token.secret_key;
+        let token = creds.token.token.as_ref().unwrap();
 
-        // let id = &creds.token.key_id;
-        // let secret = &creds.token.secret_key;
-        // let token = creds.token.token.as_ref().unwrap();
-
-        // assert!(!id.is_empty());
-        // assert!(!secret.is_empty());
-        // assert!(!token.is_empty())
+        assert!(!id.is_empty());
+        assert!(!secret.is_empty());
+        assert!(!token.is_empty())
     }
 }

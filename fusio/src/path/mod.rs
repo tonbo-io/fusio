@@ -79,8 +79,6 @@ impl Path {
             source: err,
         })?;
 
-        dbg!(&absolute);
-
         Self::from_absolute_path(absolute)
     }
 

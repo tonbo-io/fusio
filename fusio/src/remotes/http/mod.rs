@@ -1,5 +1,3 @@
-#[cfg(feature = "monoio-http")]
-mod monoio;
 #[cfg(feature = "tokio-http")]
 pub(crate) mod tokio;
 
@@ -13,11 +11,32 @@ use std::{
 use bytes::Bytes;
 use futures_core::{Stream, TryStream};
 use http::{Method, Request, Response};
-use http_body::Body;
+use http_body::{Body, SizeHint};
 
 use crate::error::BoxError;
 
-pub trait HttpClient {
+#[cfg(feature = "no-send")]
+pub trait HttpClient: Send + Sync {
+    type RespBody: Body<Data = Bytes, Error: std::error::Error + Send + Sync + 'static> + 'static;
+
+    fn send_request<E, B>(
+        &self,
+        request: Request<B>,
+    ) -> impl Future<Output = Result<Response<Self::RespBody>, BoxError>>
+    where
+        E: std::error::Error + Send + Sync + 'static,
+        B: TryStream<Ok = Bytes, Error = E> + 'static;
+
+    fn get(&self, url: &str) -> impl Future<Output = Result<Response<Self::RespBody>, BoxError>> {
+        async move {
+            let request = Request::get(url).method(Method::GET).body(Empty {})?;
+            self.send_request(request).await
+        }
+    }
+}
+
+#[cfg(not(feature = "no-send"))]
+pub trait HttpClient: Send + Sync {
     type RespBody: Body<Data = Bytes, Error: std::error::Error + Send + Sync + 'static>
         + Send
         + Sync
@@ -26,7 +45,7 @@ pub trait HttpClient {
     fn send_request<E, B>(
         &self,
         request: Request<B>,
-    ) -> impl Future<Output = Result<Response<Self::RespBody>, BoxError>>
+    ) -> impl Future<Output = Result<Response<Self::RespBody>, BoxError>> + Send
     where
         E: std::error::Error + Send + Sync + 'static,
         B: TryStream<Ok = Bytes, Error = E> + Send + 'static;
@@ -46,6 +65,26 @@ impl Stream for Empty {
 
     fn poll_next(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         Poll::Ready(None)
+    }
+}
+
+impl Body for Empty {
+    type Data = Bytes;
+    type Error = Infallible;
+
+    fn poll_frame(
+        self: Pin<&mut Self>,
+        _cx: &mut Context<'_>,
+    ) -> Poll<Option<Result<http_body::Frame<Self::Data>, Self::Error>>> {
+        Poll::Ready(None)
+    }
+
+    fn is_end_stream(&self) -> bool {
+        true
+    }
+
+    fn size_hint(&self) -> http_body::SizeHint {
+        SizeHint::with_exact(0)
     }
 }
 

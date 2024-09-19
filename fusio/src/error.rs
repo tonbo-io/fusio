@@ -13,6 +13,8 @@ pub enum Error {
     Path(#[from] crate::path::Error),
     #[error("unsupported operation")]
     Unsupported,
+    #[error(transparent)]
+    Other(BoxError),
 }
 
 #[allow(unused)]
