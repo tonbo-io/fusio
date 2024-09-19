@@ -98,12 +98,13 @@ pub mod fs {
         path::Path,
         DynRead, DynWrite, Error, FileMeta,
     };
+    use crate::{MaybeSend, MaybeSync};
 
     pub trait DynFile: DynRead + DynSeek + DynWrite + 'static {}
 
     impl<F> DynFile for F where F: DynRead + DynSeek + DynWrite + 'static {}
 
-    pub trait DynFs {
+    pub trait DynFs: MaybeSend + MaybeSync {
         fn open<'s, 'path: 's>(
             &'s self,
             path: &'path Path,
