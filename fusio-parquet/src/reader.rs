@@ -1,7 +1,7 @@
 use std::{cmp, ops::Range, sync::Arc};
 
 use bytes::Bytes;
-use fusio::dynamic::DynRead;
+use fusio::dynamic::DynFile;
 use futures::{future::BoxFuture, FutureExt};
 use parquet::{
     arrow::async_reader::AsyncFileReader,
@@ -16,7 +16,7 @@ use parquet::{
 const PREFETCH_FOOTER_SIZE: usize = 512 * 1024;
 
 pub struct AsyncReader {
-    inner: Box<dyn DynRead + Send>,
+    inner: Box<dyn DynFile>,
     content_length: u64,
     // The prefetch size for fetching file footer.
     prefetch_footer_size: usize,
@@ -28,7 +28,7 @@ fn set_prefetch_footer_size(footer_size: usize, content_size: u64) -> usize {
 }
 
 impl AsyncReader {
-    pub fn new(reader: Box<dyn DynRead + Send>, content_length: u64) -> Self {
+    pub fn new(reader: Box<dyn DynFile>, content_length: u64) -> Self {
         Self {
             inner: reader,
             content_length,

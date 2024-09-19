@@ -1,14 +1,14 @@
 use bytes::Bytes;
-use fusio::DynWrite;
 use futures::future::BoxFuture;
 use parquet::{arrow::async_writer::AsyncFileWriter, errors::ParquetError};
+use fusio::dynamic::DynFile;
 
 pub struct AsyncWriter {
-    inner: Option<Box<dyn DynWrite + Send>>,
+    inner: Option<Box<dyn DynFile>>,
 }
 
 impl AsyncWriter {
-    pub fn new(writer: Box<dyn DynWrite + Send>) -> Self {
+    pub fn new(writer: Box<dyn DynFile>) -> Self {
         Self {
             inner: Some(writer),
         }
