@@ -8,7 +8,7 @@ pub mod local;
 pub mod path;
 pub mod remotes;
 
-use std::future::Future;
+use std::{future::Future, io::Cursor};
 
 pub use buf::{IoBuf, IoBufMut};
 #[cfg(feature = "dyn")]
@@ -67,6 +67,58 @@ pub trait Read: MaybeSend + MaybeSync {
 
 pub trait Seek: MaybeSend {
     fn seek(&mut self, pos: u64) -> impl Future<Output = Result<(), Error>> + MaybeSend;
+}
+
+impl<T> Read for Cursor<T>
+where
+    T: AsRef<[u8]> + Unpin + Send + Sync,
+{
+    async fn read(&mut self, len: Option<u64>) -> Result<impl IoBuf, Error> {
+        let buf = if let Some(len) = len {
+            let mut buf = vec![0u8; len as usize];
+            let _ = std::io::Read::read(self, &mut buf)?;
+
+            buf
+        } else {
+            let mut buf = Vec::new();
+            let _ = std::io::Read::read_to_end(self, &mut buf)?;
+
+            buf
+        };
+
+        #[cfg(not(feature = "bytes"))]
+        return Ok(buf);
+        #[cfg(feature = "bytes")]
+        return Ok(bytes::Bytes::from(buf));
+    }
+
+    async fn metadata(&self) -> Result<FileMeta, Error> {
+        Ok(FileMeta {
+            path: Default::default(),
+            size: self.get_ref().as_ref().len() as u64,
+        })
+    }
+}
+
+impl Write for Vec<u8> {
+    async fn write<B: IoBuf>(&mut self, buf: B) -> (Result<usize, Error>, B) {
+        let result = std::io::Write::write(self, buf.as_slice())
+            .map_err(Error::Io);
+
+        (result, buf)
+    }
+
+    async fn sync_data(&self) -> Result<(), Error> {
+        Ok(())
+    }
+
+    async fn sync_all(&self) -> Result<(), Error> {
+        Ok(())
+    }
+
+    async fn close(&mut self) -> Result<(), Error> {
+        Ok(())
+    }
 }
 
 #[cfg(test)]

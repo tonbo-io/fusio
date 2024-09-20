@@ -74,6 +74,69 @@ where
     }
 }
 
+impl<R: Read> Read for &mut R {
+    fn read(&mut self, len: Option<u64>) -> impl Future<Output=Result<impl IoBuf, Error>> + MaybeSend {
+        R::read(self, len)
+    }
+
+    fn metadata(&self) -> impl Future<Output=Result<FileMeta, Error>> + MaybeSend {
+        R::metadata(self)
+    }
+}
+
+impl Read for Box<dyn DynFile> {
+    async fn read(&mut self, len: Option<u64>) -> Result<impl IoBuf, Error> {
+        DynRead::read(self, len).await
+    }
+
+    async fn metadata(&self) -> Result<FileMeta, Error> {
+        DynRead::metadata(self).await
+    }
+}
+
+impl<W: Write> Write for &mut W {
+    fn write<B: IoBuf>(&mut self, buf: B) -> impl Future<Output=(Result<usize, Error>, B)> + MaybeSend {
+        W::write(self, buf)
+    }
+
+    fn sync_data(&self) -> impl Future<Output=Result<(), Error>> + MaybeSend {
+        W::sync_data(self)
+    }
+
+    fn sync_all(&self) -> impl Future<Output=Result<(), Error>> + MaybeSend {
+        W::sync_all(self)
+    }
+
+    fn close(&mut self) -> impl Future<Output=Result<(), Error>> + MaybeSend {
+        W::close(self)
+    }
+}
+
+impl Write for Box<dyn DynFile> {
+    async fn write<B: IoBuf>(&mut self, buf: B) -> (Result<usize, Error>, B) {
+        let (result, _) = DynWrite::write(self, buf.as_bytes()).await;
+        (result, buf)
+    }
+
+    async fn sync_data(&self) -> Result<(), Error> {
+        DynWrite::sync_data(self).await
+    }
+
+    async fn sync_all(&self) -> Result<(), Error> {
+        DynWrite::sync_all(self).await
+    }
+
+    async fn close(&mut self) -> Result<(), Error> {
+        DynWrite::close(self).await
+    }
+}
+
+impl Seek for Box<dyn DynFile> {
+    async fn seek(&mut self, pos: u64) -> Result<(), Error> {
+        DynSeek::seek(self, pos).await
+    }
+}
+
 impl<S> DynSeek for S
 where
     S: Seek,
