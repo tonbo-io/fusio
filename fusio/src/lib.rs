@@ -11,8 +11,10 @@ pub mod remotes;
 use std::{future::Future, io::Cursor};
 
 pub use buf::{IoBuf, IoBufMut};
+#[cfg(all(feature = "dyn", feature = "fs"))]
+pub use dynamic::fs::DynFs;
 #[cfg(feature = "dyn")]
-pub use dynamic::{DynFs, DynRead, DynWrite};
+pub use dynamic::{DynRead, DynWrite};
 pub use error::Error;
 use path::Path;
 
@@ -100,10 +102,80 @@ where
     }
 }
 
+impl<T> Seek for Cursor<T>
+where
+    T: AsRef<[u8]> + MaybeSend,
+{
+    async fn seek(&mut self, pos: u64) -> Result<(), Error> {
+        std::io::Seek::seek(self, std::io::SeekFrom::Start(pos))
+            .map_err(Error::Io)
+            .map(|_| ())
+    }
+}
+
+impl Write for Cursor<&mut [u8]> {
+    async fn write<B: IoBuf>(&mut self, buf: B) -> (Result<usize, Error>, B) {
+        let result = std::io::Write::write(self, buf.as_slice()).map_err(Error::Io);
+
+        (result, buf)
+    }
+
+    async fn sync_data(&self) -> Result<(), Error> {
+        Ok(())
+    }
+
+    async fn sync_all(&self) -> Result<(), Error> {
+        Ok(())
+    }
+
+    async fn close(&mut self) -> Result<(), Error> {
+        Ok(())
+    }
+}
+
+impl<S: Seek> Seek for &mut S {
+    fn seek(&mut self, pos: u64) -> impl Future<Output = Result<(), Error>> + MaybeSend {
+        S::seek(self, pos)
+    }
+}
+
+impl<R: Read> Read for &mut R {
+    fn read(
+        &mut self,
+        len: Option<u64>,
+    ) -> impl Future<Output = Result<impl IoBuf, Error>> + MaybeSend {
+        R::read(self, len)
+    }
+
+    fn metadata(&self) -> impl Future<Output = Result<FileMeta, Error>> + MaybeSend {
+        R::metadata(self)
+    }
+}
+
+impl<W: Write> Write for &mut W {
+    fn write<B: IoBuf>(
+        &mut self,
+        buf: B,
+    ) -> impl Future<Output = (Result<usize, Error>, B)> + MaybeSend {
+        W::write(self, buf)
+    }
+
+    fn sync_data(&self) -> impl Future<Output = Result<(), Error>> + MaybeSend {
+        W::sync_data(self)
+    }
+
+    fn sync_all(&self) -> impl Future<Output = Result<(), Error>> + MaybeSend {
+        W::sync_all(self)
+    }
+
+    fn close(&mut self) -> impl Future<Output = Result<(), Error>> + MaybeSend {
+        W::close(self)
+    }
+}
+
 impl Write for Vec<u8> {
     async fn write<B: IoBuf>(&mut self, buf: B) -> (Result<usize, Error>, B) {
-        let result = std::io::Write::write(self, buf.as_slice())
-            .map_err(Error::Io);
+        let result = std::io::Write::write(self, buf.as_slice()).map_err(Error::Io);
 
         (result, buf)
     }
