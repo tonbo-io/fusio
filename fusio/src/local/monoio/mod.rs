@@ -3,7 +3,7 @@ pub mod fs;
 
 use monoio::fs::File;
 
-use crate::{path::Path, Error, IoBuf, IoBufMut, Read, Seek, Write};
+use crate::{Error, IoBuf, Read, Seek, Write};
 
 #[repr(transparent)]
 struct MonoioBuf<B> {
@@ -23,33 +23,14 @@ where
     }
 }
 
-unsafe impl<B> monoio::buf::IoBufMut for MonoioBuf<B>
-where
-    B: IoBufMut,
-{
-    fn write_ptr(&mut self) -> *mut u8 {
-        self.buf.as_mut_ptr()
-    }
-
-    fn bytes_total(&mut self) -> usize {
-        IoBufMut::bytes_total(&self.buf)
-    }
-
-    unsafe fn set_init(&mut self, pos: usize) {
-        IoBufMut::set_init(&mut self.buf, pos)
-    }
-}
-
 pub struct MonoioFile {
-    path: Path,
     file: Option<File>,
     pos: u64,
 }
 
-impl MonoioFile {
-    pub(crate) fn new(path: Path, file: File) -> Self {
+impl From<File> for MonoioFile {
+    fn from(file: File) -> Self {
         Self {
-            path,
             file: Some(file),
             pos: 0,
         }
@@ -88,28 +69,29 @@ impl Write for MonoioFile {
 
 impl Read for MonoioFile {
     async fn read(&mut self, len: Option<u64>) -> Result<impl IoBuf, Error> {
-        let buf = vec![0; len.unwrap_or(0) as usize];
+        let len = match len {
+            Some(len) => len,
+            None => self.pos - self.size().await?,
+        } as usize;
+        let buf = vec![0; len];
 
         let (result, buf) = self
             .file
             .as_ref()
             .expect("read file after closed")
-            .read_at(MonoioBuf { buf }, self.pos)
+            .read_at(buf, self.pos)
             .await;
         self.pos += result? as u64;
 
         #[cfg(not(feature = "bytes"))]
         return Ok(buf.buf);
         #[cfg(feature = "bytes")]
-        return Ok(bytes::Bytes::from(buf.buf));
+        return Ok(bytes::Bytes::from(buf));
     }
 
-    async fn metadata(&self) -> Result<crate::FileMeta, Error> {
+    async fn size(&self) -> Result<u64, Error> {
         let metadata = File::metadata(self.file.as_ref().expect("read file after closed")).await?;
-        Ok(crate::FileMeta {
-            path: self.path.clone(),
-            size: metadata.len(),
-        })
+        Ok(metadata.len())
     }
 }
 

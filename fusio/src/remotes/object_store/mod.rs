@@ -4,7 +4,7 @@ use std::{ops::Range, sync::Arc};
 
 use object_store::{aws::AmazonS3, path::Path, GetOptions, GetRange, ObjectStore, PutPayload};
 
-use crate::{Error, FileMeta, IoBuf, Read, Seek, Write};
+use crate::{Error, IoBuf, Read, Seek, Write};
 
 pub struct S3File {
     inner: Arc<AmazonS3>,
@@ -34,14 +34,11 @@ impl Read for S3File {
         Ok(bytes)
     }
 
-    async fn metadata(&self) -> Result<FileMeta, Error> {
+    async fn size(&self) -> Result<u64, Error> {
         let mut options = GetOptions::default();
         options.head = true;
         let response = self.inner.get_opts(&self.path, options).await?;
-        Ok(FileMeta {
-            path: self.path.clone().into(),
-            size: response.meta.size as u64,
-        })
+        Ok(response.meta.size as u64)
     }
 }
 

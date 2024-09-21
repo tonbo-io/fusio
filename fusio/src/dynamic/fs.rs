@@ -4,11 +4,10 @@ use futures_core::Stream;
 
 use super::{DynSeek, MaybeSendFuture};
 use crate::{
-    fs::{Fs, OpenOptions},
+    fs::{FileMeta, Fs, OpenOptions},
     path::Path,
-    DynRead, DynWrite, Error, FileMeta,
+    DynRead, DynWrite, Error, IoBuf, MaybeSend, MaybeSync, Read, Seek, Write,
 };
-use crate::{IoBuf, MaybeSend, MaybeSync, Read, Seek, Write};
 
 pub trait DynFile: DynRead + DynSeek + DynWrite + 'static {}
 
@@ -25,8 +24,8 @@ impl<'read> Read for Box<dyn DynFile + 'read> {
         DynRead::read(self, len).await
     }
 
-    async fn metadata(&self) -> Result<FileMeta, Error> {
-        DynRead::metadata(self).await
+    async fn size(&self) -> Result<u64, Error> {
+        DynRead::size(self).await
     }
 }
 

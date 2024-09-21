@@ -3,36 +3,32 @@ use std::io;
 use async_stream::stream;
 use futures_core::Stream;
 use tokio::{
-    fs::{create_dir, remove_file},
+    fs::{create_dir, remove_file, File},
     task::spawn_blocking,
 };
 
-use super::PathFile;
 use crate::{
-    fs::{Fs, OpenOptions, WriteMode},
+    fs::{FileMeta, Fs, OpenOptions, WriteMode},
     path::{path_to_local, Path},
-    Error, FileMeta,
+    Error,
 };
 
 pub struct TokioFs;
 
 impl Fs for TokioFs {
-    type File = PathFile;
+    type File = File;
 
     async fn open_options(&self, path: &Path, options: OpenOptions) -> Result<Self::File, Error> {
         let local_path = path_to_local(path)?;
 
-        Ok(PathFile::new(
-            path.clone(),
-            tokio::fs::OpenOptions::new()
-                .read(options.read)
-                .write(options.write.is_some())
-                .create(options.create)
-                .append(options.write == Some(WriteMode::Append))
-                .truncate(options.write == Some(WriteMode::Overwrite))
-                .open(&local_path)
-                .await?,
-        ))
+        Ok(tokio::fs::OpenOptions::new()
+            .read(options.read)
+            .write(options.write.is_some())
+            .create(options.create)
+            .append(options.write == Some(WriteMode::Append))
+            .truncate(options.write == Some(WriteMode::Overwrite))
+            .open(&local_path)
+            .await?)
     }
 
     async fn create_dir(path: &Path) -> Result<(), Error> {

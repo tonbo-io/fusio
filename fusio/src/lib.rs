@@ -10,13 +10,12 @@ pub mod remotes;
 
 use std::{future::Future, io::Cursor};
 
-pub use buf::{IoBuf, IoBufMut};
+pub use buf::IoBuf;
 #[cfg(all(feature = "dyn", feature = "fs"))]
 pub use dynamic::fs::DynFs;
 #[cfg(feature = "dyn")]
 pub use dynamic::{DynRead, DynWrite};
 pub use error::Error;
-use path::Path;
 
 #[cfg(not(feature = "no-send"))]
 pub unsafe trait MaybeSend: Send {}
@@ -53,18 +52,13 @@ pub trait Write: MaybeSend + MaybeSync {
     fn close(&mut self) -> impl Future<Output = Result<(), Error>> + MaybeSend;
 }
 
-pub struct FileMeta {
-    pub path: Path,
-    pub size: u64,
-}
-
 pub trait Read: MaybeSend + MaybeSync {
     fn read(
         &mut self,
         len: Option<u64>,
     ) -> impl Future<Output = Result<impl IoBuf, Error>> + MaybeSend;
 
-    fn metadata(&self) -> impl Future<Output = Result<FileMeta, Error>> + MaybeSend;
+    fn size(&self) -> impl Future<Output = Result<u64, Error>> + MaybeSend;
 }
 
 pub trait Seek: MaybeSend {
@@ -94,11 +88,8 @@ where
         return Ok(bytes::Bytes::from(buf));
     }
 
-    async fn metadata(&self) -> Result<FileMeta, Error> {
-        Ok(FileMeta {
-            path: Default::default(),
-            size: self.get_ref().as_ref().len() as u64,
-        })
+    async fn size(&self) -> Result<u64, Error> {
+        Ok(self.get_ref().as_ref().len() as u64)
     }
 }
 
@@ -147,8 +138,8 @@ impl<R: Read> Read for &mut R {
         R::read(self, len)
     }
 
-    fn metadata(&self) -> impl Future<Output = Result<FileMeta, Error>> + MaybeSend {
-        R::metadata(self)
+    fn size(&self) -> impl Future<Output = Result<u64, Error>> + MaybeSend {
+        R::size(self)
     }
 }
 
@@ -170,26 +161,6 @@ impl<W: Write> Write for &mut W {
 
     fn close(&mut self) -> impl Future<Output = Result<(), Error>> + MaybeSend {
         W::close(self)
-    }
-}
-
-impl Write for Vec<u8> {
-    async fn write<B: IoBuf>(&mut self, buf: B) -> (Result<usize, Error>, B) {
-        let result = std::io::Write::write(self, buf.as_slice()).map_err(Error::Io);
-
-        (result, buf)
-    }
-
-    async fn sync_data(&self) -> Result<(), Error> {
-        Ok(())
-    }
-
-    async fn sync_all(&self) -> Result<(), Error> {
-        Ok(())
-    }
-
-    async fn close(&mut self) -> Result<(), Error> {
-        Ok(())
     }
 }
 
@@ -259,8 +230,8 @@ mod tests {
                 .inspect(|buf| self.cnt += buf.bytes_init())
         }
 
-        async fn metadata(&self) -> Result<crate::FileMeta, Error> {
-            self.r.metadata().await
+        async fn size(&self) -> Result<u64, Error> {
+            self.r.size().await
         }
     }
 
@@ -315,16 +286,10 @@ mod tests {
         use tempfile::tempfile;
         use tokio::fs::File;
 
-        use crate::local::tokio::PathFile;
-
         let read = tempfile().unwrap();
         let write = read.try_clone().unwrap();
 
-        write_and_read(
-            PathFile::new("".into(), File::from_std(write)),
-            PathFile::new("".into(), File::from_std(read)),
-        )
-        .await;
+        write_and_read(File::from_std(write), File::from_std(read)).await;
     }
 
     #[cfg(feature = "monoio")]
@@ -339,8 +304,8 @@ mod tests {
         let write = read.try_clone().unwrap();
 
         write_and_read(
-            MonoioFile::new("".into(), File::from_std(write).unwrap()),
-            MonoioFile::new("".into(), File::from_std(read).unwrap()),
+            MonoioFile::from(File::from_std(write).unwrap()),
+            MonoioFile::from(File::from_std(read).unwrap()),
         )
         .await;
     }
