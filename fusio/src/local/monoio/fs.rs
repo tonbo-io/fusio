@@ -5,9 +5,9 @@ use futures_core::Stream;
 
 use super::MonoioFile;
 use crate::{
-    fs::{Fs, OpenOptions, WriteMode},
+    fs::{FileMeta, Fs, OpenOptions, WriteMode},
     path::{path_to_local, Path},
-    Error, FileMeta,
+    Error,
 };
 
 pub struct MonoIoFs;
@@ -18,8 +18,7 @@ impl Fs for MonoIoFs {
     async fn open_options(&self, path: &Path, options: OpenOptions) -> Result<Self::File, Error> {
         let local_path = path_to_local(path)?;
 
-        Ok(MonoioFile::new(
-            path.clone(),
+        Ok(MonoioFile::from(
             monoio::fs::OpenOptions::new()
                 .read(options.read)
                 .write(options.write.is_some())

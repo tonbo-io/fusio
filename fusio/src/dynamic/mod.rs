@@ -4,10 +4,10 @@ pub mod fs;
 use std::{future::Future, pin::Pin};
 
 use bytes::Bytes;
-
-use crate::{Error, FileMeta, IoBuf, MaybeSend, MaybeSync, Read, Seek, Write};
 #[cfg(feature = "fs")]
 pub use fs::{DynFile, DynFs};
+
+use crate::{Error, IoBuf, MaybeSend, MaybeSync, Read, Seek, Write};
 
 pub struct BoxedFuture<'future, Output> {
     inner: Pin<Box<dyn MaybeSendFuture<Output = Output> + 'future>>,
@@ -79,7 +79,7 @@ pub trait DynRead: MaybeSend + MaybeSync {
         len: Option<u64>,
     ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<Bytes, Error>> + '_>>;
 
-    fn metadata(&self) -> Pin<Box<dyn MaybeSendFuture<Output = Result<FileMeta, Error>> + '_>>;
+    fn size(&self) -> Pin<Box<dyn MaybeSendFuture<Output = Result<u64, Error>> + '_>>;
 }
 
 impl<R> DynRead for R
@@ -96,8 +96,8 @@ where
         })
     }
 
-    fn metadata(&self) -> Pin<Box<dyn MaybeSendFuture<Output = Result<FileMeta, Error>> + '_>> {
-        Box::pin(R::metadata(self))
+    fn size(&self) -> Pin<Box<dyn MaybeSendFuture<Output = Result<u64, Error>> + '_>> {
+        Box::pin(R::size(self))
     }
 }
 

@@ -70,7 +70,7 @@ impl<C: HttpClient> Read for S3File<C> {
         }
     }
 
-    async fn metadata(&self) -> Result<crate::FileMeta, Error> {
+    async fn size(&self) -> Result<u64, Error> {
         todo!()
     }
 }

@@ -6,10 +6,10 @@ use futures_util::stream::StreamExt;
 use object_store::{aws::AmazonS3, ObjectStore};
 
 use crate::{
-    fs::{Fs, OpenOptions, WriteMode},
+    fs::{FileMeta, Fs, OpenOptions, WriteMode},
     path::Path,
     remotes::object_store::S3File,
-    Error, FileMeta,
+    Error,
 };
 
 pub struct S3Store {
