@@ -42,7 +42,7 @@ impl Read for File {
     async fn read(&mut self, len: Option<u64>) -> Result<impl IoBuf, Error> {
         let mut buf = vec![0; len.unwrap_or(0) as usize];
 
-        AsyncReadExt::read(self, &mut buf).await?;
+        AsyncReadExt::read_exact(self, &mut buf).await?;
 
         #[cfg(not(feature = "bytes"))]
         return Ok(buf);

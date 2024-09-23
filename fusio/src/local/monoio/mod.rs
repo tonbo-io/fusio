@@ -79,9 +79,10 @@ impl Read for MonoioFile {
             .file
             .as_ref()
             .expect("read file after closed")
-            .read_at(buf, self.pos)
+            .read_exact_at(buf, self.pos)
             .await;
-        self.pos += result? as u64;
+        result?;
+        self.pos += buf.len() as u64;
 
         #[cfg(not(feature = "bytes"))]
         return Ok(buf.buf);
