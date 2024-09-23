@@ -104,7 +104,7 @@ where
     }
 }
 
-impl Write for Cursor<&mut [u8]> {
+impl Write for Cursor<&mut Vec<u8>> {
     async fn write<B: IoBuf>(&mut self, buf: B) -> (Result<usize, Error>, B) {
         let result = std::io::Write::write(self, buf.as_slice()).map_err(Error::Io);
 
