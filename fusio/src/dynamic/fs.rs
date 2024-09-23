@@ -15,36 +15,36 @@ impl<F> DynFile for F where F: DynRead + DynSeek + DynWrite + 'static {}
 
 impl<'seek> Seek for Box<dyn DynFile + 'seek> {
     async fn seek(&mut self, pos: u64) -> Result<(), Error> {
-        DynSeek::seek(self, pos).await
+        DynSeek::seek(self.as_mut(), pos).await
     }
 }
 
 impl<'read> Read for Box<dyn DynFile + 'read> {
     async fn read(&mut self, len: Option<u64>) -> Result<impl IoBuf, Error> {
-        DynRead::read(self, len).await
+        DynRead::read(self.as_mut(), len).await
     }
 
     async fn size(&self) -> Result<u64, Error> {
-        DynRead::size(self).await
+        DynRead::size(self.as_ref()).await
     }
 }
 
 impl<'write> Write for Box<dyn DynFile + 'write> {
     async fn write<B: IoBuf>(&mut self, buf: B) -> (Result<usize, Error>, B) {
-        let (result, _) = DynWrite::write(self, buf.as_bytes()).await;
+        let (result, _) = DynWrite::write(self.as_mut(), buf.as_bytes()).await;
         (result, buf)
     }
 
     async fn sync_data(&self) -> Result<(), Error> {
-        DynWrite::sync_data(self).await
+        DynWrite::sync_data(self.as_ref()).await
     }
 
     async fn sync_all(&self) -> Result<(), Error> {
-        DynWrite::sync_all(self).await
+        DynWrite::sync_all(self.as_ref()).await
     }
 
     async fn close(&mut self) -> Result<(), Error> {
-        DynWrite::close(self).await
+        DynWrite::close(self.as_mut()).await
     }
 }
 
