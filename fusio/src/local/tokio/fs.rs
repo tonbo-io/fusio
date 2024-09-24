@@ -3,7 +3,7 @@ use std::io;
 use async_stream::stream;
 use futures_core::Stream;
 use tokio::{
-    fs::{create_dir, remove_file, File},
+    fs::{create_dir_all, remove_file, File},
     task::spawn_blocking,
 };
 
@@ -31,9 +31,9 @@ impl Fs for TokioFs {
             .await?)
     }
 
-    async fn create_dir(path: &Path) -> Result<(), Error> {
+    async fn create_dir_all(path: &Path) -> Result<(), Error> {
         let path = path_to_local(path)?;
-        create_dir(path).await?;
+        create_dir_all(path).await?;
 
         Ok(())
     }

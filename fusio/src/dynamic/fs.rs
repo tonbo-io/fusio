@@ -62,7 +62,7 @@ pub trait DynFs: MaybeSend + MaybeSync {
         options: OpenOptions,
     ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<Box<dyn DynFile>, Error>> + 's>>;
 
-    fn create_dir<'s, 'path: 's>(
+    fn create_dir_all<'s, 'path: 's>(
         &'s self,
         path: &'path Path,
     ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<(), Error>> + 's>>;
@@ -99,11 +99,11 @@ impl<F: Fs> DynFs for F {
         })
     }
 
-    fn create_dir<'s, 'path: 's>(
+    fn create_dir_all<'s, 'path: 's>(
         &'s self,
         path: &'path Path,
     ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<(), Error>> + 's>> {
-        Box::pin(F::create_dir(path))
+        Box::pin(F::create_dir_all(path))
     }
 
     fn list<'s, 'path: 's>(

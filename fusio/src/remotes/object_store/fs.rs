@@ -30,7 +30,7 @@ impl Fs for S3Store {
         })
     }
 
-    async fn create_dir(_: &Path) -> Result<(), Error> {
+    async fn create_dir_all(_: &Path) -> Result<(), Error> {
         Ok(())
     }
 
