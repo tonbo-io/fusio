@@ -72,7 +72,7 @@ where
     async fn read(&mut self, len: Option<u64>) -> Result<impl IoBuf, Error> {
         let buf = if let Some(len) = len {
             let mut buf = vec![0u8; len as usize];
-            let _ = std::io::Read::read(self, &mut buf)?;
+            let _ = std::io::Read::read_exact(self, &mut buf)?;
 
             buf
         } else {
