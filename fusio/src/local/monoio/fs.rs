@@ -1,4 +1,4 @@
-use std::fs::create_dir;
+use std::fs::create_dir_all;
 
 use async_stream::stream;
 use futures_core::Stream;
@@ -30,9 +30,9 @@ impl Fs for MonoIoFs {
         ))
     }
 
-    async fn create_dir(path: &Path) -> Result<(), Error> {
+    async fn create_dir_all(path: &Path) -> Result<(), Error> {
         let path = path_to_local(path)?;
-        create_dir(path)?;
+        create_dir_all(path)?;
 
         Ok(())
     }

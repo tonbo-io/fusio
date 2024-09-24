@@ -25,7 +25,7 @@ pub trait Fs: MaybeSend + MaybeSync {
         options: OpenOptions,
     ) -> impl Future<Output = Result<Self::File, Error>> + MaybeSend;
 
-    fn create_dir(path: &Path) -> impl Future<Output = Result<(), Error>> + MaybeSend;
+    fn create_dir_all(path: &Path) -> impl Future<Output = Result<(), Error>> + MaybeSend;
 
     fn list(
         &self,
