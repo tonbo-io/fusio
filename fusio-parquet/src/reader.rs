@@ -1,7 +1,7 @@
 use std::{cmp, ops::Range, sync::Arc};
 
-use bytes::Bytes;
-use fusio::dynamic::DynFile;
+use bytes::{Bytes, BytesMut};
+use fusio::{dynamic::DynFile, Read};
 use futures::{future::BoxFuture, FutureExt};
 use parquet::{
     arrow::async_reader::AsyncFileReader,
@@ -46,30 +46,34 @@ impl AsyncFileReader for AsyncReader {
     fn get_bytes(&mut self, range: Range<usize>) -> BoxFuture<'_, parquet::errors::Result<Bytes>> {
         async move {
             let len = range.end - range.start;
+            let buf = BytesMut::with_capacity(len);
 
             self.inner
                 .seek(range.start as u64)
                 .await
                 .map_err(|err| ParquetError::External(Box::new(err)))?;
-            self.inner
-                .read(Some(len as u64))
+            let buf = self
+                .inner
+                .read_exact(buf)
                 .await
-                .map_err(|err| ParquetError::External(Box::new(err)))
+                .map_err(|err| ParquetError::External(Box::new(err)))?;
+            Ok(buf.freeze())
         }
         .boxed()
     }
 
     fn get_metadata(&mut self) -> BoxFuture<'_, parquet::errors::Result<Arc<ParquetMetaData>>> {
         async move {
-            let footer_size = self.prefetch_footer_size as u64;
+            let footer_size = self.prefetch_footer_size;
+            let buf = BytesMut::with_capacity(footer_size);
 
             self.inner
-                .seek(self.content_length - footer_size)
+                .seek(self.content_length - footer_size as u64)
                 .await
                 .map_err(|err| ParquetError::External(Box::new(err)))?;
             let prefetched_footer_content = self
                 .inner
-                .read(Some(footer_size))
+                .read_exact(buf)
                 .await
                 .map_err(|err| ParquetError::External(Box::new(err)))?;
             let prefetched_footer_slice = prefetched_footer_content.as_ref();
@@ -96,9 +100,12 @@ impl AsyncFileReader for AsyncReader {
                     .seek(self.content_length - metadata_length as u64 - FOOTER_SIZE as u64)
                     .await
                     .map_err(|err| ParquetError::External(Box::new(err)))?;
+
+                let buf = BytesMut::with_capacity(metadata_length);
+
                 let bytes = self
                     .inner
-                    .read(Some(metadata_length as u64))
+                    .read_exact(buf)
                     .await
                     .map_err(|err| ParquetError::External(Box::new(err)))?;
                 Ok(Arc::new(decode_metadata(&bytes)?))

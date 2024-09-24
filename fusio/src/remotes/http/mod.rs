@@ -1,4 +1,4 @@
-#[cfg(feature = "tokio-http")]
+#[cfg(all(feature = "tokio-http", not(feature = "completion-based")))]
 pub(crate) mod tokio;
 
 use std::{
@@ -72,7 +72,7 @@ impl Body for Empty {
 #[cfg(test)]
 mod tests {
 
-    #[cfg(feature = "tokio-http")]
+    #[cfg(all(feature = "tokio-http", not(feature = "completion-based")))]
     #[tokio::test]
     async fn test_tokio_client() {
         use http::{Request, StatusCode};

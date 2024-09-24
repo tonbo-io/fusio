@@ -1,5 +1,5 @@
 use bytes::Bytes;
-use fusio::dynamic::DynFile;
+use fusio::{dynamic::DynFile, Write};
 use futures::future::BoxFuture;
 use parquet::{arrow::async_writer::AsyncFileWriter, errors::ParquetError};
 
@@ -19,7 +19,7 @@ impl AsyncFileWriter for AsyncWriter {
     fn write(&mut self, bs: Bytes) -> BoxFuture<'_, parquet::errors::Result<()>> {
         Box::pin(async move {
             if let Some(writer) = self.inner.as_mut() {
-                let (result, _) = writer.write(bs).await;
+                let (result, _) = writer.write_all(bs).await;
                 result.map_err(|err| ParquetError::External(Box::new(err)))?;
             }
             Ok(())

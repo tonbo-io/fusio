@@ -19,6 +19,7 @@ impl TokioClient {
 
 impl HttpClient for TokioClient {
     type RespBody = reqwest::Body;
+
     async fn send_request<E, B>(
         &self,
         request: Request<B>,

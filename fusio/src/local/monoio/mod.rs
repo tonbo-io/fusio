@@ -3,7 +3,7 @@ pub mod fs;
 
 use monoio::fs::File;
 
-use crate::{Error, IoBuf, Read, Seek, Write};
+use crate::{buf::IoBufMut, Error, IoBuf, Read, Seek, Write};
 
 #[repr(transparent)]
 struct MonoioBuf<B> {
@@ -23,6 +23,21 @@ where
     }
 }
 
+unsafe impl<B> monoio::buf::IoBufMut for MonoioBuf<B>
+where
+    B: IoBufMut,
+{
+    fn write_ptr(&mut self) -> *mut u8 {
+        self.buf.as_mut_ptr()
+    }
+
+    fn bytes_total(&mut self) -> usize {
+        self.buf.bytes_init()
+    }
+
+    unsafe fn set_init(&mut self, _pos: usize) {}
+}
+
 pub struct MonoioFile {
     file: Option<File>,
     pos: u64,
@@ -38,16 +53,14 @@ impl From<File> for MonoioFile {
 }
 
 impl Write for MonoioFile {
-    async fn write<B: IoBuf>(&mut self, buf: B) -> (Result<usize, Error>, B) {
+    async fn write_all<B: IoBuf>(&mut self, buf: B) -> (Result<(), Error>, B) {
         let (result, buf) = self
             .file
             .as_ref()
             .expect("read file after closed")
-            .write_at(MonoioBuf { buf }, self.pos)
+            .write_all_at(MonoioBuf { buf }, self.pos)
             .await;
-        if let Ok(len) = result.as_ref() {
-            self.pos += *len as u64
-        }
+        self.pos += buf.buf.bytes_init() as u64;
         (result.map_err(Error::from), buf.buf)
     }
 
@@ -68,26 +81,17 @@ impl Write for MonoioFile {
 }
 
 impl Read for MonoioFile {
-    async fn read(&mut self, len: Option<u64>) -> Result<impl IoBuf, Error> {
-        let len = match len {
-            Some(len) => len,
-            None => self.pos - self.size().await?,
-        } as usize;
-        let buf = vec![0; len];
-
+    async fn read_exact<B: IoBufMut>(&mut self, buf: B) -> Result<B, Error> {
         let (result, buf) = self
             .file
             .as_ref()
             .expect("read file after closed")
-            .read_exact_at(buf, self.pos)
+            .read_exact_at(MonoioBuf { buf }, self.pos)
             .await;
         result?;
-        self.pos += buf.len() as u64;
+        self.pos += buf.buf.bytes_init() as u64;
 
-        #[cfg(not(feature = "bytes"))]
-        return Ok(buf.buf);
-        #[cfg(feature = "bytes")]
-        return Ok(bytes::Bytes::from(buf));
+        Ok(buf.buf)
     }
 
     async fn size(&self) -> Result<u64, Error> {
