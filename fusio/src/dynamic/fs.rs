@@ -4,6 +4,7 @@ use futures_core::Stream;
 
 use super::{DynSeek, MaybeSendFuture};
 use crate::{
+    buf::IoBufMut,
     fs::{FileMeta, Fs, OpenOptions},
     path::Path,
     DynRead, DynWrite, Error, IoBuf, MaybeSend, MaybeSync, Read, Seek, Write,
@@ -20,8 +21,9 @@ impl<'seek> Seek for Box<dyn DynFile + 'seek> {
 }
 
 impl<'read> Read for Box<dyn DynFile + 'read> {
-    async fn read(&mut self, len: Option<u64>) -> Result<impl IoBuf, Error> {
-        DynRead::read(self.as_mut(), len).await
+    async fn read_exact<B: IoBufMut>(&mut self, buf: B) -> Result<B, Error> {
+        let buf = DynRead::read_exact(self.as_mut(), unsafe { buf.to_buf_mut_nocopy() }).await?;
+        Ok(unsafe { B::recover_from_buf_mut(buf) })
     }
 
     async fn size(&self) -> Result<u64, Error> {
@@ -30,9 +32,10 @@ impl<'read> Read for Box<dyn DynFile + 'read> {
 }
 
 impl<'write> Write for Box<dyn DynFile + 'write> {
-    async fn write<B: IoBuf>(&mut self, buf: B) -> (Result<usize, Error>, B) {
-        let (result, _) = DynWrite::write(self.as_mut(), buf.as_bytes()).await;
-        (result, buf)
+    async fn write_all<B: IoBuf>(&mut self, buf: B) -> (Result<(), Error>, B) {
+        let (result, buf) =
+            DynWrite::write_all(self.as_mut(), unsafe { buf.to_buf_nocopy() }).await;
+        (result, unsafe { B::recover_from_buf(buf) })
     }
 
     async fn sync_data(&self) -> Result<(), Error> {
@@ -130,5 +133,23 @@ impl<F: Fs> DynFs for F {
         path: &'path Path,
     ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<(), Error>> + 's>> {
         Box::pin(F::remove(self, path))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+
+    #[cfg(all(feature = "tokio", not(feature = "no-send")))]
+    #[tokio::test]
+    async fn test_dyn_fs() {
+        use tempfile::tempfile;
+
+        use crate::Write;
+
+        let file = tokio::fs::File::from_std(tempfile().unwrap());
+        let mut dyn_file: Box<dyn super::DynFile> = Box::new(file);
+        let buf = [24, 9, 24, 0];
+        let (result, _) = dyn_file.write_all(&buf[..]).await;
+        result.unwrap();
     }
 }

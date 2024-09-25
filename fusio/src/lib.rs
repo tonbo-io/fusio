@@ -11,15 +11,20 @@ pub mod remotes;
 use std::{future::Future, io::Cursor};
 
 pub use buf::IoBuf;
+use buf::IoBufMut;
 #[cfg(all(feature = "dyn", feature = "fs"))]
 pub use dynamic::fs::DynFs;
 #[cfg(feature = "dyn")]
 pub use dynamic::{DynRead, DynWrite};
 pub use error::Error;
 
+/// # Safety
+/// Do not implement it directly
 #[cfg(not(feature = "no-send"))]
 pub unsafe trait MaybeSend: Send {}
 
+/// # Safety
+/// Do not implement it directly
 #[cfg(feature = "no-send")]
 pub unsafe trait MaybeSend {}
 
@@ -28,9 +33,13 @@ unsafe impl<T: Send> MaybeSend for T {}
 #[cfg(feature = "no-send")]
 unsafe impl<T> MaybeSend for T {}
 
+/// # Safety
+/// Do not implement it directly
 #[cfg(not(feature = "no-send"))]
 pub unsafe trait MaybeSync: Sync {}
 
+/// # Safety
+/// Do not implement it directly
 #[cfg(feature = "no-send")]
 pub unsafe trait MaybeSync {}
 
@@ -40,10 +49,10 @@ unsafe impl<T: Sync> MaybeSync for T {}
 unsafe impl<T> MaybeSync for T {}
 
 pub trait Write: MaybeSend + MaybeSync {
-    fn write<B: IoBuf>(
+    fn write_all<B: IoBuf>(
         &mut self,
         buf: B,
-    ) -> impl Future<Output = (Result<usize, Error>, B)> + MaybeSend;
+    ) -> impl Future<Output = (Result<(), Error>, B)> + MaybeSend;
 
     fn sync_data(&self) -> impl Future<Output = Result<(), Error>> + MaybeSend;
 
@@ -53,10 +62,21 @@ pub trait Write: MaybeSend + MaybeSync {
 }
 
 pub trait Read: MaybeSend + MaybeSync {
-    fn read(
+    fn read_exact<B: IoBufMut>(
         &mut self,
-        len: Option<u64>,
-    ) -> impl Future<Output = Result<impl IoBuf, Error>> + MaybeSend;
+        buf: B,
+    ) -> impl Future<Output = Result<B, Error>> + MaybeSend;
+
+    fn read_to_end(
+        &mut self,
+        mut buf: Vec<u8>,
+    ) -> impl Future<Output = Result<Vec<u8>, Error>> + MaybeSend {
+        async move {
+            buf.resize(self.size().await? as usize, 0);
+            let buf = self.read_exact(buf).await?;
+            Ok(buf)
+        }
+    }
 
     fn size(&self) -> impl Future<Output = Result<u64, Error>> + MaybeSend;
 }
@@ -69,23 +89,9 @@ impl<T> Read for Cursor<T>
 where
     T: AsRef<[u8]> + Unpin + Send + Sync,
 {
-    async fn read(&mut self, len: Option<u64>) -> Result<impl IoBuf, Error> {
-        let buf = if let Some(len) = len {
-            let mut buf = vec![0u8; len as usize];
-            let _ = std::io::Read::read_exact(self, &mut buf)?;
-
-            buf
-        } else {
-            let mut buf = Vec::new();
-            let _ = std::io::Read::read_to_end(self, &mut buf)?;
-
-            buf
-        };
-
-        #[cfg(not(feature = "bytes"))]
-        return Ok(buf);
-        #[cfg(feature = "bytes")]
-        return Ok(bytes::Bytes::from(buf));
+    async fn read_exact<B: IoBufMut>(&mut self, mut buf: B) -> Result<B, Error> {
+        std::io::Read::read_exact(self, buf.as_slice_mut())?;
+        Ok(buf)
     }
 
     async fn size(&self) -> Result<u64, Error> {
@@ -105,8 +111,8 @@ where
 }
 
 impl Write for Cursor<&mut Vec<u8>> {
-    async fn write<B: IoBuf>(&mut self, buf: B) -> (Result<usize, Error>, B) {
-        let result = std::io::Write::write(self, buf.as_slice()).map_err(Error::Io);
+    async fn write_all<B: IoBuf>(&mut self, buf: B) -> (Result<(), Error>, B) {
+        let result = std::io::Write::write_all(self, buf.as_slice()).map_err(Error::Io);
 
         (result, buf)
     }
@@ -131,11 +137,11 @@ impl<S: Seek> Seek for &mut S {
 }
 
 impl<R: Read> Read for &mut R {
-    fn read(
+    fn read_exact<B: IoBufMut>(
         &mut self,
-        len: Option<u64>,
-    ) -> impl Future<Output = Result<impl IoBuf, Error>> + MaybeSend {
-        R::read(self, len)
+        buf: B,
+    ) -> impl Future<Output = Result<B, Error>> + MaybeSend {
+        R::read_exact(self, buf)
     }
 
     fn size(&self) -> impl Future<Output = Result<u64, Error>> + MaybeSend {
@@ -144,11 +150,11 @@ impl<R: Read> Read for &mut R {
 }
 
 impl<W: Write> Write for &mut W {
-    fn write<B: IoBuf>(
+    fn write_all<B: IoBuf>(
         &mut self,
         buf: B,
-    ) -> impl Future<Output = (Result<usize, Error>, B)> + MaybeSend {
-        W::write(self, buf)
+    ) -> impl Future<Output = (Result<(), Error>, B)> + MaybeSend {
+        W::write_all(self, buf)
     }
 
     fn sync_data(&self) -> impl Future<Output = Result<(), Error>> + MaybeSend {
@@ -167,9 +173,7 @@ impl<W: Write> Write for &mut W {
 #[cfg(test)]
 mod tests {
     use super::{Read, Write};
-    #[cfg(feature = "dyn")]
-    use crate::dynamic::{DynRead, DynWrite};
-    use crate::{dynamic::DynSeek, Error, IoBuf, Seek};
+    use crate::{buf::IoBufMut, Error, IoBuf, Seek};
 
     #[allow(unused)]
     struct CountWrite<W> {
@@ -188,9 +192,9 @@ mod tests {
     where
         W: Write,
     {
-        async fn write<B: IoBuf>(&mut self, buf: B) -> (Result<usize, Error>, B) {
-            let (result, buf) = self.w.write(buf).await;
-            (result.inspect(|i| self.cnt += *i), buf)
+        async fn write_all<B: IoBuf>(&mut self, buf: B) -> (Result<(), Error>, B) {
+            let (result, buf) = self.w.write_all(buf).await;
+            (result.inspect(|_| self.cnt += buf.bytes_init()), buf)
         }
 
         async fn sync_data(&self) -> Result<(), Error> {
@@ -223,9 +227,9 @@ mod tests {
     where
         R: Read,
     {
-        async fn read(&mut self, len: Option<u64>) -> Result<impl IoBuf, Error> {
+        async fn read_exact<B: IoBufMut>(&mut self, buf: B) -> Result<B, Error> {
             self.r
-                .read(len)
+                .read_exact(buf)
                 .await
                 .inspect(|buf| self.cnt += buf.bytes_init())
         }
@@ -247,34 +251,19 @@ mod tests {
         W: Write,
         R: Read + Seek,
     {
-        #[cfg(feature = "dyn")]
-        let mut writer = Box::new(CountWrite::new(write)) as Box<dyn DynWrite>;
-        #[cfg(not(feature = "dyn"))]
         let mut writer = CountWrite::new(write);
-
-        #[cfg(feature = "dyn")]
-        writer
-            .write(bytes::Bytes::from(&[2, 0, 2, 4][..]))
-            .await
-            .0
-            .unwrap();
-        #[cfg(not(feature = "dyn"))]
-        writer.write(&[2, 0, 2, 4][..]).await.0.unwrap();
+        #[cfg(feature = "completion-based")]
+        writer.write_all(vec![2, 0, 2, 4]).await;
+        #[cfg(not(feature = "completion-based"))]
+        writer.write_all(&[2, 0, 2, 4][..]).await;
 
         writer.sync_data().await.unwrap();
 
-        trait ReadSeek: DynRead + DynSeek {}
-
-        impl<R: Read + Seek> ReadSeek for R {}
-
-        #[cfg(feature = "dyn")]
-        let mut reader = Box::new(CountRead::new(read)) as Box<dyn ReadSeek>;
-        #[cfg(not(feature = "dyn"))]
         let mut reader = CountRead::new(read);
-
         reader.seek(0).await.unwrap();
 
-        let buf = reader.read(Some(4)).await.unwrap();
+        let mut buf = vec![];
+        buf = reader.read_to_end(buf).await.unwrap();
 
         assert_eq!(buf.bytes_init(), 4);
         assert_eq!(buf.as_slice(), &[2, 0, 2, 4]);

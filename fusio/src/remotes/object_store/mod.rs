@@ -4,7 +4,7 @@ use std::{ops::Range, sync::Arc};
 
 use object_store::{aws::AmazonS3, path::Path, GetOptions, GetRange, ObjectStore, PutPayload};
 
-use crate::{Error, IoBuf, Read, Seek, Write};
+use crate::{buf::IoBufMut, Error, IoBuf, Read, Seek, Write};
 
 pub struct S3File {
     inner: Arc<AmazonS3>,
@@ -13,30 +13,30 @@ pub struct S3File {
 }
 
 impl Read for S3File {
-    async fn read(&mut self, len: Option<u64>) -> Result<impl IoBuf, Error> {
+    async fn read_exact<B: IoBufMut>(&mut self, mut buf: B) -> Result<B, Error> {
         let pos = self.pos as usize;
 
         let mut opts = GetOptions::default();
-
-        let range = if let Some(len) = len {
-            GetRange::Bounded(Range {
-                start: pos,
-                end: pos + len as usize,
-            })
-        } else {
-            GetRange::Offset(pos)
-        };
+        let range = GetRange::Bounded(Range {
+            start: pos,
+            end: pos + buf.bytes_init(),
+        });
         opts.range = Some(range);
+
         let result = self.inner.get_opts(&self.path, opts).await?;
         let bytes = result.bytes().await?;
 
         self.pos += bytes.len() as u64;
-        Ok(bytes)
+
+        buf.as_slice_mut().copy_from_slice(&bytes);
+        Ok(buf)
     }
 
     async fn size(&self) -> Result<u64, Error> {
-        let mut options = GetOptions::default();
-        options.head = true;
+        let options = GetOptions {
+            head: true,
+            ..Default::default()
+        };
         let response = self.inner.get_opts(&self.path, options).await?;
         Ok(response.meta.size as u64)
     }
@@ -50,13 +50,12 @@ impl Seek for S3File {
 }
 
 impl Write for S3File {
-    async fn write<B: IoBuf>(&mut self, buf: B) -> (Result<usize, Error>, B) {
-        let payload = PutPayload::from_bytes(buf.as_bytes());
+    async fn write_all<B: IoBuf>(&mut self, buf: B) -> (Result<(), Error>, B) {
         let result = self
             .inner
-            .put(&self.path, payload)
+            .put(&self.path, PutPayload::from_bytes(buf.as_bytes()))
             .await
-            .map(|_| buf.as_slice().len())
+            .map(|_| ())
             .map_err(Error::ObjectStore);
 
         (result, buf)
@@ -77,15 +76,17 @@ impl Write for S3File {
 
 #[cfg(test)]
 mod tests {
-    use std::{env, env::VarError, sync::Arc};
 
-    use bytes::Bytes;
-    use object_store::{aws::AmazonS3Builder, ObjectStore};
-
-    use crate::{buf::IoBuf, remotes::object_store::S3File, Read, Write};
-
+    #[cfg(all(feature = "tokio", not(feature = "completion-based")))]
     #[tokio::test]
     async fn test_s3() {
+        use std::{env, env::VarError, sync::Arc};
+
+        use bytes::Bytes;
+        use object_store::{aws::AmazonS3Builder, ObjectStore};
+
+        use crate::{remotes::object_store::S3File, Read, Write};
+
         let fn_env = || {
             let region = env::var("TEST_INTEGRATION")?;
             let bucket_name = env::var("TEST_INTEGRATION")?;
@@ -115,19 +116,12 @@ mod tests {
                 path,
                 pos: 0,
             };
-            let (result, bytes) = store.write(Bytes::from("hello! Fusio!")).await;
-            assert_eq!(result.unwrap(), bytes.len());
-            assert_eq!(bytes, Bytes::from("hello! Fusio!"));
+            let (result, bytes) = store.write_all(Bytes::from("hello! Fusio!")).await;
+            result.unwrap();
 
-            let buf = store.read(None).await.unwrap();
-            assert_eq!(buf.as_bytes(), bytes);
-            drop(buf);
-            let buf = store.read(Some(6)).await.unwrap();
-            assert_eq!(buf.as_bytes(), Bytes::from("hello!"));
-            drop(buf);
-            let buf = store.read(Some(6)).await.unwrap();
-            assert_eq!(buf.as_bytes(), Bytes::from("Fusio!"));
-            drop(buf);
+            let buf = vec![0_u8; bytes.len()];
+            let buf = store.read_exact(&mut buf[..]).await.unwrap();
+            assert_eq!(buf, &bytes[..]);
         }
     }
 }

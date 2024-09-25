@@ -538,10 +538,7 @@ mod tests {
     use http_body_util::Empty;
     use url::Url;
 
-    use crate::remotes::{
-        aws::credential::{instance_creds, AwsAuthorizer, AwsCredential},
-        http::{tokio::TokioClient, HttpClient},
-    };
+    use crate::remotes::aws::credential::{instance_creds, AwsAuthorizer, AwsCredential};
 
     // Test generated using https://docs.aws.amazon.com/general/latest/gr/sigv4-signed-request-examples.html
     #[tokio::test]
@@ -708,6 +705,7 @@ mod tests {
         )
     }
 
+    #[cfg(all(feature = "tokio-http", not(feature = "completion-based")))]
     #[tokio::test]
     async fn test_instance_metadata() {
         if env::var("TEST_INTEGRATION").is_err() {

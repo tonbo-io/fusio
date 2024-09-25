@@ -1,4 +1,5 @@
-use http::{header::RANGE, Method, Request};
+use bytes::Buf;
+use http::{header::RANGE, HeaderValue, Method, Request};
 use http_body_util::BodyExt;
 use percent_encoding::utf8_percent_encode;
 
@@ -7,9 +8,10 @@ use super::{
     STRICT_PATH_ENCODE_SET,
 };
 use crate::{
+    buf::IoBufMut,
     path::Path,
     remotes::http::{Empty, HttpClient},
-    Error, IoBuf, Read,
+    Error, Read,
 };
 
 pub struct S3File<C: HttpClient> {
@@ -23,32 +25,42 @@ pub struct S3File<C: HttpClient> {
     client: C,
 }
 
-impl<C: HttpClient> Read for S3File<C> {
-    async fn read(&mut self, len: Option<u64>) -> Result<impl IoBuf, Error> {
+impl<C: HttpClient> S3File<C> {
+    fn build_request(&self, method: Method) -> Result<Request<Empty>, Error> {
         let url = format!(
             "{}/{}",
             self.bucket_endpoint,
             utf8_percent_encode(self.path.as_ref(), &STRICT_PATH_ENCODE_SET)
         );
+
+        Ok(Request::builder().method(method).uri(url).body(Empty {})?)
+    }
+
+    async fn authorize(&self, request: &mut Request<Empty>) -> Result<(), Error> {
         let authorizer = AwsAuthorizer::new(&self.credential, "s3", &self.region)
             .with_sign_payload(self.sign_payload);
-
-        let mut request = Request::builder()
-            .method(Method::GET)
-            .uri(url)
-            .header(
-                RANGE,
-                match len {
-                    Some(len) => format!("bytes={}-{}", self.pos, self.pos + len),
-                    None => format!("bytes={}-", self.pos),
-                },
-            )
-            .body(Empty {})?;
-
         authorizer
-            .authorize(&mut request, None)
+            .authorize(request, None)
             .await
             .map_err(|e| Error::Other(e.into()))?;
+        Ok(())
+    }
+}
+
+impl<C: HttpClient> Read for S3File<C> {
+    async fn read_exact<B: IoBufMut>(&mut self, mut buf: B) -> Result<B, Error> {
+        let mut request = self.build_request(Method::GET)?;
+        request.headers_mut().insert(
+            RANGE,
+            HeaderValue::try_from(format!(
+                "bytes={}-{}",
+                self.pos,
+                self.pos + buf.as_slice().len() as u64 - 1
+            ))
+            .map_err(|e| Error::Other(e.into()))?,
+        );
+
+        self.authorize(&mut request).await?;
 
         let response = self
             .client
@@ -56,28 +68,61 @@ impl<C: HttpClient> Read for S3File<C> {
             .await
             .map_err(Error::Other)?;
 
-        if response.status().is_success() {
-            Ok(response
-                .into_body()
-                .collect()
-                .await
-                .map_err(|e| Error::Other(e.into()))?
-                .to_bytes())
-        } else {
+        if !response.status().is_success() {
             Err(Error::Other(
                 format!("failed to read from S3, HTTP status: {}", response.status()).into(),
             ))
+        } else {
+            std::io::copy(
+                &mut response
+                    .into_body()
+                    .collect()
+                    .await
+                    .map_err(|e| Error::Other(e.into()))?
+                    .aggregate()
+                    .reader(),
+                &mut buf.as_slice_mut(),
+            )?;
+            Ok(buf)
         }
     }
 
     async fn size(&self) -> Result<u64, Error> {
-        todo!()
+        let mut request = self.build_request(Method::HEAD)?;
+
+        self.authorize(&mut request).await?;
+
+        let response = self
+            .client
+            .send_request(request)
+            .await
+            .map_err(Error::Other)?;
+
+        if !response.status().is_success() {
+            Err(Error::Other(
+                format!(
+                    "failed to get size from S3, HTTP status: {}",
+                    response.status()
+                )
+                .into(),
+            ))
+        } else {
+            let size = response
+                .headers()
+                .get("content-length")
+                .ok_or_else(|| Error::Other("missing content-length header".into()))?
+                .to_str()
+                .map_err(|e| Error::Other(e.into()))?
+                .parse::<u64>()
+                .map_err(|e| Error::Other(e.into()))?;
+            Ok(size)
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    #[cfg(feature = "tokio-http")]
+    #[cfg(all(feature = "tokio-http", not(feature = "completion-based")))]
     #[tokio::test]
     async fn test_s3_file() {
         use std::env;
@@ -87,7 +132,7 @@ mod tests {
                 aws::{credential::AwsCredential, s3::S3File},
                 http::tokio::TokioClient,
             },
-            IoBuf, Read,
+            Read,
         };
 
         if env::var("AWS_ACCESS_KEY_ID").is_err() {
@@ -113,7 +158,10 @@ mod tests {
             client,
         };
 
-        let buf = s3.read(None).await.unwrap();
-        assert_eq!(buf.as_slice(), b"hello, world");
+        let size = s3.size().await.unwrap();
+        assert_eq!(size, 12);
+        let mut buf = vec![0; 12];
+        let buf = s3.read_exact(&mut buf[..]).await.unwrap();
+        assert_eq!(buf, b"hello, world");
     }
 }
