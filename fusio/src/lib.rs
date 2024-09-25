@@ -18,9 +18,13 @@ pub use dynamic::fs::DynFs;
 pub use dynamic::{DynRead, DynWrite};
 pub use error::Error;
 
+/// # Safety
+/// Do not implement it directly
 #[cfg(not(feature = "no-send"))]
 pub unsafe trait MaybeSend: Send {}
 
+/// # Safety
+/// Do not implement it directly
 #[cfg(feature = "no-send")]
 pub unsafe trait MaybeSend {}
 
@@ -29,9 +33,13 @@ unsafe impl<T: Send> MaybeSend for T {}
 #[cfg(feature = "no-send")]
 unsafe impl<T> MaybeSend for T {}
 
+/// # Safety
+/// Do not implement it directly
 #[cfg(not(feature = "no-send"))]
 pub unsafe trait MaybeSync: Sync {}
 
+/// # Safety
+/// Do not implement it directly
 #[cfg(feature = "no-send")]
 pub unsafe trait MaybeSync {}
 
@@ -59,6 +67,17 @@ pub trait Read: MaybeSend + MaybeSync {
         buf: B,
     ) -> impl Future<Output = Result<B, Error>> + MaybeSend;
 
+    fn read_to_end(
+        &mut self,
+        mut buf: Vec<u8>,
+    ) -> impl Future<Output = Result<Vec<u8>, Error>> + MaybeSend {
+        async move {
+            buf.resize(self.size().await? as usize, 0);
+            let buf = self.read_exact(buf).await?;
+            Ok(buf)
+        }
+    }
+
     fn size(&self) -> impl Future<Output = Result<u64, Error>> + MaybeSend;
 }
 
@@ -72,8 +91,7 @@ where
 {
     async fn read_exact<B: IoBufMut>(&mut self, mut buf: B) -> Result<B, Error> {
         std::io::Read::read_exact(self, buf.as_slice_mut())?;
-
-        return Ok(buf);
+        Ok(buf)
     }
 
     async fn size(&self) -> Result<u64, Error> {
@@ -244,15 +262,8 @@ mod tests {
         let mut reader = CountRead::new(read);
         reader.seek(0).await.unwrap();
 
-        #[cfg(feature = "completion-based")]
-        let buf = vec![0; 4];
-        #[cfg(feature = "completion-based")]
-        let buf = reader.read_exact(buf).await.unwrap();
-
-        #[cfg(not(feature = "completion-based"))]
-        let mut buf = [0; 4];
-        #[cfg(not(feature = "completion-based"))]
-        let buf = reader.read_exact(&mut buf[..]).await.unwrap();
+        let mut buf = vec![];
+        buf = reader.read_to_end(buf).await.unwrap();
 
         assert_eq!(buf.bytes_init(), 4);
         assert_eq!(buf.as_slice(), &[2, 0, 2, 4]);

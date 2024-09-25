@@ -7,7 +7,7 @@ use std::{future::Future, pin::Pin};
 pub use fs::{DynFile, DynFs};
 
 use crate::{
-    buf::{Buf, BufMut},
+    buf::{Buf, BufMut, IoBufMut},
     Error, MaybeSend, MaybeSync, Read, Seek, Write,
 };
 
@@ -54,6 +54,17 @@ pub trait DynRead: MaybeSend + MaybeSync {
         &mut self,
         buf: BufMut,
     ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<BufMut, Error>> + '_>>;
+
+    fn read_to_end(
+        &mut self,
+        mut buf: Vec<u8>,
+    ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<Vec<u8>, Error>> + '_>> {
+        Box::pin(async move {
+            buf.resize(self.size().await? as usize, 0);
+            let buf = self.read_exact(unsafe { buf.to_buf_mut_nocopy() }).await?;
+            Ok(unsafe { Vec::recover_from_buf_mut(buf) })
+        })
+    }
 
     fn size(&self) -> Pin<Box<dyn MaybeSendFuture<Output = Result<u64, Error>> + '_>>;
 }

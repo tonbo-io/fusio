@@ -33,8 +33,10 @@ impl Read for S3File {
     }
 
     async fn size(&self) -> Result<u64, Error> {
-        let mut options = GetOptions::default();
-        options.head = true;
+        let options = GetOptions {
+            head: true,
+            ..Default::default()
+        };
         let response = self.inner.get_opts(&self.path, options).await?;
         Ok(response.meta.size as u64)
     }
