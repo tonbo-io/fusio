@@ -1,3 +1,20 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
 use std::{
     collections::BTreeMap,
     io,
@@ -8,20 +25,23 @@ use std::{
 use bytes::{Buf, Bytes};
 use chrono::{DateTime, Utc};
 use http::{
-    header::AUTHORIZATION, HeaderMap, HeaderName, HeaderValue, Method, Request, StatusCode,
+    header::{AUTHORIZATION, HOST},
+    request::Builder,
+    HeaderMap, HeaderName, HeaderValue, Method, Request, StatusCode,
 };
 use http_body::Body;
-use http_body_util::BodyExt;
+use http_body_util::{BodyExt, Empty};
 use percent_encoding::utf8_percent_encode;
 use serde::Deserialize;
 use thiserror::Error;
 use url::Url;
 
+use super::CHECKSUM_HEADER;
 use crate::{
     error::BoxError,
     remotes::{
         aws::{STRICT_ENCODE_SET, STRICT_PATH_ENCODE_SET},
-        http::{Empty, HttpClient},
+        http::HttpClient,
     },
 };
 
@@ -125,50 +145,50 @@ impl<'a> AwsAuthorizer<'a> {
     /// * Otherwise it is set to the hex encoded SHA256 of the request body
     ///
     /// [AWS SigV4]: https://docs.aws.amazon.com/IAM/latest/UserGuide/create-signed-request.html
-    pub(crate) async fn authorize<
-        B: Body<Data = Bytes, Error: std::error::Error + Send + Sync + 'static> + Unpin,
-    >(
+    pub(crate) async fn authorize<B>(
         &self,
-        request: &mut Request<B>,
-        pre_calculated_digest: Option<&[u8]>,
-    ) -> Result<(), AutohrizeError> {
+        mut request: Builder,
+        body: B,
+    ) -> Result<Request<B>, AutohrizeError>
+    where
+        B: Body<Data = Bytes> + Clone + Unpin,
+        B::Error: std::error::Error + Send + Sync + 'static,
+    {
         if let Some(token) = &self.credential.token {
-            let token_val = HeaderValue::from_str(token)?;
             let header = self.token_header.as_ref().unwrap_or(&TOKEN_HEADER);
-            request.headers_mut().insert(header, token_val);
+            request = request.header(header, token);
         }
 
         let host = request
-            .uri()
+            .uri_ref()
+            .ok_or(AutohrizeError::NoHost)?
             .authority()
             .ok_or(AutohrizeError::NoHost)?
-            .as_str();
-        let host_val = HeaderValue::from_str(host)?;
-        request.headers_mut().insert("host", host_val);
+            .as_str()
+            .to_string();
+        request = request.header(HOST, host);
 
         let date = self.date.unwrap_or_else(Utc::now);
         let date_str = date.format("%Y%m%dT%H%M%SZ").to_string();
-        let date_val = HeaderValue::from_str(&date_str)?;
-        request.headers_mut().insert(&DATE_HEADER, date_val);
+        request = request.header(&DATE_HEADER, date_str);
 
         let digest = match self.sign_payload {
             false => UNSIGNED_PAYLOAD.to_string(),
-            true => match pre_calculated_digest {
-                Some(digest) => hex_encode(digest),
-                None => match request.body().size_hint().exact() {
+            true => match request.headers_ref().unwrap().get(CHECKSUM_HEADER) {
+                Some(checksum) => {
+                    hex_encode(std::str::from_utf8(checksum.as_bytes()).unwrap().as_bytes())
+                }
+                None => match body.size_hint().exact() {
                     Some(n) => match n {
                         0 => EMPTY_SHA256_HASH.to_string(),
                         _ => {
-                            let bytes = request
-                                .body_mut()
-                                .frame()
+                            let bytes = body
+                                .clone()
+                                .collect()
                                 .await
-                                .ok_or(AutohrizeError::BodyNoFrame)?
-                                .map_err(|e| {
-                                    Box::new(e)
-                                        as Box<dyn std::error::Error + Send + Sync + 'static>
-                                })?;
-                            hex_digest(bytes.data_ref().ok_or(AutohrizeError::BodyNoFrame)?)
+                                .map_err(|_| AutohrizeError::BodyNoFrame)?
+                                .to_bytes();
+                            hex_digest(&bytes)
                         }
                     },
                     None => STREAMING_PAYLOAD.to_string(),
@@ -176,18 +196,18 @@ impl<'a> AwsAuthorizer<'a> {
             },
         };
 
-        let header_digest = HeaderValue::from_str(&digest)?;
-        request.headers_mut().insert(&HASH_HEADER, header_digest);
+        request = request.header(&HASH_HEADER, &digest);
 
-        let (signed_headers, canonical_headers) = canonicalize_headers(request.headers());
+        let (signed_headers, canonical_headers) =
+            canonicalize_headers(request.headers_ref().unwrap());
 
         let scope = self.scope(date);
 
         let string_to_sign = self.string_to_sign(
             date,
             &scope,
-            request.method(),
-            &Url::parse(&request.uri().to_string())?,
+            request.method_ref().unwrap(),
+            &Url::parse(&request.uri_ref().unwrap().to_string())?,
             &canonical_headers,
             &signed_headers,
             &digest,
@@ -203,13 +223,11 @@ impl<'a> AwsAuthorizer<'a> {
             "{} Credential={}/{}, SignedHeaders={}, Signature={}",
             ALGORITHM, self.credential.key_id, scope, signed_headers, signature
         );
+        request = request.header(AUTHORIZATION, authorisation);
 
-        let authorization_val = HeaderValue::from_str(&authorisation)?;
-        request
-            .headers_mut()
-            .insert(&AUTHORIZATION, authorization_val);
-
-        Ok(())
+        Ok(request
+            .body(body)
+            .map_err(|e| AutohrizeError::Other(e.into()))?)
     }
 
     pub(crate) fn sign(&self, method: Method, url: &mut Url, expires_in: Duration) {
@@ -405,8 +423,8 @@ pub enum AutohrizeError {
     InvalidUrl(#[from] url::ParseError),
     #[error("No host in URL")]
     NoHost,
-    #[error("Body frame error: {0}")]
-    BodyFrameError(#[from] Box<dyn std::error::Error + Send + Sync + 'static>),
+    #[error(transparent)]
+    Other(#[from] Box<dyn std::error::Error + Send + Sync + 'static>),
     #[error("Body no frame")]
     BodyNoFrame,
 }
@@ -426,7 +444,7 @@ async fn instance_creds<'c, C: HttpClient>(
         .method(Method::PUT)
         .uri(token_url)
         .header("X-aws-ec2-metadata-token-ttl-seconds", "600")
-        .body(Empty {})?;
+        .body(Empty::<Bytes>::new())?;
 
     let token_result = client
         .send_request(request)
@@ -462,7 +480,11 @@ async fn instance_creds<'c, C: HttpClient>(
     }
 
     let role = client
-        .send_request(role_request.body(Empty {}).map_err(io::Error::other)?)
+        .send_request(
+            role_request
+                .body(Empty::<Bytes>::new())
+                .map_err(io::Error::other)?,
+        )
         .await
         .map_err(io::Error::other)?
         .collect()
@@ -481,7 +503,11 @@ async fn instance_creds<'c, C: HttpClient>(
     }
 
     let response = client
-        .send_request(creds_request.body(Empty {}).map_err(io::Error::other)?)
+        .send_request(
+            creds_request
+                .body(Empty::<Bytes>::new())
+                .map_err(io::Error::other)?,
+        )
         .await
         .map_err(io::Error::other)?
         .collect()
@@ -530,15 +556,15 @@ pub(crate) struct TemporaryToken<T> {
 
 #[cfg(test)]
 mod tests {
-    use std::{env, time::Duration};
+    use std::time::Duration;
 
     use bytes::Bytes;
     use chrono::{DateTime, Utc};
-    use http::{header::AUTHORIZATION, Method, Request, StatusCode};
+    use http::{header::AUTHORIZATION, Method, Request};
     use http_body_util::Empty;
     use url::Url;
 
-    use crate::remotes::aws::credential::{instance_creds, AwsAuthorizer, AwsCredential};
+    use crate::remotes::aws::credential::{AwsAuthorizer, AwsCredential};
 
     // Test generated using https://docs.aws.amazon.com/general/latest/gr/sigv4-signed-request-examples.html
     #[tokio::test]
@@ -560,11 +586,9 @@ mod tests {
             .unwrap()
             .with_timezone(&Utc);
 
-        let mut request = Request::builder()
+        let request = Request::builder()
             .uri("https://ec2.amazon.com/")
-            .method(Method::GET)
-            .body(Empty::<Bytes>::new())
-            .unwrap();
+            .method(Method::GET);
 
         let signer = AwsAuthorizer {
             date: Some(date),
@@ -575,7 +599,10 @@ mod tests {
             token_header: None,
         };
 
-        signer.authorize(&mut request, None).await.unwrap();
+        let request = signer
+            .authorize(request, Empty::<Bytes>::new())
+            .await
+            .unwrap();
         assert_eq!(
             request.headers().get(&AUTHORIZATION).unwrap(),
             "AWS4-HMAC-SHA256 \
@@ -604,11 +631,9 @@ mod tests {
             .unwrap()
             .with_timezone(&Utc);
 
-        let mut request = Request::builder()
+        let request = Request::builder()
             .uri("https://ec2.amazon.com/")
-            .method(Method::GET)
-            .body(Empty::<Bytes>::new())
-            .unwrap();
+            .method(Method::GET);
 
         let authorizer = AwsAuthorizer {
             date: Some(date),
@@ -619,7 +644,10 @@ mod tests {
             sign_payload: false,
         };
 
-        authorizer.authorize(&mut request, None).await.unwrap();
+        let request = authorizer
+            .authorize(request, Empty::<Bytes>::new())
+            .await
+            .unwrap();
         assert_eq!(
             request.headers().get(&AUTHORIZATION).unwrap(),
             "AWS4-HMAC-SHA256 \
@@ -681,11 +709,9 @@ mod tests {
             .unwrap()
             .with_timezone(&Utc);
 
-        let mut request = Request::builder()
+        let request = Request::builder()
             .uri("http://localhost:9000/tsm-schemas?delimiter=%2F&encoding-type=url&list-type=2&prefix=")
-            .method(Method::GET)
-            .body(Empty::<Bytes>::new())
-            .unwrap();
+            .method(Method::GET);
 
         let authorizer = AwsAuthorizer {
             date: Some(date),
@@ -696,7 +722,10 @@ mod tests {
             sign_payload: true,
         };
 
-        authorizer.authorize(&mut request, None).await.unwrap();
+        let request = authorizer
+            .authorize(request, Empty::<Bytes>::new())
+            .await
+            .unwrap();
         assert_eq!(
             request.headers().get(&AUTHORIZATION).unwrap(),
             "AWS4-HMAC-SHA256 Credential=H20ABqCkLZID4rLe/20220809/us-east-1/s3/aws4_request, \
@@ -705,9 +734,18 @@ mod tests {
         )
     }
 
-    #[cfg(all(feature = "tokio-http", not(feature = "completion-based")))]
+    #[cfg(feature = "tokio-http")]
     #[tokio::test]
     async fn test_instance_metadata() {
+        use std::env;
+
+        use http::StatusCode;
+
+        use crate::remotes::{
+            aws::credential::instance_creds,
+            http::{tokio::TokioClient, HttpClient},
+        };
+
         if env::var("TEST_INTEGRATION").is_err() {
             eprintln!("skipping AWS integration test");
             return;
@@ -720,7 +758,7 @@ mod tests {
         let request = Request::builder()
             .uri(format!("{endpoint}/latest/meta-data/ami-id"))
             .method(Method::GET)
-            .body(crate::remotes::http::Empty {})
+            .body(Empty::<Bytes>::new())
             .unwrap();
 
         let resp = client.send_request(request).await.unwrap();

@@ -7,6 +7,7 @@ version = "0.1.0"
 
 [features]
 aws = [
+    "base64",
     "bytes",
     "chrono",
     "chrono?/serde",
@@ -40,6 +41,7 @@ tokio-uring = ["async-stream", "completion-based", "dep:tokio-uring", "no-send"]
 
 [dependencies]
 async-stream = { version = "0.3", optional = true }
+base64 = { version = "0.22", optional = true }
 bytes = { workspace = true, optional = true }
 chrono = { version = "0.4", optional = true, default-features = false, features = [
     "now",
@@ -62,7 +64,9 @@ object_store = { version = "0.11", optional = true, default-features = false, fe
     "aws",
 ] }
 percent-encoding = { version = "2" }
-reqwest = { version = "0.12.7", optional = true, features = ["stream"] }
+reqwest = { git = "https://github.com/seanmonstar/reqwest.git", optional = true, features = [
+    "stream",
+] }
 ring = { version = "0.17", optional = true, default-features = false, features = [
     "std",
 ] }

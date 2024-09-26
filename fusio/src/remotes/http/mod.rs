@@ -1,17 +1,11 @@
-#[cfg(all(feature = "tokio-http", not(feature = "completion-based")))]
+#[cfg(all(feature = "tokio-http"))]
 pub(crate) mod tokio;
 
-use std::{
-    convert::Infallible,
-    future::Future,
-    pin::Pin,
-    task::{Context, Poll},
-};
+use std::future::Future;
 
 use bytes::Bytes;
-use futures_core::{Stream, TryStream};
-use http::{Method, Request, Response};
-use http_body::{Body, SizeHint};
+use http::{Request, Response};
+use http_body::Body;
 
 use crate::{error::BoxError, MaybeSend, MaybeSync};
 
@@ -20,53 +14,14 @@ pub trait HttpClient: MaybeSend + MaybeSync {
         + MaybeSend
         + 'static;
 
-    fn send_request<E, B>(
+    fn send_request<B>(
         &self,
         request: Request<B>,
     ) -> impl Future<Output = Result<Response<Self::RespBody>, BoxError>> + MaybeSend
     where
-        E: std::error::Error + Send + Sync + 'static,
-        B: TryStream<Ok = Bytes, Error = E> + MaybeSend + 'static;
-
-    fn get(
-        &self,
-        url: &str,
-    ) -> impl Future<Output = Result<Response<Self::RespBody>, BoxError>> + MaybeSend {
-        async move {
-            let request = Request::get(url).method(Method::GET).body(Empty {})?;
-            self.send_request(request).await
-        }
-    }
-}
-
-pub(crate) struct Empty;
-
-impl Stream for Empty {
-    type Item = Result<Bytes, Infallible>;
-
-    fn poll_next(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        Poll::Ready(None)
-    }
-}
-
-impl Body for Empty {
-    type Data = Bytes;
-    type Error = Infallible;
-
-    fn poll_frame(
-        self: Pin<&mut Self>,
-        _cx: &mut Context<'_>,
-    ) -> Poll<Option<Result<http_body::Frame<Self::Data>, Self::Error>>> {
-        Poll::Ready(None)
-    }
-
-    fn is_end_stream(&self) -> bool {
-        true
-    }
-
-    fn size_hint(&self) -> http_body::SizeHint {
-        SizeHint::with_exact(0)
-    }
+        B: Body + MaybeSend + MaybeSync + 'static + std::fmt::Debug,
+        B::Data: Into<Bytes>,
+        B::Error: Into<Box<dyn std::error::Error + Send + Sync>>;
 }
 
 #[cfg(test)]
@@ -75,11 +30,15 @@ mod tests {
     #[cfg(all(feature = "tokio-http", not(feature = "completion-based")))]
     #[tokio::test]
     async fn test_tokio_client() {
+        use bytes::Bytes;
         use http::{Request, StatusCode};
+        use http_body_util::Empty;
 
-        use super::{tokio::TokioClient, Empty, HttpClient};
+        use super::{tokio::TokioClient, HttpClient};
 
-        let request = Request::get("https://hyper.rs/").body(Empty {}).unwrap();
+        let request = Request::get("https://hyper.rs/")
+            .body(Empty::<Bytes>::new())
+            .unwrap();
         let client = TokioClient::new();
         let response = client.send_request(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
