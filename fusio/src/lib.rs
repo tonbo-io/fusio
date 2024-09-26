@@ -11,7 +11,7 @@ pub mod remotes;
 use std::{future::Future, io::Cursor};
 
 pub use buf::IoBuf;
-use buf::IoBufMut;
+pub use buf::IoBufMut;
 #[cfg(all(feature = "dyn", feature = "fs"))]
 pub use dynamic::fs::DynFs;
 #[cfg(feature = "dyn")]
