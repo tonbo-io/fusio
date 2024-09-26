@@ -46,7 +46,8 @@ impl AsyncFileReader for AsyncReader {
     fn get_bytes(&mut self, range: Range<usize>) -> BoxFuture<'_, parquet::errors::Result<Bytes>> {
         async move {
             let len = range.end - range.start;
-            let buf = BytesMut::with_capacity(len);
+            let mut buf = BytesMut::with_capacity(len);
+            buf.resize(len, 0);
 
             self.inner
                 .seek(range.start as u64)
@@ -65,7 +66,8 @@ impl AsyncFileReader for AsyncReader {
     fn get_metadata(&mut self) -> BoxFuture<'_, parquet::errors::Result<Arc<ParquetMetaData>>> {
         async move {
             let footer_size = self.prefetch_footer_size;
-            let buf = BytesMut::with_capacity(footer_size);
+            let mut buf = BytesMut::with_capacity(footer_size);
+            buf.resize(footer_size, 0);
 
             self.inner
                 .seek(self.content_length - footer_size as u64)
@@ -101,7 +103,8 @@ impl AsyncFileReader for AsyncReader {
                     .await
                     .map_err(|err| ParquetError::External(Box::new(err)))?;
 
-                let buf = BytesMut::with_capacity(metadata_length);
+                let mut buf = BytesMut::with_capacity(metadata_length);
+                buf.resize(metadata_length, 0);
 
                 let bytes = self
                     .inner
