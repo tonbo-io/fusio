@@ -5,7 +5,7 @@ use http_body::Body;
 use http_body_util::BodyExt;
 use ring::digest::{self, Context};
 
-use super::options::S3Options;
+use super::{options::S3Options, CHECKSUM_HEADER};
 use crate::{remotes::aws::credential::AwsAuthorizer, Error};
 
 pub(crate) trait Sign {
@@ -20,7 +20,7 @@ where
     B::Error: std::error::Error + Send + Sync + 'static,
 {
     async fn checksum(&mut self, options: &S3Options) -> Result<(), Error> {
-        if options.credential.is_some() || options.checksum {
+        if options.credential.is_some() && options.checksum {
             let mut sha256 = Context::new(&digest::SHA256);
             sha256.update(
                 &self
@@ -33,7 +33,7 @@ where
             );
             let payload_sha256 = sha256.finish();
             self.headers_mut().insert(
-                "x-amz-checksum-sha256",
+                CHECKSUM_HEADER,
                 BASE64_STANDARD.encode(payload_sha256).parse().unwrap(),
             );
         }
@@ -49,7 +49,7 @@ where
             return Ok(());
         };
 
-        let authorizer = AwsAuthorizer::new(&credential, "s3", &options.region).with_sign_payload(
+        let authorizer = AwsAuthorizer::new(credential, "s3", &options.region).with_sign_payload(
             if options.checksum {
                 false
             } else {

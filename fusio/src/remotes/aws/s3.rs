@@ -132,7 +132,7 @@ impl Seek for S3File {
 
 impl Write for S3File {
     async fn write_all<B: IoBuf>(&mut self, buf: B) -> (Result<(), Error>, B) {
-        let mut request = self
+        let request = self
             .build_request(Method::PUT)
             .header(CONTENT_LENGTH, buf.as_slice().len())
             .body(Full::new(buf.as_bytes()));
@@ -195,7 +195,7 @@ impl Write for S3File {
 mod tests {
     #[cfg(all(feature = "tokio-http", not(feature = "completion-based")))]
     #[tokio::test]
-    async fn test_s3_file() {
+    async fn write_and_read_s3_file() {
         use std::{env, sync::Arc};
 
         use crate::{

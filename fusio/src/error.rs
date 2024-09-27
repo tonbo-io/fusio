@@ -4,6 +4,7 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 #[error(transparent)]
+#[non_exhaustive]
 pub enum Error {
     Io(#[from] io::Error),
     #[cfg(feature = "http")]
@@ -17,6 +18,7 @@ pub enum Error {
     Other(#[from] BoxedError),
     #[error("invalid url: {0}")]
     InvalidUrl(BoxedError),
+    #[cfg(feature = "http")]
     #[error("http request failed, status: {status_code}, body: {body}")]
     HttpNotSuccess {
         status_code: http::StatusCode,

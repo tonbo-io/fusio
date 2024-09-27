@@ -172,12 +172,14 @@ impl<'a> AwsAuthorizer<'a> {
             false => UNSIGNED_PAYLOAD.to_string(),
             true => match request.headers().get(CHECKSUM_HEADER) {
                 Some(checksum) => {
+                    dbg!(checksum);
                     hex_encode(std::str::from_utf8(checksum.as_bytes()).unwrap().as_bytes())
                 }
                 None => match request.body().size_hint().exact() {
                     Some(n) => match n {
                         0 => EMPTY_SHA256_HASH.to_string(),
                         _ => {
+                            // dbg!("hit");
                             let bytes = request
                                 .body()
                                 .clone()

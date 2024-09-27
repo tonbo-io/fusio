@@ -5,7 +5,7 @@ use http_body::Body;
 use super::{BoxedError, HttpClient};
 use crate::{MaybeSend, MaybeSync};
 
-pub(crate) struct TokioClient {
+pub struct TokioClient {
     client: reqwest::Client,
 }
 

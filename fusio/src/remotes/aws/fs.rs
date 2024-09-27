@@ -30,14 +30,22 @@ pub struct AmazonS3Builder {
 }
 
 impl AmazonS3Builder {
-    fn new<C: HttpClient>(bucket: String, client: C) -> Self {
+    pub fn new(bucket: String) -> Self {
+        cfg_if::cfg_if! {
+            if #[cfg(all(feature = "tokio-http", not(feature = "completion-based")))] {
+                let client = Arc::new(crate::remotes::http::tokio::TokioClient::new());
+            } else {
+                unreachable!()
+            }
+        }
+
         Self {
             region: "us-east-1".into(),
             bucket,
             credential: None,
             sign_payload: false,
             checksum: false,
-            client: Arc::new(client) as Arc<dyn DynHttpClient>,
+            client,
         }
     }
 }
@@ -152,8 +160,6 @@ impl Fs for AmazonS3 {
                     .aggregate().reader()
                 ).map_err(|e| Error::Other(e.into()))?;
 
-                println!("{:?}", response);
-
                 next_token = response.next_continuation_token.take();
 
                 for content in &response.contents {
@@ -170,8 +176,33 @@ impl Fs for AmazonS3 {
         })
     }
 
-    async fn remove(&self, path: &crate::path::Path) -> Result<(), crate::Error> {
-        todo!()
+    async fn remove(&self, path: &Path) -> Result<(), Error> {
+        let mut url = Url::from_str(self.options.endpoint.as_str())
+            .map_err(|e| Error::InvalidUrl(e.into()))?;
+        url.set_path(path.as_ref());
+
+        let mut request = Request::builder()
+            .method(Method::DELETE)
+            .uri(url.as_str())
+            .body(Empty::<Bytes>::new())?;
+        request.sign(&self.options).await?;
+        let response = self.client.send_request(request).await?;
+
+        if !response.status().is_success() {
+            return Err(Error::HttpNotSuccess {
+                status_code: response.status(),
+                body: String::from_utf8_lossy(
+                    &response
+                        .collect()
+                        .await
+                        .map_err(|e| Error::Other(e.into()))?
+                        .to_bytes(),
+                )
+                .to_string(),
+            });
+        }
+
+        Ok(())
     }
 }
 
@@ -204,16 +235,14 @@ pub struct ListResponse {
 
 #[cfg(test)]
 mod tests {
-    #[cfg(all(feature = "tokio-http", not(feature = "completion-based")))]
+    #[cfg(feature = "tokio-http")]
     #[tokio::test]
-    async fn test_list() {
-        use std::env;
-        use std::pin::pin;
+    async fn list_and_remove() {
+        use std::{env, pin::pin};
 
         use futures_util::StreamExt;
 
         use super::*;
-        use crate::remotes::http::tokio::TokioClient;
 
         if env::var("AWS_ACCESS_KEY_ID").is_err() {
             eprintln!("skipping AWS s3 test");
@@ -222,21 +251,21 @@ mod tests {
         let key_id = env::var("AWS_ACCESS_KEY_ID").unwrap();
         let secret_key = env::var("AWS_SECRET_ACCESS_KEY").unwrap();
 
-        let client = TokioClient::new();
-        let s3 = AmazonS3Builder::new("fusio-test".into(), client)
+        let s3 = AmazonS3Builder::new("fusio-test".into())
             .credential(AwsCredential {
                 key_id,
                 secret_key,
                 token: None,
             })
             .region("ap-southeast-1".into())
-            // .sign_payload(true)
+            .sign_payload(true)
             .build();
 
-        let path = Path::parse("/test/").unwrap();
+        let path = Path::parse("test").unwrap();
         let mut stream = pin!(s3.list(&path).await.unwrap());
         while let Some(meta) = stream.next().await {
-            println!("{:?}", meta);
+            let meta = meta.unwrap();
+            s3.remove(&meta.path).await.unwrap();
         }
     }
 }
