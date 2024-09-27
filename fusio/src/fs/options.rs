@@ -21,23 +21,23 @@ impl Default for OpenOptions {
 }
 
 impl OpenOptions {
-    pub fn read(mut self) -> Self {
-        self.read = true;
+    pub fn read(mut self, read: bool) -> Self {
+        self.read = read;
         self
     }
 
-    pub fn write(mut self) -> Self {
-        self.write = Some(WriteMode::Overwrite);
+    pub fn write(mut self, write: bool) -> Self {
+        self.write = write.then_some(WriteMode::Overwrite);
         self
     }
 
-    pub fn create(mut self) -> Self {
-        self.create = true;
+    pub fn create(mut self, create: bool) -> Self {
+        self.create = create;
         self
     }
 
-    pub fn append(mut self) -> Self {
-        self.write = Some(WriteMode::Append);
+    pub fn append(mut self, append: bool) -> Self {
+        self.write = append.then_some(WriteMode::Append);
         self
     }
 }

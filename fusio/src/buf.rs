@@ -47,8 +47,10 @@ pub trait IoBufMut: IoBuf {
         unsafe { std::slice::from_raw_parts_mut(self.as_mut_ptr(), self.bytes_init()) }
     }
 
+    #[warn(clippy::missing_safety_doc)]
     unsafe fn to_buf_mut_nocopy(self) -> BufMut;
 
+    #[warn(clippy::missing_safety_doc)]
     unsafe fn recover_from_buf_mut(buf: BufMut) -> Self;
 }
 
