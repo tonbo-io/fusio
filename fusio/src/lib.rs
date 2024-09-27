@@ -171,8 +171,17 @@ impl<W: Write> Write for &mut W {
 
 #[cfg(test)]
 mod tests {
-    use super::{Read, Write};
-    use crate::{buf::IoBufMut, Error, IoBuf, Seek};
+    use std::collections::HashSet;
+
+    use tempfile::TempDir;
+
+    use super::{DynFs, Read, Write};
+    use crate::{
+        buf::IoBufMut,
+        fs::{Fs, OpenOptions},
+        path::Path,
+        Error, IoBuf, Seek,
+    };
 
     #[allow(unused)]
     struct CountWrite<W> {
@@ -268,6 +277,107 @@ mod tests {
         assert_eq!(buf.as_slice(), &[2, 0, 2, 4]);
     }
 
+    #[cfg(feature = "futures")]
+    async fn test_local_fs<S>(fs: S) -> Result<(), Error>
+    where
+        S: Fs,
+    {
+        use futures_util::StreamExt;
+
+        let tmp_dir = TempDir::new()?;
+        let work_dir_path = tmp_dir.path().join("work");
+        let work_file_path = work_dir_path.join("test.file");
+
+        fs.create_dir_all(&Path::from_absolute_path(&work_dir_path)?)
+            .await?;
+
+        assert!(work_dir_path.exists());
+        assert!(fs
+            .open_options(
+                &Path::from_absolute_path(&work_file_path)?,
+                OpenOptions::default()
+            )
+            .await
+            .is_err());
+        {
+            let _ = fs
+                .open_options(
+                    &Path::from_absolute_path(&work_file_path)?,
+                    OpenOptions::default().create(true).write(true),
+                )
+                .await?;
+            assert!(work_file_path.exists());
+        }
+        {
+            let mut file = fs
+                .open_options(
+                    &Path::from_absolute_path(&work_file_path)?,
+                    OpenOptions::default().write(true),
+                )
+                .await?;
+            file.write_all("Hello! fusio".as_bytes()).await.0?;
+            let mut file = fs
+                .open_options(
+                    &Path::from_absolute_path(&work_file_path)?,
+                    OpenOptions::default().write(true),
+                )
+                .await?;
+            file.write_all("Hello! world".as_bytes()).await.0?;
+
+            assert!(file.read_exact(vec![0u8; 24]).await.is_err());
+        }
+        {
+            let mut file = fs
+                .open_options(
+                    &Path::from_absolute_path(&work_file_path)?,
+                    OpenOptions::default().append(true),
+                )
+                .await?;
+            file.write_all("Hello! fusio".as_bytes()).await.0?;
+
+            assert!(file.read_exact(vec![0u8; 24]).await.is_err());
+        }
+        {
+            let mut file = fs
+                .open_options(
+                    &Path::from_absolute_path(&work_file_path)?,
+                    OpenOptions::default(),
+                )
+                .await?;
+
+            assert_eq!(
+                "Hello! worldHello! fusio".as_bytes(),
+                &file.read_to_end(Vec::new()).await?
+            )
+        }
+        fs.remove(&Path::from_filesystem_path(&work_file_path)?)
+            .await?;
+        assert!(!work_file_path.exists());
+
+        let mut file_set = HashSet::new();
+        for i in 0..10 {
+            let _ = fs
+                .open_options(
+                    &Path::from_absolute_path(work_dir_path.join(i.to_string()))?,
+                    OpenOptions::default().create(true).write(true),
+                )
+                .await?;
+            file_set.insert(i.to_string());
+        }
+
+        let path = Path::from_filesystem_path(&work_dir_path)?;
+        let mut file_stream = Box::pin(fs.list(&path).await?);
+
+        while let Some(file_meta) = file_stream.next().await {
+            if let Some(file_name) = file_meta?.path.filename() {
+                assert!(file_set.remove(file_name));
+            }
+        }
+        assert!(file_set.is_empty());
+
+        Ok(())
+    }
+
     #[cfg(feature = "tokio")]
     #[tokio::test]
     async fn test_tokio() {
@@ -278,6 +388,14 @@ mod tests {
         let write = read.try_clone().unwrap();
 
         write_and_read(File::from_std(write), File::from_std(read)).await;
+    }
+
+    #[cfg(all(feature = "tokio", feature = "futures"))]
+    #[tokio::test]
+    async fn test_tokio_fs() {
+        use crate::local::TokioFs;
+
+        test_local_fs(TokioFs).await.unwrap();
     }
 
     #[cfg(feature = "monoio")]

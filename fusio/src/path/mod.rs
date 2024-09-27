@@ -513,6 +513,6 @@ mod tests {
         let this_path = Path::from_filesystem_path(temp_file.path()).unwrap();
         let std_path = path_to_local(&this_path).unwrap();
 
-        assert_eq!(std_path, std::fs::canonicalize(temp_file.path()).unwrap());
+        assert_eq!(std_path, temp_file.path());
     }
 }
