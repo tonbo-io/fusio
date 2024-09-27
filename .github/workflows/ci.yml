@@ -1,0 +1,88 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_REGISTRIES_MY_REGISTRY_INDEX: https://github.com/rust-lang/crates.io-index
+
+jobs:
+  # 1
+  check:
+    name: Rust project check
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os:
+          - ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install latest
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+          components: rustfmt, clippy
+
+      # `cargo check` command here will use installed `nightly`
+      # as it is set as an "override" for current directory
+
+      - name: Run cargo clippy on tokio
+        uses: actions-rs/cargo@v1
+        with:
+          command: check
+          args: --features "tokio, futures"
+
+      - name: Run cargo clippy on monoio
+        uses: actions-rs/cargo@v1
+        with:
+          command: check
+          args: --features "monoio, futures"
+
+      - name: Run cargo build on tokio
+        uses: actions-rs/cargo@v1
+        with:
+          command: build
+          args: --features "tokio, futures"
+
+      - name: Run cargo build on monoio
+        uses: actions-rs/cargo@v1
+        with:
+          command: build
+          args: --features "monoio, futures"
+
+      - name: Run cargo test on tokio
+        uses: actions-rs/cargo@v1
+        with:
+          command: test
+          args: --workspace --features "tokio, futures"
+
+      - name: Run cargo test on monoio
+        uses: actions-rs/cargo@v1
+        with:
+          command: test
+          args: --workspace --features "monoio, futures"
+  # 2
+  fmt:
+    name: Rust fmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install latest nightly
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: nightly
+          override: true
+          components: rustfmt, clippy
+
+      # `cargo check` command here will use installed `nightly`
+      # as it is set as an "override" for current directory
+
+      - name: Run cargo fmt
+        uses: actions-rs/cargo@v1
+        with:
+          command: fmt
+          args: -- --check
