@@ -26,7 +26,6 @@ use bytes::{Buf, Bytes};
 use chrono::{DateTime, Utc};
 use http::{
     header::{AUTHORIZATION, HOST},
-    request::Builder,
     HeaderMap, HeaderName, HeaderValue, Method, Request, StatusCode,
 };
 use http_body::Body;
@@ -38,7 +37,7 @@ use url::Url;
 
 use super::CHECKSUM_HEADER;
 use crate::{
-    error::BoxError,
+    error::BoxedError,
     remotes::{
         aws::{STRICT_ENCODE_SET, STRICT_PATH_ENCODE_SET},
         http::HttpClient,
@@ -145,44 +144,42 @@ impl<'a> AwsAuthorizer<'a> {
     /// * Otherwise it is set to the hex encoded SHA256 of the request body
     ///
     /// [AWS SigV4]: https://docs.aws.amazon.com/IAM/latest/UserGuide/create-signed-request.html
-    pub(crate) async fn authorize<B>(
-        &self,
-        mut request: Builder,
-        body: B,
-    ) -> Result<Request<B>, AutohrizeError>
+    pub(crate) async fn authorize<B>(&self, request: &mut Request<B>) -> Result<(), AutohrizeError>
     where
         B: Body<Data = Bytes> + Clone + Unpin,
         B::Error: std::error::Error + Send + Sync + 'static,
     {
         if let Some(token) = &self.credential.token {
             let header = self.token_header.as_ref().unwrap_or(&TOKEN_HEADER);
-            request = request.header(header, token);
+            request.headers_mut().insert(header, token.parse()?);
         }
 
         let host = request
-            .uri_ref()
-            .ok_or(AutohrizeError::NoHost)?
+            .uri()
             .authority()
             .ok_or(AutohrizeError::NoHost)?
             .as_str()
             .to_string();
-        request = request.header(HOST, host);
+        request.headers_mut().insert(HOST, host.parse()?);
 
         let date = self.date.unwrap_or_else(Utc::now);
         let date_str = date.format("%Y%m%dT%H%M%SZ").to_string();
-        request = request.header(&DATE_HEADER, date_str);
+        request
+            .headers_mut()
+            .insert(&DATE_HEADER, date_str.parse()?);
 
         let digest = match self.sign_payload {
             false => UNSIGNED_PAYLOAD.to_string(),
-            true => match request.headers_ref().unwrap().get(CHECKSUM_HEADER) {
+            true => match request.headers().get(CHECKSUM_HEADER) {
                 Some(checksum) => {
                     hex_encode(std::str::from_utf8(checksum.as_bytes()).unwrap().as_bytes())
                 }
-                None => match body.size_hint().exact() {
+                None => match request.body().size_hint().exact() {
                     Some(n) => match n {
                         0 => EMPTY_SHA256_HASH.to_string(),
                         _ => {
-                            let bytes = body
+                            let bytes = request
+                                .body()
                                 .clone()
                                 .collect()
                                 .await
@@ -195,19 +192,17 @@ impl<'a> AwsAuthorizer<'a> {
                 },
             },
         };
+        request.headers_mut().insert(&HASH_HEADER, digest.parse()?);
 
-        request = request.header(&HASH_HEADER, &digest);
-
-        let (signed_headers, canonical_headers) =
-            canonicalize_headers(request.headers_ref().unwrap());
+        let (signed_headers, canonical_headers) = canonicalize_headers(request.headers());
 
         let scope = self.scope(date);
 
         let string_to_sign = self.string_to_sign(
             date,
             &scope,
-            request.method_ref().unwrap(),
-            &Url::parse(&request.uri_ref().unwrap().to_string())?,
+            request.method(),
+            &Url::parse(&request.uri().to_string())?,
             &canonical_headers,
             &signed_headers,
             &digest,
@@ -223,13 +218,14 @@ impl<'a> AwsAuthorizer<'a> {
             "{} Credential={}/{}, SignedHeaders={}, Signature={}",
             ALGORITHM, self.credential.key_id, scope, signed_headers, signature
         );
-        request = request.header(AUTHORIZATION, authorisation);
+        request
+            .headers_mut()
+            .insert(AUTHORIZATION, authorisation.parse()?);
 
-        Ok(request
-            .body(body)
-            .map_err(|e| AutohrizeError::Other(e.into()))?)
+        Ok(())
     }
 
+    #[allow(unused)]
     pub(crate) fn sign(&self, method: Method, url: &mut Url, expires_in: Duration) {
         let date = self.date.unwrap_or_else(Utc::now);
         let scope = self.scope(date);
@@ -430,11 +426,12 @@ pub enum AutohrizeError {
 }
 
 /// <https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/iam-roles-for-amazon-ec2.html#instance-metadata-security-credentials>
+#[allow(unused)]
 async fn instance_creds<'c, C: HttpClient>(
     client: &'c C,
     endpoint: &'c str,
     imdsv1_fallback: bool,
-) -> Result<TemporaryToken<Arc<AwsCredential>>, BoxError> {
+) -> Result<TemporaryToken<Arc<AwsCredential>>, BoxedError> {
     const CREDENTIALS_PATH: &str = "latest/meta-data/iam/security-credentials";
     const AWS_EC2_METADATA_TOKEN_HEADER: &str = "X-aws-ec2-metadata-token";
 
@@ -545,6 +542,7 @@ impl From<InstanceCredentials> for AwsCredential {
     }
 }
 
+#[allow(unused)]
 pub(crate) struct TemporaryToken<T> {
     /// The temporary credential
     pub(crate) token: T,
@@ -599,10 +597,8 @@ mod tests {
             token_header: None,
         };
 
-        let request = signer
-            .authorize(request, Empty::<Bytes>::new())
-            .await
-            .unwrap();
+        let mut request = request.body(Empty::<Bytes>::new()).unwrap();
+        signer.authorize(&mut request).await.unwrap();
         assert_eq!(
             request.headers().get(&AUTHORIZATION).unwrap(),
             "AWS4-HMAC-SHA256 \
@@ -644,10 +640,8 @@ mod tests {
             sign_payload: false,
         };
 
-        let request = authorizer
-            .authorize(request, Empty::<Bytes>::new())
-            .await
-            .unwrap();
+        let mut request = request.body(Empty::<Bytes>::new()).unwrap();
+        authorizer.authorize(&mut request).await.unwrap();
         assert_eq!(
             request.headers().get(&AUTHORIZATION).unwrap(),
             "AWS4-HMAC-SHA256 \
@@ -722,10 +716,8 @@ mod tests {
             sign_payload: true,
         };
 
-        let request = authorizer
-            .authorize(request, Empty::<Bytes>::new())
-            .await
-            .unwrap();
+        let mut request = request.body(Empty::<Bytes>::new()).unwrap();
+        authorizer.authorize(&mut request).await.unwrap();
         assert_eq!(
             request.headers().get(&AUTHORIZATION).unwrap(),
             "AWS4-HMAC-SHA256 Credential=H20ABqCkLZID4rLe/20220809/us-east-1/s3/aws4_request, \
@@ -734,7 +726,7 @@ mod tests {
         )
     }
 
-    #[cfg(feature = "tokio-http")]
+    #[cfg(all(feature = "tokio-http", not(feature = "completion-based")))]
     #[tokio::test]
     async fn test_instance_metadata() {
         use std::env;

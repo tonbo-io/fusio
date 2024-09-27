@@ -47,8 +47,12 @@ pub trait IoBufMut: IoBuf {
         unsafe { std::slice::from_raw_parts_mut(self.as_mut_ptr(), self.bytes_init()) }
     }
 
+    /// # Safety
+    /// The buffer must be recovered from the same type of buffer before it drops.
     unsafe fn to_buf_mut_nocopy(self) -> BufMut;
 
+    /// # Safety
+    /// The buffer must be recovered from the same type.
     unsafe fn recover_from_buf_mut(buf: BufMut) -> Self;
 }
 

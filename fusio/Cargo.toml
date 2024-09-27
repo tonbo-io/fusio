@@ -13,17 +13,20 @@ aws = [
     "chrono?/serde",
     "fs",
     "http",
+    "quick-xml",
     "ring",
     "serde",
     "serde_json",
+    "serde_urlencoded",
 ]
 bytes = ["dep:bytes"]
 completion-based = []
 default = ["dyn", "fs"]
 dyn = []
 fs = ["tokio?/rt"]
-h2 = ["dep:h2"]
 http = [
+    "async-stream",
+    "bytes",
     "dep:http",
     "http-body",
     "http-body-util",
@@ -64,6 +67,10 @@ object_store = { version = "0.11", optional = true, default-features = false, fe
     "aws",
 ] }
 percent-encoding = { version = "2" }
+quick-xml = { version = "0.36", features = [
+    "overlapped-lists",
+    "serialize",
+], optional = true }
 reqwest = { git = "https://github.com/seanmonstar/reqwest.git", optional = true, features = [
     "stream",
 ] }
@@ -72,6 +79,7 @@ ring = { version = "0.17", optional = true, default-features = false, features =
 ] }
 serde = { version = "1", optional = true, features = ["derive"] }
 serde_json = { version = "1", optional = true }
+serde_urlencoded = { version = "0.7", optional = true }
 thiserror = "1"
 tokio = { version = "1", optional = true, default-features = false, features = [
     "fs",
@@ -83,6 +91,7 @@ url = { version = "2" }
 tokio-uring = { version = "0.5", default-features = false, optional = true }
 
 [dev-dependencies]
+futures-util = { version = "0.3" }
 hyper = { version = "1", features = ["full"] }
 hyper-util = { version = "0.1", features = ["full"] }
 monoio = { version = "0.2" }

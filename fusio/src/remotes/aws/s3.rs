@@ -1,109 +1,68 @@
-use base64::{prelude::BASE64_STANDARD, Engine};
-use bytes::{Buf, Bytes};
+use std::sync::Arc;
+
+use bytes::Buf;
 use http::{
     header::{CONTENT_LENGTH, RANGE},
     request::Builder,
     Method, Request,
 };
-use http_body::Body;
 use http_body_util::{BodyExt, Empty, Full};
 use percent_encoding::utf8_percent_encode;
-use ring::digest::{self, Context};
 
-use super::{
-    credential::{AwsAuthorizer, AwsCredential},
-    STRICT_PATH_ENCODE_SET,
-};
+use super::{options::S3Options, STRICT_PATH_ENCODE_SET};
 use crate::{
-    buf::IoBufMut, path::Path, remotes::http::HttpClient, Error, IoBuf, Read, Seek, Write,
+    buf::IoBufMut,
+    path::Path,
+    remotes::{
+        aws::sign::Sign,
+        http::{DynHttpClient, HttpClient as _},
+    },
+    Error, IoBuf, Read, Seek, Write,
 };
 
-pub struct S3File<C: HttpClient> {
-    bucket_endpoint: String,
+pub struct S3File {
+    options: Arc<S3Options>,
     path: Path,
-    credential: AwsCredential,
-    region: String,
-    sign_payload: bool,
-    skip_signature: bool,
-    checksum: bool,
     pos: u64,
 
-    client: C,
+    client: Arc<dyn DynHttpClient>,
 }
 
-impl<C: HttpClient> S3File<C> {
+impl S3File {
+    pub(crate) fn new(options: Arc<S3Options>, path: Path, client: Arc<dyn DynHttpClient>) -> Self {
+        Self {
+            options,
+            path,
+            pos: 0,
+            client,
+        }
+    }
+
     fn build_request(&self, method: Method) -> Builder {
         let url = format!(
             "{}/{}",
-            self.bucket_endpoint,
+            self.options.endpoint,
             utf8_percent_encode(self.path.as_ref(), &STRICT_PATH_ENCODE_SET)
         );
 
         Request::builder().method(method).uri(url)
     }
-
-    async fn checksum<B>(&self, mut request: Builder, body: &B) -> Result<Builder, Error>
-    where
-        B: Body<Data = Bytes> + Clone + Unpin,
-        B::Error: std::error::Error + Send + Sync + 'static,
-    {
-        if !self.skip_signature || self.checksum {
-            let mut sha256 = Context::new(&digest::SHA256);
-            sha256.update(
-                &body
-                    .clone()
-                    .collect()
-                    .await
-                    .map_err(|e| Error::Other(e.into()))?
-                    .to_bytes(),
-            );
-            let payload_sha256 = sha256.finish();
-            request = request.header(
-                "x-amz-checksum-sha256",
-                BASE64_STANDARD.encode(payload_sha256),
-            );
-        }
-        Ok(request)
-    }
-
-    async fn authorize<B>(&self, request: Builder, body: B) -> Result<Request<B>, Error>
-    where
-        B: Body<Data = Bytes> + Clone + Unpin,
-        B::Error: std::error::Error + Send + Sync + 'static,
-    {
-        let request = self.checksum(request, &body).await?;
-
-        if self.skip_signature {
-            return Ok(request.body(body)?);
-        }
-
-        let authorizer = AwsAuthorizer::new(&self.credential, "s3", &self.region)
-            .with_sign_payload(if self.checksum {
-                false
-            } else {
-                self.sign_payload
-            });
-        let request = authorizer
-            .authorize(request, body)
-            .await
-            .map_err(|e| Error::Other(e.into()))?;
-        Ok(request)
-    }
 }
 
-impl<C: HttpClient> Read for S3File<C> {
+impl Read for S3File {
     async fn read_exact<B: IoBufMut>(&mut self, mut buf: B) -> Result<B, Error> {
-        let mut request = self.build_request(Method::GET);
-        request = request.header(
-            RANGE,
-            format!(
-                "bytes={}-{}",
-                self.pos,
-                self.pos + buf.as_slice().len() as u64 - 1
-            ),
-        );
-
-        let request = self.authorize(request, Empty::new()).await?;
+        let mut request = self
+            .build_request(Method::GET)
+            .header(
+                RANGE,
+                format!(
+                    "bytes={}-{}",
+                    self.pos,
+                    self.pos + buf.as_slice().len() as u64 - 1
+                ),
+            )
+            .body(Empty::new())?;
+        request.sign(&self.options).await?;
 
         let response = self
             .client
@@ -133,9 +92,8 @@ impl<C: HttpClient> Read for S3File<C> {
     }
 
     async fn size(&self) -> Result<u64, Error> {
-        let request = self
-            .authorize(self.build_request(Method::HEAD), Empty::new())
-            .await?;
+        let mut request = self.build_request(Method::HEAD).body(Empty::new())?;
+        request.sign(&self.options).await?;
 
         let response = self
             .client
@@ -165,20 +123,27 @@ impl<C: HttpClient> Read for S3File<C> {
     }
 }
 
-impl<C: HttpClient> Seek for S3File<C> {
+impl Seek for S3File {
     async fn seek(&mut self, pos: u64) -> Result<(), Error> {
         self.pos = pos;
         Ok(())
     }
 }
 
-impl<C: HttpClient> Write for S3File<C> {
+impl Write for S3File {
     async fn write_all<B: IoBuf>(&mut self, buf: B) -> (Result<(), Error>, B) {
-        let mut request = self.build_request(Method::PUT);
-        request = request.header(CONTENT_LENGTH, buf.as_slice().len());
-        let result = self.authorize(request, Full::new(buf.as_bytes())).await;
+        let mut request = self
+            .build_request(Method::PUT)
+            .header(CONTENT_LENGTH, buf.as_slice().len())
+            .body(Full::new(buf.as_bytes()));
+        if let Err(e) = request {
+            return (Err(Error::Other(e.into())), buf);
+        }
+        let mut request = request.unwrap();
+
+        let result = request.sign(&self.options).await;
         match result {
-            Ok(request) => {
+            Ok(_) => {
                 let response = self.client.send_request(request).await;
                 match response {
                     Ok(response) => {
@@ -209,7 +174,7 @@ impl<C: HttpClient> Write for S3File<C> {
                     Err(e) => (Err(Error::Other(e)), buf),
                 }
             }
-            Err(e) => (Err(e.into()), buf),
+            Err(e) => (Err(e), buf),
         }
     }
 
@@ -228,14 +193,14 @@ impl<C: HttpClient> Write for S3File<C> {
 
 #[cfg(test)]
 mod tests {
-    #[cfg(feature = "tokio-http")]
+    #[cfg(all(feature = "tokio-http", not(feature = "completion-based")))]
     #[tokio::test]
     async fn test_s3_file() {
-        use std::env;
+        use std::{env, sync::Arc};
 
         use crate::{
             remotes::{
-                aws::{credential::AwsCredential, s3::S3File},
+                aws::{credential::AwsCredential, options::S3Options, s3::S3File},
                 http::tokio::TokioClient,
             },
             Read, Seek, Write,
@@ -250,21 +215,21 @@ mod tests {
 
         let client = TokioClient::new();
         let region = "ap-southeast-1";
-        let mut s3 = S3File {
-            bucket_endpoint: "https://fusio-test.s3-ap-southeast-1.amazonaws.com".into(),
-            path: "test.txt".into(),
-            credential: AwsCredential {
+        let options = Arc::new(S3Options {
+            endpoint: "https://fusio-test.s3.ap-southeast-1.amazonaws.com".into(),
+            credential: Some(AwsCredential {
                 key_id,
                 secret_key,
                 token: None,
-            },
+            }),
             region: region.into(),
             sign_payload: true,
-            pos: 0,
-            client,
-            skip_signature: false,
-            checksum: true,
-        };
+            checksum: false,
+        });
+
+        let client = Arc::new(client);
+
+        let mut s3 = S3File::new(options, "test.txt".into(), client);
 
         let (result, _) = s3
             .write_all(&b"The answer of life, universe and everthing"[..])

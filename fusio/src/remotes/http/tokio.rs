@@ -2,7 +2,7 @@ use bytes::Bytes;
 use http::{Request, Response};
 use http_body::Body;
 
-use super::{BoxError, HttpClient};
+use super::{BoxedError, HttpClient};
 use crate::{MaybeSend, MaybeSync};
 
 pub(crate) struct TokioClient {
@@ -23,9 +23,9 @@ impl HttpClient for TokioClient {
     async fn send_request<B>(
         &self,
         request: Request<B>,
-    ) -> Result<Response<Self::RespBody>, BoxError>
+    ) -> Result<Response<Self::RespBody>, BoxedError>
     where
-        B: Body + MaybeSend + MaybeSync + 'static + std::fmt::Debug,
+        B: Body + MaybeSend + MaybeSync + 'static,
         B::Data: Into<Bytes>,
         B::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
     {

@@ -14,8 +14,15 @@ pub enum Error {
     #[error("unsupported operation")]
     Unsupported,
     #[error(transparent)]
-    Other(BoxError),
+    Other(#[from] BoxedError),
+    #[error("invalid url: {0}")]
+    InvalidUrl(BoxedError),
+    #[error("http request failed, status: {status_code}, body: {body}")]
+    HttpNotSuccess {
+        status_code: http::StatusCode,
+        body: String,
+    },
 }
 
 #[allow(unused)]
-pub type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
+pub type BoxedError = Box<dyn std::error::Error + Send + Sync + 'static>;

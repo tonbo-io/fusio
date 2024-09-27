@@ -1,5 +1,9 @@
 mod credential;
+#[cfg(feature = "fs")]
+pub mod fs;
+pub(crate) mod options;
 mod s3;
+pub(crate) mod sign;
 
 pub use s3::S3File;
 
