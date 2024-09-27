@@ -1,5 +1,5 @@
 #[cfg(all(feature = "tokio-http", not(feature = "completion-based")))]
-pub(crate) mod tokio;
+pub mod tokio;
 
 use std::{future::Future, pin::Pin, sync::Arc};
 
@@ -89,7 +89,7 @@ where
                         ),
                     ))
                 }
-                Err(e) => return Err(e.into()),
+                Err(e) => Err(e.into()),
             }
         })
     }

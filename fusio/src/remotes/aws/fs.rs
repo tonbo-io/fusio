@@ -207,6 +207,7 @@ mod tests {
     #[cfg(all(feature = "tokio-http", not(feature = "completion-based")))]
     #[tokio::test]
     async fn test_list() {
+        use std::env;
         use std::pin::pin;
 
         use futures_util::StreamExt;
