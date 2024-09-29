@@ -3,6 +3,7 @@ use std::sync::Arc;
 use crate::{DynFs, Error};
 
 #[derive(Clone)]
+#[non_exhaustive]
 pub enum FsOptions {
     Local,
     #[cfg(feature = "aws")]
@@ -18,10 +19,7 @@ pub enum FsOptions {
 impl FsOptions {
     pub fn parse(self) -> Result<Arc<dyn DynFs>, Error> {
         match self {
-            #[cfg(feature = "tokio")]
-            FsOptions::Local => Ok(Arc::new(crate::local::TokioFs)),
-            #[cfg(feature = "monoio")]
-            FsOptions::Local => Ok(Arc::new(crate::local::MonoIoFs)),
+            FsOptions::Local => Ok(Arc::new(crate::local::LocalFs {})),
             #[cfg(all(feature = "aws", feature = "object_store"))]
             FsOptions::S3 {
                 bucket,
@@ -82,7 +80,6 @@ impl FsOptions {
                 }
                 Ok(Arc::new(builder.build()))
             }
-            _ => Err(Error::Unsupported),
         }
     }
 }
