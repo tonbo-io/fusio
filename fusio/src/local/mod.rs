@@ -14,3 +14,12 @@ pub use tokio::fs::*;
 #[cfg(all(feature = "tokio-uring", target_os = "linux", feature = "fs"))]
 #[allow(unused)]
 pub use tokio_uring::fs::*;
+
+#[cfg(feature = "fs")]
+cfg_if::cfg_if! {
+    if #[cfg(feature = "tokio")] {
+        pub type LocalFs = TokioFs;
+    } else if #[cfg(feature = "monoio")] {
+        pub type LocalFs = MonoIoFs;
+    }
+}
