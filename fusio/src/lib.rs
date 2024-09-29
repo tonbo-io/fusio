@@ -5,7 +5,8 @@ mod error;
 #[cfg(feature = "fs")]
 pub mod fs;
 pub mod local;
-pub mod parse;
+#[cfg(feature = "fs")]
+pub mod options;
 pub mod path;
 pub mod remotes;
 

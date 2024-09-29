@@ -51,8 +51,8 @@ impl FsOptions {
                 if let Some(sign_payload) = sign_payload {
                     builder = builder.with_unsigned_payload(!sign_payload);
                 }
-                if let Some(checksum) = checksum {
-                    // TODO
+                if matches!(checksum, Some(true)) {
+                    builder = builder.with_checksum_algorithm(object_store::aws::Checksum::SHA256);
                 }
                 Ok(Arc::new(S3Store::new(builder.build()?)))
             }
