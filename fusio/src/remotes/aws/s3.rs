@@ -8,11 +8,11 @@ use http::{
 };
 use http_body_util::{BodyExt, Empty, Full};
 use percent_encoding::utf8_percent_encode;
+use url::Url;
 
 use super::{options::S3Options, STRICT_PATH_ENCODE_SET};
 use crate::{
     buf::IoBufMut,
-    path::Path,
     remotes::{
         aws::sign::Sign,
         http::{DynHttpClient, HttpClient as _},
@@ -22,17 +22,17 @@ use crate::{
 
 pub struct S3File {
     options: Arc<S3Options>,
-    path: Path,
+    url: Url,
     pos: u64,
 
     client: Arc<dyn DynHttpClient>,
 }
 
 impl S3File {
-    pub(crate) fn new(options: Arc<S3Options>, path: Path, client: Arc<dyn DynHttpClient>) -> Self {
+    pub(crate) fn new(options: Arc<S3Options>, url: Url, client: Arc<dyn DynHttpClient>) -> Self {
         Self {
             options,
-            path,
+            url,
             pos: 0,
             client,
         }
@@ -42,7 +42,7 @@ impl S3File {
         let url = format!(
             "{}/{}",
             self.options.endpoint,
-            utf8_percent_encode(self.path.as_ref(), &STRICT_PATH_ENCODE_SET)
+            utf8_percent_encode(self.url.path(), &STRICT_PATH_ENCODE_SET)
         );
 
         Request::builder().method(method).uri(url)

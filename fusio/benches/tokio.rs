@@ -4,11 +4,11 @@ use criterion::{criterion_group, criterion_main, Criterion};
 use fusio::{
     fs::{Fs, OpenOptions},
     local::TokioFs,
-    path::Path,
     IoBuf, IoBufMut, Write,
 };
 use rand::Rng;
 use tempfile::NamedTempFile;
+use url::Url;
 
 fn write(c: &mut Criterion) {
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -24,11 +24,11 @@ fn write(c: &mut Criterion) {
     let write_bytes = Arc::new(write_bytes);
 
     let temp_file = NamedTempFile::new().unwrap();
-    let path = Path::from_filesystem_path(temp_file.path()).unwrap();
+    let url = Url::from_file_path(temp_file.path()).unwrap();
 
     let fs = TokioFs;
     let file = Rc::new(RefCell::new(runtime.block_on(async {
-        fs.open_options(&path, OpenOptions::default().write(true).append(true))
+        fs.open_options(&url, OpenOptions::default().write(true).append(true))
             .await
             .unwrap()
     })));
@@ -80,12 +80,12 @@ fn read(c: &mut Criterion) {
     rand::thread_rng().fill(&mut write_bytes);
 
     let temp_file = NamedTempFile::new().unwrap();
-    let path = Path::from_filesystem_path(temp_file.path()).unwrap();
+    let url = Url::from_file_path(temp_file.path()).unwrap();
 
     let fs = TokioFs;
     let file = Rc::new(RefCell::new(runtime.block_on(async {
         let mut file = fs
-            .open_options(&path, OpenOptions::default().write(true).append(true))
+            .open_options(&url, OpenOptions::default().write(true).append(true))
             .await
             .unwrap();
         let (result, _) = file.write_all(&write_bytes[..]).await;

@@ -22,7 +22,7 @@ impl Fs for TokioUringFs {
         let dir = path.as_ref().read_dir()?;
         Ok(stream! {
             for entry in dir {
-                yield Ok(crate::fs::FileMeta { path: entry?.path() });
+                yield Ok(crate::fs::FileMeta { url: entry?.path() });
             }
         })
     }

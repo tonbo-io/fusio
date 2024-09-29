@@ -4,34 +4,35 @@ use std::future::Future;
 
 use futures_core::Stream;
 pub use options::*;
+use url::Url;
 
-use crate::{path::Path, Error, MaybeSend, MaybeSync, Read, Seek, Write};
+use crate::{Error, MaybeSend, MaybeSync, Read, Seek, Write};
 
 #[derive(Debug)]
 pub struct FileMeta {
-    pub path: Path,
+    pub url: Url,
     pub size: u64,
 }
 
 pub trait Fs: MaybeSend + MaybeSync {
     type File: Read + Seek + Write + MaybeSend + MaybeSync + 'static;
 
-    fn open(&self, path: &Path) -> impl Future<Output = Result<Self::File, Error>> {
-        self.open_options(path, OpenOptions::default())
+    fn open(&self, url: &Url) -> impl Future<Output = Result<Self::File, Error>> {
+        self.open_options(url, OpenOptions::default())
     }
 
     fn open_options(
         &self,
-        path: &Path,
+        url: &Url,
         options: OpenOptions,
     ) -> impl Future<Output = Result<Self::File, Error>> + MaybeSend;
 
-    fn create_dir_all(path: &Path) -> impl Future<Output = Result<(), Error>> + MaybeSend;
+    fn create_dir_all(url: &Url) -> impl Future<Output = Result<(), Error>> + MaybeSend;
 
     fn list(
         &self,
-        path: &Path,
+        url: &Url,
     ) -> impl Future<Output = Result<impl Stream<Item = Result<FileMeta, Error>>, Error>> + MaybeSend;
 
-    fn remove(&self, path: &Path) -> impl Future<Output = Result<(), Error>> + MaybeSend;
+    fn remove(&self, url: &Url) -> impl Future<Output = Result<(), Error>> + MaybeSend;
 }

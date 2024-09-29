@@ -5,7 +5,6 @@ mod error;
 #[cfg(feature = "fs")]
 pub mod fs;
 pub mod local;
-pub mod path;
 pub mod remotes;
 
 use std::{future::Future, io::Cursor};
@@ -171,8 +170,10 @@ impl<W: Write> Write for &mut W {
 
 #[cfg(test)]
 mod tests {
-    use super::{Read, Write};
-    use crate::{buf::IoBufMut, Error, IoBuf, Seek};
+    use url::Url;
+
+    use super::{DynFs, Read, Write};
+    use crate::{buf::IoBufMut, fs::OpenOptions, Error, IoBuf, Seek};
 
     #[allow(unused)]
     struct CountWrite<W> {
@@ -278,19 +279,23 @@ mod tests {
         use futures_util::StreamExt;
         use tempfile::TempDir;
 
-        use crate::{fs::OpenOptions, path::Path, DynFs};
-
         let tmp_dir = TempDir::new()?;
         let work_dir_path = tmp_dir.path().join("work");
         let work_file_path = work_dir_path.join("test.file");
 
-        fs.create_dir_all(&Path::from_absolute_path(&work_dir_path)?)
-            .await?;
+        fs.create_dir_all(&Url::from_file_path(&work_dir_path).map_err(|_| {
+            Error::InvalidLocalPath {
+                path: work_dir_path.clone(),
+            }
+        })?)
+        .await?;
 
         assert!(work_dir_path.exists());
         assert!(fs
             .open_options(
-                &Path::from_absolute_path(&work_file_path)?,
+                &Url::from_file_path(&work_file_path).map_err(|_| Error::InvalidLocalPath {
+                    path: work_file_path.clone()
+                })?,
                 OpenOptions::default()
             )
             .await
@@ -298,7 +303,9 @@ mod tests {
         {
             let _ = fs
                 .open_options(
-                    &Path::from_absolute_path(&work_file_path)?,
+                    &Url::from_file_path(&work_file_path).map_err(|_| Error::InvalidLocalPath {
+                        path: work_file_path.clone(),
+                    })?,
                     OpenOptions::default().create(true).write(true),
                 )
                 .await?;
@@ -307,14 +314,18 @@ mod tests {
         {
             let mut file = fs
                 .open_options(
-                    &Path::from_absolute_path(&work_file_path)?,
+                    &Url::from_file_path(&work_file_path).map_err(|_| Error::InvalidLocalPath {
+                        path: work_file_path.clone(),
+                    })?,
                     OpenOptions::default().write(true),
                 )
                 .await?;
             file.write_all("Hello! fusio".as_bytes()).await.0?;
             let mut file = fs
                 .open_options(
-                    &Path::from_absolute_path(&work_file_path)?,
+                    &Url::from_file_path(&work_file_path).map_err(|_| Error::InvalidLocalPath {
+                        path: work_file_path.clone(),
+                    })?,
                     OpenOptions::default().write(true),
                 )
                 .await?;
@@ -325,7 +336,9 @@ mod tests {
         {
             let mut file = fs
                 .open_options(
-                    &Path::from_absolute_path(&work_file_path)?,
+                    &Url::from_file_path(&work_file_path).map_err(|_| Error::InvalidLocalPath {
+                        path: work_file_path.clone(),
+                    })?,
                     OpenOptions::default().append(true),
                 )
                 .await?;
@@ -336,7 +349,9 @@ mod tests {
         {
             let mut file = fs
                 .open_options(
-                    &Path::from_absolute_path(&work_file_path)?,
+                    &Url::from_file_path(&work_file_path).map_err(|_| Error::InvalidLocalPath {
+                        path: work_file_path.clone(),
+                    })?,
                     OpenOptions::default(),
                 )
                 .await?;
@@ -346,27 +361,39 @@ mod tests {
                 &file.read_to_end(Vec::new()).await?
             )
         }
-        fs.remove(&Path::from_filesystem_path(&work_file_path)?)
-            .await?;
+        fs.remove(
+            &Url::from_file_path(&work_file_path).map_err(|_| Error::InvalidLocalPath {
+                path: work_file_path.clone(),
+            })?,
+        )
+        .await?;
         assert!(!work_file_path.exists());
 
         let mut file_set = HashSet::new();
         for i in 0..10 {
+            let path = work_dir_path.join(i.to_string());
             let _ = fs
                 .open_options(
-                    &Path::from_absolute_path(work_dir_path.join(i.to_string()))?,
+                    &Url::from_file_path(&path)
+                        .map_err(|_| Error::InvalidLocalPath { path: path.clone() })?,
                     OpenOptions::default().create(true).write(true),
                 )
                 .await?;
             file_set.insert(i.to_string());
         }
 
-        let path = Path::from_filesystem_path(&work_dir_path)?;
-        let mut file_stream = Box::pin(fs.list(&path).await?);
+        let url = Url::from_file_path(&work_dir_path).map_err(|_| Error::InvalidLocalPath {
+            path: work_dir_path.clone(),
+        })?;
+        let mut file_stream = Box::pin(fs.list(&url).await?);
 
         while let Some(file_meta) = file_stream.next().await {
-            if let Some(file_name) = file_meta?.path.filename() {
-                assert!(file_set.remove(file_name));
+            let path = file_meta?
+                .url
+                .to_file_path()
+                .map_err(|_| Error::InvalidLocalUrl { url: url.clone() })?;
+            if let Some(file_name) = path.file_name() {
+                assert!(file_set.remove(file_name.to_str().unwrap()));
             }
         }
         assert!(file_set.is_empty());

@@ -1,12 +1,12 @@
 use std::pin::Pin;
 
 use futures_core::Stream;
+use url::Url;
 
 use super::{DynSeek, MaybeSendFuture};
 use crate::{
     buf::IoBufMut,
     fs::{FileMeta, Fs, OpenOptions},
-    path::Path,
     DynRead, DynWrite, Error, IoBuf, MaybeSend, MaybeSync, Read, Seek, Write,
 };
 
@@ -52,27 +52,27 @@ impl<'write> Write for Box<dyn DynFile + 'write> {
 }
 
 pub trait DynFs: MaybeSend + MaybeSync {
-    fn open<'s, 'path: 's>(
+    fn open<'s, 'url: 's>(
         &'s self,
-        path: &'path Path,
+        url: &'url Url,
     ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<Box<dyn DynFile>, Error>> + 's>> {
-        self.open_options(path, OpenOptions::default())
+        self.open_options(url, OpenOptions::default())
     }
 
-    fn open_options<'s, 'path: 's>(
+    fn open_options<'s, 'url: 's>(
         &'s self,
-        path: &'path Path,
+        url: &'url Url,
         options: OpenOptions,
     ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<Box<dyn DynFile>, Error>> + 's>>;
 
-    fn create_dir_all<'s, 'path: 's>(
+    fn create_dir_all<'s, 'url: 's>(
         &'s self,
-        path: &'path Path,
+        url: &'url Url,
     ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<(), Error>> + 's>>;
 
-    fn list<'s, 'path: 's>(
+    fn list<'s, 'url: 's>(
         &'s self,
-        path: &'path Path,
+        url: &'url Url,
     ) -> Pin<
         Box<
             dyn MaybeSendFuture<
@@ -84,34 +84,34 @@ pub trait DynFs: MaybeSend + MaybeSync {
         >,
     >;
 
-    fn remove<'s, 'path: 's>(
+    fn remove<'s, 'url: 's>(
         &'s self,
-        path: &'path Path,
+        url: &'url Url,
     ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<(), Error>> + 's>>;
 }
 
 impl<F: Fs> DynFs for F {
-    fn open_options<'s, 'path: 's>(
+    fn open_options<'s, 'url: 's>(
         &'s self,
-        path: &'path Path,
+        url: &'url Url,
         options: OpenOptions,
     ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<Box<dyn DynFile>, Error>> + 's>> {
         Box::pin(async move {
-            let file = F::open_options(self, path, options).await?;
+            let file = F::open_options(self, url, options).await?;
             Ok(Box::new(file) as Box<dyn DynFile>)
         })
     }
 
-    fn create_dir_all<'s, 'path: 's>(
+    fn create_dir_all<'s, 'url: 's>(
         &'s self,
-        path: &'path Path,
+        url: &'url Url,
     ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<(), Error>> + 's>> {
-        Box::pin(F::create_dir_all(path))
+        Box::pin(F::create_dir_all(url))
     }
 
-    fn list<'s, 'path: 's>(
+    fn list<'s, 'url: 's>(
         &'s self,
-        path: &'path Path,
+        url: &'url Url,
     ) -> Pin<
         Box<
             dyn MaybeSendFuture<
@@ -123,16 +123,16 @@ impl<F: Fs> DynFs for F {
         >,
     > {
         Box::pin(async move {
-            let stream = F::list(self, path).await?;
+            let stream = F::list(self, url).await?;
             Ok(Box::pin(stream) as Pin<Box<dyn Stream<Item = Result<FileMeta, Error>>>>)
         })
     }
 
-    fn remove<'s, 'path: 's>(
+    fn remove<'s, 'url: 's>(
         &'s self,
-        path: &'path Path,
+        url: &'url Url,
     ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<(), Error>> + 's>> {
-        Box::pin(F::remove(self, path))
+        Box::pin(F::remove(self, url))
     }
 }
 

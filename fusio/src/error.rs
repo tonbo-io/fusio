@@ -1,17 +1,27 @@
-use std::io;
+use std::{io, path::PathBuf};
 
 use thiserror::Error;
+use url::Url;
 
 #[derive(Debug, Error)]
 #[error(transparent)]
 #[non_exhaustive]
 pub enum Error {
     Io(#[from] io::Error),
+    #[error("Unable to convert url \"{url}\" to local path")]
+    InvalidLocalUrl {
+        url: Url,
+    },
+    #[error("Unable to convert path \"{path}\" to local url")]
+    InvalidLocalPath {
+        path: PathBuf,
+    },
     #[cfg(feature = "http")]
     Http(#[from] http::Error),
     #[cfg(feature = "object_store")]
     ObjectStore(#[from] object_store::Error),
-    Path(#[from] crate::path::Error),
+    #[cfg(feature = "object_store")]
+    ObjectStorePath(#[from] object_store::path::Error),
     #[error("unsupported operation")]
     Unsupported,
     #[error(transparent)]
