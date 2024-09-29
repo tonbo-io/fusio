@@ -1,13 +1,13 @@
 #[derive(PartialEq, Eq)]
-pub(crate) enum WriteMode {
+pub enum WriteMode {
     Append,
     Overwrite,
 }
 
 pub struct OpenOptions {
-    pub(crate) read: bool,
-    pub(crate) write: Option<WriteMode>,
-    pub(crate) create: bool,
+    pub read: bool,
+    pub write: Option<WriteMode>,
+    pub create: bool,
 }
 
 impl Default for OpenOptions {

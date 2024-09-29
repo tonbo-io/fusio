@@ -30,22 +30,22 @@ pub struct AmazonS3Builder {
 }
 
 impl AmazonS3Builder {
+    #[allow(unused_variables)]
     pub fn new(bucket: String) -> Self {
         cfg_if::cfg_if! {
             if #[cfg(all(feature = "tokio-http", not(feature = "completion-based")))] {
                 let client = Arc::new(crate::remotes::http::tokio::TokioClient::new());
+                Self {
+                    region: "us-east-1".into(),
+                    bucket,
+                    credential: None,
+                    sign_payload: false,
+                    checksum: false,
+                    client,
+                }
             } else {
                 unreachable!()
             }
-        }
-
-        Self {
-            region: "us-east-1".into(),
-            bucket,
-            credential: None,
-            sign_payload: false,
-            checksum: false,
-            client,
         }
     }
 }

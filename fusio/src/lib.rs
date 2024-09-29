@@ -294,7 +294,6 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "futures")]
     async fn test_local_fs<S>(fs: S) -> Result<(), Error>
     where
         S: crate::fs::Fs,
@@ -412,7 +411,7 @@ mod tests {
         write_and_read(File::from_std(write), File::from_std(read)).await;
     }
 
-    #[cfg(all(feature = "tokio", feature = "futures"))]
+    #[cfg(feature = "tokio")]
     #[tokio::test]
     async fn test_tokio_fs() {
         use crate::local::TokioFs;

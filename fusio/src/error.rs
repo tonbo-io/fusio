@@ -9,8 +9,6 @@ pub enum Error {
     Io(#[from] io::Error),
     #[cfg(feature = "http")]
     Http(#[from] http::Error),
-    #[cfg(feature = "object_store")]
-    ObjectStore(#[from] object_store::Error),
     Path(#[from] crate::path::Error),
     #[error("unsupported operation")]
     Unsupported,
@@ -26,5 +24,4 @@ pub enum Error {
     },
 }
 
-#[allow(unused)]
 pub type BoxedError = Box<dyn std::error::Error + Send + Sync + 'static>;

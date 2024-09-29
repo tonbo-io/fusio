@@ -1,0 +1,23 @@
+[package]
+edition.workspace = true
+license.workspace = true
+name = "fusio-object-store"
+repository.workspace = true
+version = "0.1.0"
+
+[dependencies]
+async-stream = { version = "0.3" }
+fusio = { version = "0.1", path = "../fusio", features = [
+    "bytes",
+    "dyn",
+    "object_store",
+    "tokio",
+] }
+futures-core = { version = "0.3" }
+futures-util = { version = "0.3" }
+object_store = { version = "0.11" }
+
+[dev-dependencies]
+bytes = { workspace = true }
+object_store = { version = "0.11", features = ["aws"] }
+tokio = { version = "1", features = ["full"] }

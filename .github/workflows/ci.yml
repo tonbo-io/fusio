@@ -34,19 +34,19 @@ jobs:
         uses: actions-rs/cargo@v1
         with:
           command: check
-          args: --package fusio --features "tokio, futures"
+          args: --package fusio --features "tokio"
 
       - name: Run cargo build on tokio
         uses: actions-rs/cargo@v1
         with:
           command: build
-          args: --package fusio --features "tokio, futures"
+          args: --package fusio --features "tokio"
 
       - name: Run cargo test on tokio
         uses: actions-rs/cargo@v1
         with:
           command: test
-          args: --package fusio --features "tokio, futures"
+          args: --package fusio --features "tokio"
 
   monoio_check:
     name: Rust project check on monoio
@@ -71,19 +71,19 @@ jobs:
         uses: actions-rs/cargo@v1
         with:
           command: check
-          args: --package fusio --features "monoio, futures"
+          args: --package fusio --features "monoio"
 
       - name: Run cargo build on monoio
         uses: actions-rs/cargo@v1
         with:
           command: build
-          args: --package fusio --features "monoio, futures"
+          args: --package fusio --features "monoio"
 
       - name: Run cargo test on monoio
         uses: actions-rs/cargo@v1
         with:
           command: test
-          args: --package fusio --features "monoio, futures"
+          args: --package fusio --features "monoio"
 
   tokio_uring_check:
     name: Rust project check on tokio_uring
