@@ -7,6 +7,7 @@ pub use options::*;
 
 use crate::{path::Path, Error, MaybeSend, MaybeSync, Read, Seek, Write};
 
+#[derive(Debug)]
 pub struct FileMeta {
     pub path: Path,
     pub size: u64,

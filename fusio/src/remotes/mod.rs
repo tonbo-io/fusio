@@ -1,5 +1,5 @@
 #[cfg(feature = "aws")]
-mod aws;
+pub mod aws;
 #[cfg(feature = "http")]
 pub mod http;
 
