@@ -1,4 +1,4 @@
-mod credential;
+pub(crate) mod credential;
 #[cfg(feature = "fs")]
 pub mod fs;
 pub(crate) mod options;

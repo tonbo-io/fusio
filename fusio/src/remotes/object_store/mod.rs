@@ -1,4 +1,4 @@
-mod fs;
+pub mod fs;
 
 use std::{ops::Range, sync::Arc};
 

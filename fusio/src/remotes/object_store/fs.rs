@@ -16,6 +16,14 @@ pub struct S3Store {
     inner: Arc<AmazonS3>,
 }
 
+impl S3Store {
+    pub fn new(s3: AmazonS3) -> Self {
+        S3Store {
+            inner: Arc::new(s3),
+        }
+    }
+}
+
 impl Fs for S3Store {
     type File = S3File;
 

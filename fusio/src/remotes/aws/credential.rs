@@ -48,7 +48,7 @@ const EMPTY_SHA256_HASH: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934
 const UNSIGNED_PAYLOAD: &str = "UNSIGNED-PAYLOAD";
 const STREAMING_PAYLOAD: &str = "STREAMING-AWS4-HMAC-SHA256-PAYLOAD";
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct AwsCredential {
     /// AWS_ACCESS_KEY_ID
     pub key_id: String,
