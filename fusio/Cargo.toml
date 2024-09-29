@@ -23,6 +23,7 @@ bytes = ["dep:bytes"]
 completion-based = []
 default = ["dyn", "fs"]
 dyn = []
+futures =  ["dep:futures-util"]
 fs = ["tokio?/rt"]
 http = [
     "async-stream",
@@ -41,6 +42,12 @@ object_store = ["dep:futures-util", "dep:object_store", "tokio"]
 tokio = ["async-stream", "dep:tokio"]
 tokio-http = ["dep:reqwest", "http"]
 tokio-uring = ["async-stream", "completion-based", "dep:tokio-uring", "no-send"]
+
+[[bench]]
+harness = false
+name = "tokio"
+path = "benches/tokio.rs"
+required-features = ["tokio"]
 
 [dependencies]
 async-stream = { version = "0.3", optional = true }
@@ -92,10 +99,13 @@ url = { version = "2" }
 tokio-uring = { version = "0.5", default-features = false, optional = true }
 
 [dev-dependencies]
+criterion = { version = "0.5", features = ["async_tokio", "html_reports"] }
+futures-executor = "0.3"
 futures-util = { version = "0.3" }
 hyper = { version = "1", features = ["full"] }
 hyper-util = { version = "0.1", features = ["full"] }
 monoio = { version = "0.2" }
+rand = "0.8"
 tempfile = "3"
 tokio = { version = "1", features = ["full"] }
 
