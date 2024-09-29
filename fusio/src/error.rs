@@ -12,8 +12,6 @@ pub enum Error {
     Path(#[from] crate::path::Error),
     #[error("unsupported operation")]
     Unsupported,
-    #[error(transparent)]
-    Other(#[from] BoxedError),
     #[error("invalid url: {0}")]
     InvalidUrl(BoxedError),
     #[cfg(feature = "http")]
@@ -22,6 +20,8 @@ pub enum Error {
         status_code: http::StatusCode,
         body: String,
     },
+    #[error(transparent)]
+    Other(#[from] BoxedError),
 }
 
 pub type BoxedError = Box<dyn std::error::Error + Send + Sync + 'static>;

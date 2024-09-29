@@ -11,8 +11,8 @@ env:
 
 jobs:
   # 1
-  tokio_check:
-    name: Rust project check on tokio
+  check:
+    name: Rust project check
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
@@ -29,99 +29,41 @@ jobs:
 
       # `cargo check` command here will use installed `nightly`
       # as it is set as an "override" for current directory
-
-      - name: Run cargo clippy on tokio
-        uses: actions-rs/cargo@v1
-        with:
-          command: check
-          args: --package fusio --features "tokio"
-
       - name: Run cargo build on tokio
         uses: actions-rs/cargo@v1
         with:
           command: build
-          args: --package fusio --features "tokio"
-
-      - name: Run cargo test on tokio
-        uses: actions-rs/cargo@v1
-        with:
-          command: test
-          args: --package fusio --features "tokio"
-
-  monoio_check:
-    name: Rust project check on monoio
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        os:
-          - ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install latest
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          override: true
-          components: rustfmt, clippy
-
-      # `cargo check` command here will use installed `nightly`
-      # as it is set as an "override" for current directory
-
-      - name: Run cargo clippy on monoio
-        uses: actions-rs/cargo@v1
-        with:
-          command: check
-          args: --package fusio --features "monoio"
+          args: --package fusio --features=tokio,aws,tokio-http
 
       - name: Run cargo build on monoio
         uses: actions-rs/cargo@v1
         with:
           command: build
-          args: --package fusio --features "monoio"
-
-      - name: Run cargo test on monoio
-        uses: actions-rs/cargo@v1
-        with:
-          command: test
-          args: --package fusio --features "monoio"
-
-  tokio_uring_check:
-    name: Rust project check on tokio_uring
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        os:
-          - ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install latest
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          override: true
-          components: rustfmt, clippy
-
-      # `cargo check` command here will use installed `nightly`
-      # as it is set as an "override" for current directory
-
-      - name: Run cargo clippy on tokio-uring
-        uses: actions-rs/cargo@v1
-        with:
-          command: check
-          args: --package fusio --features "tokio-uring, futures"
+          args: --package fusio --features=monoio
 
       - name: Run cargo build on tokio-uring
         uses: actions-rs/cargo@v1
         with:
           command: build
-          args: --package fusio --features "tokio-uring, futures"
+          args: --package fusio --features=tokio-uring
+
+      - name: Run cargo test on tokio
+        uses: actions-rs/cargo@v1
+        with:
+          command: test
+          args: --package fusio --features=tokio,aws,tokio-http
+
+      - name: Run cargo test on monoio
+        uses: actions-rs/cargo@v1
+        with:
+          command: test
+          args: --package fusio --features=monoio
 
       - name: Run cargo test on tokio-uring
         uses: actions-rs/cargo@v1
         with:
           command: test
-          args: --package fusio --features "tokio-uring, futures"
-
+          args: --package fusio --features=tokio-uring
   # 2
   fmt:
     name: Rust fmt
