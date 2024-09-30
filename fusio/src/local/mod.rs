@@ -3,7 +3,7 @@ pub(crate) mod monoio;
 #[cfg(feature = "tokio")]
 pub(crate) mod tokio;
 #[cfg(all(feature = "tokio-uring", target_os = "linux"))]
-mod tokio_uring;
+pub(crate) mod tokio_uring;
 
 #[cfg(all(feature = "monoio", feature = "fs"))]
 #[allow(unused)]
@@ -21,5 +21,7 @@ cfg_if::cfg_if! {
         pub type LocalFs = TokioFs;
     } else if #[cfg(feature = "monoio")] {
         pub type LocalFs = MonoIoFs;
+    } else if #[cfg(feature = "tokio-uring")] {
+        pub type LocalFs = TokioUringFs;
     }
 }

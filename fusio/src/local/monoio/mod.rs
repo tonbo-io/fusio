@@ -1,9 +1,11 @@
 #[cfg(feature = "fs")]
 pub mod fs;
 
+use std::future::Future;
+
 use monoio::fs::File;
 
-use crate::{buf::IoBufMut, Error, IoBuf, Read, Seek, Write};
+use crate::{buf::IoBufMut, Error, IoBuf, MaybeSend, Read, Seek, Write};
 
 #[repr(transparent)]
 struct MonoioBuf<B> {
@@ -92,6 +94,12 @@ impl Read for MonoioFile {
         self.pos += buf.buf.bytes_init() as u64;
 
         Ok(buf.buf)
+    }
+
+    async fn read_to_end(&mut self, mut buf: Vec<u8>) -> Result<Vec<u8>, Error> {
+        buf.resize((self.size().await? - self.pos) as usize, 0);
+
+        Ok(self.read_exact(buf).await?)
     }
 
     async fn size(&self) -> Result<u64, Error> {

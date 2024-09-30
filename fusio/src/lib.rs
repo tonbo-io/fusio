@@ -68,14 +68,8 @@ pub trait Read: MaybeSend + MaybeSync {
 
     fn read_to_end(
         &mut self,
-        mut buf: Vec<u8>,
-    ) -> impl Future<Output = Result<Vec<u8>, Error>> + MaybeSend {
-        async move {
-            buf.resize(self.size().await? as usize, 0);
-            let buf = self.read_exact(buf).await?;
-            Ok(buf)
-        }
-    }
+        buf: Vec<u8>,
+    ) -> impl Future<Output = Result<Vec<u8>, Error>> + MaybeSend;
 
     fn size(&self) -> impl Future<Output = Result<u64, Error>> + MaybeSend;
 }
@@ -90,6 +84,11 @@ where
 {
     async fn read_exact<B: IoBufMut>(&mut self, mut buf: B) -> Result<B, Error> {
         std::io::Read::read_exact(self, buf.as_slice_mut())?;
+        Ok(buf)
+    }
+
+    async fn read_to_end(&mut self, mut buf: Vec<u8>) -> Result<Vec<u8>, Error> {
+        let _ = std::io::Read::read_to_end(self, &mut buf)?;
         Ok(buf)
     }
 
@@ -143,6 +142,13 @@ impl<R: Read> Read for &mut R {
         R::read_exact(self, buf)
     }
 
+    fn read_to_end(
+        &mut self,
+        buf: Vec<u8>,
+    ) -> impl Future<Output = Result<Vec<u8>, Error>> + MaybeSend {
+        R::read_to_end(self, buf)
+    }
+
     fn size(&self) -> impl Future<Output = Result<u64, Error>> + MaybeSend {
         R::size(self)
     }
@@ -171,7 +177,9 @@ impl<W: Write> Write for &mut W {
 
 #[cfg(test)]
 mod tests {
-    use super::{Read, Write};
+    use std::future::Future;
+
+    use super::{MaybeSend, Read, Write};
     use crate::{buf::IoBufMut, Error, IoBuf, Seek};
 
     #[allow(unused)]
@@ -233,6 +241,13 @@ mod tests {
                 .inspect(|buf| self.cnt += buf.bytes_init())
         }
 
+        async fn read_to_end(&mut self, buf: Vec<u8>) -> Result<Vec<u8>, Error> {
+            self.r
+                .read_to_end(buf)
+                .await
+                .inspect(|buf| self.cnt += buf.bytes_init())
+        }
+
         async fn size(&self) -> Result<u64, Error> {
             self.r.size().await
         }
@@ -259,13 +274,24 @@ mod tests {
         writer.sync_data().await.unwrap();
 
         let mut reader = CountRead::new(read);
-        reader.seek(0).await.unwrap();
+        {
+            reader.seek(0).await.unwrap();
 
-        let mut buf = vec![];
-        buf = reader.read_to_end(buf).await.unwrap();
+            let mut buf = vec![];
+            buf = reader.read_to_end(buf).await.unwrap();
 
-        assert_eq!(buf.bytes_init(), 4);
-        assert_eq!(buf.as_slice(), &[2, 0, 2, 4]);
+            assert_eq!(buf.bytes_init(), 4);
+            assert_eq!(buf.as_slice(), &[2, 0, 2, 4]);
+        }
+        {
+            reader.seek(2).await.unwrap();
+
+            let mut buf = vec![];
+            buf = reader.read_to_end(buf).await.unwrap();
+
+            assert_eq!(buf.bytes_init(), 2);
+            assert_eq!(buf.as_slice(), &[2, 4]);
+        }
     }
 
     #[cfg(feature = "futures")]
@@ -418,11 +444,17 @@ mod tests {
         use tempfile::tempfile;
         use tokio_uring::fs::File;
 
+        use crate::local::tokio_uring::TokioUringFile;
+
         tokio_uring::start(async {
             let read = tempfile().unwrap();
             let write = read.try_clone().unwrap();
 
-            write_and_read(File::from_std(write), File::from_std(read)).await;
+            write_and_read(
+                TokioUringFile::from(File::from_std(write)),
+                TokioUringFile::from(File::from_std(read)),
+            )
+            .await;
         });
     }
 }

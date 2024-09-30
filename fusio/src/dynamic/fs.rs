@@ -26,6 +26,10 @@ impl<'read> Read for Box<dyn DynFile + 'read> {
         Ok(unsafe { B::recover_from_buf_mut(buf) })
     }
 
+    async fn read_to_end(&mut self, buf: Vec<u8>) -> Result<Vec<u8>, Error> {
+        DynRead::read_to_end(self.as_mut(), buf).await
+    }
+
     async fn size(&self) -> Result<u64, Error> {
         DynRead::size(self.as_ref()).await
     }
