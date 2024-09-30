@@ -259,13 +259,24 @@ mod tests {
         writer.sync_data().await.unwrap();
 
         let mut reader = CountRead::new(read);
-        reader.seek(0).await.unwrap();
+        {
+            reader.seek(0).await.unwrap();
 
-        let mut buf = vec![];
-        buf = reader.read_to_end(buf).await.unwrap();
+            let mut buf = vec![];
+            buf = reader.read_to_end(buf).await.unwrap();
 
-        assert_eq!(buf.bytes_init(), 4);
-        assert_eq!(buf.as_slice(), &[2, 0, 2, 4]);
+            assert_eq!(buf.bytes_init(), 4);
+            assert_eq!(buf.as_slice(), &[2, 0, 2, 4]);
+        }
+        {
+            reader.seek(2).await.unwrap();
+
+            let mut buf = vec![];
+            buf = reader.read_to_end(buf).await.unwrap();
+
+            assert_eq!(buf.bytes_init(), 2);
+            assert_eq!(buf.as_slice(), &[2, 4]);
+        }
     }
 
     #[cfg(feature = "futures")]
@@ -418,11 +429,17 @@ mod tests {
         use tempfile::tempfile;
         use tokio_uring::fs::File;
 
+        use crate::local::tokio_uring::TokioUringFile;
+
         tokio_uring::start(async {
             let read = tempfile().unwrap();
             let write = read.try_clone().unwrap();
 
-            write_and_read(File::from_std(write), File::from_std(read)).await;
+            write_and_read(
+                TokioUringFile::from(File::from_std(write)),
+                TokioUringFile::from(File::from_std(read)),
+            )
+            .await;
         });
     }
 }

@@ -3,7 +3,7 @@ pub mod fs;
 
 use tokio_uring::fs::File;
 
-use crate::{Error, IoBuf, IoBufMut, Read, Write};
+use crate::{Error, IoBuf, IoBufMut, Read, Seek, Write};
 
 #[repr(transparent)]
 struct TokioUringBuf<B> {
@@ -35,43 +35,80 @@ where
         self.buf.as_mut_ptr()
     }
 
-    unsafe fn set_init(&mut self, pos: usize) {
-        IoBufMut::set_init(&mut self.buf, pos)
+    unsafe fn set_init(&mut self, _pos: usize) {}
+}
+
+pub struct TokioUringFile {
+    file: Option<File>,
+    pos: u64,
+}
+
+impl From<File> for TokioUringFile {
+    fn from(file: File) -> Self {
+        Self {
+            file: Some(file),
+            pos: 0,
+        }
     }
 }
 
-impl Write for File {
-    async fn write<B: IoBuf>(&mut self, buf: B, pos: u64) -> (Result<usize, Error>, B) {
-        let (result, buf) = self.write_at(TokioUringBuf { buf }, pos).submit().await;
+impl Write for TokioUringFile {
+    async fn write_all<B: IoBuf>(&mut self, buf: B) -> (Result<(), Error>, B) {
+        let (result, buf) = self
+            .file
+            .as_ref()
+            .expect("read file after closed")
+            .write_all_at(TokioUringBuf { buf }, self.pos)
+            .await;
+        self.pos += buf.buf.bytes_init() as u64;
         (result.map_err(Error::from), buf.buf)
     }
 
     async fn sync_data(&self) -> Result<(), Error> {
-        File::sync_data(self).await?;
+        File::sync_data(self.file.as_ref().expect("read file after closed")).await?;
         Ok(())
     }
 
     async fn sync_all(&self) -> Result<(), Error> {
-        File::sync_all(self).await?;
+        File::sync_all(self.file.as_ref().expect("read file after closed")).await?;
         Ok(())
     }
 
-    async fn close(self) -> Result<(), Error> {
-        File::close(self).await?;
+    async fn close(&mut self) -> Result<(), Error> {
+        File::close(self.file.take().expect("close file twice")).await?;
         Ok(())
     }
 }
 
-impl Read for File {
-    async fn read(&mut self, pos: u64, len: Option<u64>) -> Result<impl IoBuf, Error> {
-        let buf = vec![0; len.unwrap_or(0) as usize];
-
-        let (result, buf) = self.read_at(TokioUringBuf { buf }, pos).await;
+impl Read for TokioUringFile {
+    async fn read_exact<B: IoBufMut>(&mut self, buf: B) -> Result<B, Error> {
+        let (result, buf) = self
+            .file
+            .as_ref()
+            .expect("read file after closed")
+            .read_exact_at(TokioUringBuf { buf }, self.pos)
+            .await;
         result?;
+        self.pos += buf.buf.bytes_init() as u64;
 
-        #[cfg(not(feature = "bytes"))]
-        return Ok(buf.buf);
-        #[cfg(feature = "bytes")]
-        return Ok(bytes::Bytes::from(buf.buf));
+        Ok(buf.buf)
+    }
+
+    async fn size(&self) -> Result<u64, Error> {
+        let stat = self
+            .file
+            .as_ref()
+            .expect("read file after closed")
+            .statx()
+            .await?;
+        Ok(stat.stx_size)
+    }
+}
+
+impl Seek for TokioUringFile {
+    async fn seek(&mut self, pos: u64) -> Result<(), Error> {
+        self.pos = pos;
+
+        Ok(())
     }
 }

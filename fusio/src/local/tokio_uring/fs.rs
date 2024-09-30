@@ -1,33 +1,62 @@
-use std::{io, path::Path};
-
 use async_stream::stream;
 use futures_core::Stream;
-use tokio_uring::fs::{remove_file, File};
+use tokio_uring::fs::{create_dir_all, remove_file};
 
-use crate::fs::{FileMeta, Fs};
+use crate::{
+    fs::{FileMeta, Fs, OpenOptions, WriteMode},
+    local::tokio_uring::TokioUringFile,
+    path::{path_to_local, Path},
+    Error,
+};
 
 pub struct TokioUringFs;
 
 impl Fs for TokioUringFs {
-    type File = File;
+    type File = TokioUringFile;
 
-    async fn open(&self, path: impl AsRef<Path>) -> io::Result<Self::File> {
-        File::open(path).await
+    async fn open_options(&self, path: &Path, options: OpenOptions) -> Result<Self::File, Error> {
+        let local_path = path_to_local(path)?;
+
+        let file = tokio_uring::fs::OpenOptions::new()
+            .read(options.read)
+            .write(options.write.is_some())
+            .create(options.create)
+            .append(options.write == Some(WriteMode::Append))
+            .truncate(options.write == Some(WriteMode::Overwrite))
+            .open(&local_path)
+            .await?;
+
+        Ok(TokioUringFile {
+            file: Some(file),
+            pos: 0,
+        })
+    }
+
+    async fn create_dir_all(path: &Path) -> Result<(), Error> {
+        let path = path_to_local(path)?;
+        create_dir_all(path).await?;
+
+        Ok(())
     }
 
     async fn list(
         &self,
-        path: impl AsRef<Path>,
-    ) -> io::Result<impl Stream<Item = io::Result<FileMeta>>> {
-        let dir = path.as_ref().read_dir()?;
+        path: &Path,
+    ) -> Result<impl Stream<Item = Result<FileMeta, Error>>, Error> {
+        let path = path_to_local(path)?;
+        let dir = path.read_dir()?;
+
         Ok(stream! {
             for entry in dir {
-                yield Ok(crate::fs::FileMeta { path: entry?.path() });
+                let entry = entry?;
+                yield Ok(FileMeta { path: Path::from_filesystem_path(entry.path())?, size: entry.metadata()?.len() });
             }
         })
     }
 
-    async fn remove(&self, path: impl AsRef<Path>) -> io::Result<()> {
-        remove_file(path).await
+    async fn remove(&self, path: &Path) -> Result<(), Error> {
+        let path = path_to_local(path)?;
+
+        Ok(remove_file(path).await?)
     }
 }
