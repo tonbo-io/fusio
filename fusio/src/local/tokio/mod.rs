@@ -44,6 +44,11 @@ impl Read for File {
         Ok(buf)
     }
 
+    async fn read_to_end(&mut self, mut buf: Vec<u8>) -> Result<Vec<u8>, Error> {
+        let _ = AsyncReadExt::read_to_end(self, &mut buf).await?;
+        Ok(buf)
+    }
+
     async fn size(&self) -> Result<u64, Error> {
         Ok(self.metadata().await?.len())
     }

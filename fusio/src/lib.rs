@@ -68,14 +68,8 @@ pub trait Read: MaybeSend + MaybeSync {
 
     fn read_to_end(
         &mut self,
-        mut buf: Vec<u8>,
-    ) -> impl Future<Output = Result<Vec<u8>, Error>> + MaybeSend {
-        async move {
-            buf.resize(self.size().await? as usize, 0);
-            let buf = self.read_exact(buf).await?;
-            Ok(buf)
-        }
-    }
+        buf: Vec<u8>,
+    ) -> impl Future<Output = Result<Vec<u8>, Error>> + MaybeSend;
 
     fn size(&self) -> impl Future<Output = Result<u64, Error>> + MaybeSend;
 }
@@ -90,6 +84,11 @@ where
 {
     async fn read_exact<B: IoBufMut>(&mut self, mut buf: B) -> Result<B, Error> {
         std::io::Read::read_exact(self, buf.as_slice_mut())?;
+        Ok(buf)
+    }
+
+    async fn read_to_end(&mut self, mut buf: Vec<u8>) -> Result<Vec<u8>, Error> {
+        let _ = std::io::Read::read_to_end(self, &mut buf)?;
         Ok(buf)
     }
 
@@ -143,6 +142,13 @@ impl<R: Read> Read for &mut R {
         R::read_exact(self, buf)
     }
 
+    fn read_to_end(
+        &mut self,
+        buf: Vec<u8>,
+    ) -> impl Future<Output = Result<Vec<u8>, Error>> + MaybeSend {
+        R::read_to_end(self, buf)
+    }
+
     fn size(&self) -> impl Future<Output = Result<u64, Error>> + MaybeSend {
         R::size(self)
     }
@@ -171,7 +177,9 @@ impl<W: Write> Write for &mut W {
 
 #[cfg(test)]
 mod tests {
-    use super::{Read, Write};
+    use std::future::Future;
+
+    use super::{MaybeSend, Read, Write};
     use crate::{buf::IoBufMut, Error, IoBuf, Seek};
 
     #[allow(unused)]
@@ -229,6 +237,13 @@ mod tests {
         async fn read_exact<B: IoBufMut>(&mut self, buf: B) -> Result<B, Error> {
             self.r
                 .read_exact(buf)
+                .await
+                .inspect(|buf| self.cnt += buf.bytes_init())
+        }
+
+        async fn read_to_end(&mut self, buf: Vec<u8>) -> Result<Vec<u8>, Error> {
+            self.r
+                .read_to_end(buf)
                 .await
                 .inspect(|buf| self.cnt += buf.bytes_init())
         }
