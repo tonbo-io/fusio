@@ -4,9 +4,8 @@ pub mod dynamic;
 mod error;
 #[cfg(feature = "fs")]
 pub mod fs;
-pub mod local;
+pub mod impls;
 pub mod path;
-pub mod remotes;
 
 use std::{future::Future, io::Cursor};
 
@@ -16,6 +15,7 @@ pub use dynamic::fs::DynFs;
 #[cfg(feature = "dyn")]
 pub use dynamic::{DynRead, DynWrite};
 pub use error::Error;
+pub use impls::*;
 
 /// # Safety
 /// Do not implement it directly
@@ -414,7 +414,7 @@ mod tests {
     #[cfg(feature = "tokio")]
     #[tokio::test]
     async fn test_tokio_fs() {
-        use crate::local::TokioFs;
+        use crate::disk::TokioFs;
 
         test_local_fs(TokioFs).await.unwrap();
     }
@@ -425,7 +425,7 @@ mod tests {
         use monoio::fs::File;
         use tempfile::tempfile;
 
-        use crate::local::monoio::MonoioFile;
+        use crate::disk::monoio::MonoioFile;
 
         let read = tempfile().unwrap();
         let write = read.try_clone().unwrap();
@@ -443,7 +443,7 @@ mod tests {
         use tempfile::tempfile;
         use tokio_uring::fs::File;
 
-        use crate::local::tokio_uring::TokioUringFile;
+        use crate::disk::tokio_uring::TokioUringFile;
 
         tokio_uring::start(async {
             let read = tempfile().unwrap();

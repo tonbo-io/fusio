@@ -144,7 +144,7 @@ impl<'a> AwsAuthorizer<'a> {
     /// * Otherwise it is set to the hex encoded SHA256 of the request body
     ///
     /// [AWS SigV4]: https://docs.aws.amazon.com/IAM/latest/UserGuide/create-signed-request.html
-    pub(crate) async fn authorize<B>(&self, request: &mut Request<B>) -> Result<(), AutohrizeError>
+    pub(crate) async fn authorize<B>(&self, request: &mut Request<B>) -> Result<(), AuthorizeError>
     where
         B: Body<Data = Bytes> + Clone + Unpin,
         B::Error: std::error::Error + Send + Sync + 'static,
@@ -157,7 +157,7 @@ impl<'a> AwsAuthorizer<'a> {
         let host = request
             .uri()
             .authority()
-            .ok_or(AutohrizeError::NoHost)?
+            .ok_or(AuthorizeError::NoHost)?
             .as_str()
             .to_string();
         request.headers_mut().insert(HOST, host.parse()?);
@@ -185,7 +185,7 @@ impl<'a> AwsAuthorizer<'a> {
                                 .clone()
                                 .collect()
                                 .await
-                                .map_err(|_| AutohrizeError::BodyNoFrame)?
+                                .map_err(|_| AuthorizeError::BodyNoFrame)?
                                 .to_bytes();
                             hex_digest(&bytes)
                         }
@@ -414,15 +414,15 @@ fn hex_digest(bytes: &[u8]) -> String {
 }
 
 #[derive(Debug, Error)]
-pub enum AutohrizeError {
+pub enum AuthorizeError {
     #[error("Invalid header value: {0}")]
     InvalidHeaderValue(#[from] http::header::InvalidHeaderValue),
     #[error("Invalid URL: {0}")]
     InvalidUrl(#[from] url::ParseError),
     #[error("No host in URL")]
     NoHost,
-    #[error(transparent)]
-    Other(#[from] Box<dyn std::error::Error + Send + Sync + 'static>),
+    #[error("Failed to sign request: {0}")]
+    SignHashFailed(#[from] Box<dyn std::error::Error + Send + Sync + 'static>),
     #[error("Body no frame")]
     BodyNoFrame,
 }

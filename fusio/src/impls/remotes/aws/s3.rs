@@ -9,13 +9,15 @@ use http::{
 use http_body_util::{BodyExt, Empty, Full};
 use percent_encoding::utf8_percent_encode;
 
+use super::S3Error;
 use super::{options::S3Options, STRICT_PATH_ENCODE_SET};
+use crate::remotes::http::HttpError;
 use crate::{
     buf::IoBufMut,
     path::Path,
     remotes::{
         aws::sign::Sign,
-        http::{DynHttpClient, HttpClient as _},
+        http::{DynHttpClient, HttpClient},
     },
     Error, IoBuf, Read, Seek, Write,
 };
@@ -61,26 +63,37 @@ impl Read for S3File {
                     self.pos + buf.as_slice().len() as u64 - 1
                 ),
             )
-            .body(Empty::new())?;
-        request.sign(&self.options).await?;
+            .body(Empty::new())
+            .map_err(|e| S3Error::from(HttpError::from(e)))?;
+        request.sign(&self.options).await.map_err(S3Error::from)?;
 
         let response = self
             .client
             .send_request(request)
             .await
-            .map_err(Error::Other)?;
+            .map_err(S3Error::from)?;
 
         if !response.status().is_success() {
-            Err(Error::Other(
-                format!("failed to read from S3, HTTP status: {}", response.status()).into(),
-            ))
+            return Err(S3Error::from(HttpError::HttpNotSuccess {
+                status: response.status(),
+                body: String::from_utf8_lossy(
+                    &response
+                        .into_body()
+                        .collect()
+                        .await
+                        .map_err(S3Error::from)?
+                        .to_bytes(),
+                )
+                .to_string(),
+            })
+            .into());
         } else {
             std::io::copy(
                 &mut response
                     .into_body()
                     .collect()
                     .await
-                    .map_err(|e| Error::Other(e.into()))?
+                    .map_err(S3Error::from)?
                     .aggregate()
                     .reader(),
                 &mut buf.as_slice_mut(),
@@ -92,23 +105,32 @@ impl Read for S3File {
     }
 
     async fn size(&self) -> Result<u64, Error> {
-        let mut request = self.build_request(Method::HEAD).body(Empty::new())?;
-        request.sign(&self.options).await?;
+        let mut request = self
+            .build_request(Method::HEAD)
+            .body(Empty::new())
+            .map_err(|e| S3Error::from(HttpError::from(e)))?;
+        request.sign(&self.options).await.map_err(S3Error::from)?;
 
         let response = self
             .client
             .send_request(request)
             .await
-            .map_err(Error::Other)?;
+            .map_err(S3Error::from)?;
 
         if !response.status().is_success() {
-            Err(Error::Other(
-                format!(
-                    "failed to get size from S3, HTTP status: {}",
-                    response.status()
+            Err(S3Error::from(HttpError::HttpNotSuccess {
+                status: response.status(),
+                body: String::from_utf8_lossy(
+                    &response
+                        .into_body()
+                        .collect()
+                        .await
+                        .map_err(S3Error::from)?
+                        .to_bytes(),
                 )
-                .into(),
-            ))
+                .to_string(),
+            })
+            .into())
         } else {
             let size = response
                 .headers()
@@ -119,6 +141,51 @@ impl Read for S3File {
                 .parse::<u64>()
                 .map_err(|e| Error::Other(e.into()))?;
             Ok(size)
+        }
+    }
+
+    async fn read_to_end(&mut self, mut buf: Vec<u8>) -> Result<Vec<u8>, Error> {
+        let mut request = self
+            .build_request(Method::GET)
+            .header(RANGE, format!("bytes={}-", self.pos,))
+            .body(Empty::new())
+            .map_err(|e| S3Error::from(HttpError::from(e)))?;
+        request.sign(&self.options).await.map_err(S3Error::from)?;
+
+        let response = self
+            .client
+            .send_request(request)
+            .await
+            .map_err(S3Error::from)?;
+
+        if !response.status().is_success() {
+            return Err(S3Error::from(HttpError::HttpNotSuccess {
+                status: response.status(),
+                body: String::from_utf8_lossy(
+                    &response
+                        .into_body()
+                        .collect()
+                        .await
+                        .map_err(S3Error::from)?
+                        .to_bytes(),
+                )
+                .to_string(),
+            })
+            .into());
+        } else {
+            std::io::copy(
+                &mut response
+                    .into_body()
+                    .collect()
+                    .await
+                    .map_err(S3Error::from)?
+                    .aggregate()
+                    .reader(),
+                &mut buf,
+            )?;
+
+            self.pos += buf.as_slice().len() as u64;
+            Ok(buf)
         }
     }
 }
@@ -171,10 +238,10 @@ impl Write for S3File {
                             )
                         }
                     }
-                    Err(e) => (Err(Error::Other(e)), buf),
+                    Err(e) => (Err(S3Error::from(e).into()), buf),
                 }
             }
-            Err(e) => (Err(e), buf),
+            Err(e) => (Err(S3Error::from(e).into()), buf),
         }
     }
 

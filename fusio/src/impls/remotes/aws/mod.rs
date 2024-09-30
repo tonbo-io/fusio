@@ -1,10 +1,12 @@
 mod credential;
+mod error;
 #[cfg(feature = "fs")]
 pub mod fs;
 pub(crate) mod options;
 mod s3;
 pub(crate) mod sign;
 
+pub use error::S3Error;
 pub use s3::S3File;
 
 const STRICT_ENCODE_SET: percent_encoding::AsciiSet = percent_encoding::NON_ALPHANUMERIC

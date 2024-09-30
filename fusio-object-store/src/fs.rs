@@ -29,7 +29,9 @@ impl<O: ObjectStore> Fs for S3Store<O> {
 
     async fn open_options(&self, path: &Path, options: OpenOptions) -> Result<Self::File, Error> {
         if let Some(WriteMode::Append) = options.write {
-            return Err(Error::Unsupported);
+            return Err(Error::Unsupported {
+                message: "append mode is not supported in Amazon S3".into(),
+            });
         }
         Ok(S3File {
             inner: self.inner.clone(),

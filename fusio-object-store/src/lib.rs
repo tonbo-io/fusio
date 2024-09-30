@@ -13,17 +13,16 @@ pub struct S3File<O: ObjectStore> {
     pos: u64,
 }
 
-impl<O: ObjectStore> Read for S3File<O> {
-    async fn read_exact<B: IoBufMut>(&mut self, mut buf: B) -> Result<B, Error> {
-        let pos = self.pos as usize;
-
-        let mut opts = GetOptions::default();
-        let range = GetRange::Bounded(Range {
-            start: pos,
-            end: pos + buf.bytes_init(),
-        });
-        opts.range = Some(range);
-
+impl<O: ObjectStore> S3File<O> {
+    async fn read_with_range<B: IoBufMut>(
+        &mut self,
+        range: GetRange,
+        mut buf: B,
+    ) -> Result<B, Error> {
+        let opts = GetOptions {
+            range: Some(range),
+            ..Default::default()
+        };
         let result = self
             .inner
             .get_opts(&self.path, opts)
@@ -31,10 +30,30 @@ impl<O: ObjectStore> Read for S3File<O> {
             .map_err(BoxedError::from)?;
         let bytes = result.bytes().await.map_err(BoxedError::from)?;
 
-        self.pos += bytes.len() as u64;
+        buf.set_init(bytes.len());
 
         buf.as_slice_mut().copy_from_slice(&bytes);
         Ok(buf)
+    }
+}
+
+impl<O: ObjectStore> Read for S3File<O> {
+    async fn read_exact<B: IoBufMut>(&mut self, buf: B) -> Result<B, Error> {
+        let pos = self.pos as usize;
+
+        let range = GetRange::Bounded(Range {
+            start: pos,
+            end: pos + buf.bytes_init(),
+        });
+
+        self.read_with_range(range, buf).await
+    }
+
+    async fn read_to_end(&mut self, buf: Vec<u8>) -> Result<Vec<u8>, Error> {
+        let pos = self.pos as usize;
+        let range = GetRange::Offset(pos);
+
+        self.read_with_range(range, buf).await
     }
 
     async fn size(&self) -> Result<u64, Error> {
