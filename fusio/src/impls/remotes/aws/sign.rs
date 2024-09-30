@@ -5,8 +5,7 @@ use http_body::Body;
 use http_body_util::BodyExt;
 use ring::digest::{self, Context};
 
-use super::credential::AuthorizeError;
-use super::{options::S3Options, CHECKSUM_HEADER};
+use super::{credential::AuthorizeError, options::S3Options, CHECKSUM_HEADER};
 use crate::remotes::aws::credential::AwsAuthorizer;
 
 pub(crate) trait Sign {

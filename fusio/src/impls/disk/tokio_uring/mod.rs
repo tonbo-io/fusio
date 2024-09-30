@@ -3,6 +3,8 @@ pub mod fs;
 
 use std::future::Future;
 
+#[cfg(feature = "fs")]
+pub use fs::TokioUringFs;
 use tokio_uring::fs::File;
 
 use crate::{Error, IoBuf, IoBufMut, MaybeSend, Read, Seek, Write};

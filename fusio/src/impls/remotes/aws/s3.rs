@@ -9,15 +9,13 @@ use http::{
 use http_body_util::{BodyExt, Empty, Full};
 use percent_encoding::utf8_percent_encode;
 
-use super::S3Error;
-use super::{options::S3Options, STRICT_PATH_ENCODE_SET};
-use crate::remotes::http::HttpError;
+use super::{options::S3Options, S3Error, STRICT_PATH_ENCODE_SET};
 use crate::{
     buf::IoBufMut,
     path::Path,
     remotes::{
         aws::sign::Sign,
-        http::{DynHttpClient, HttpClient},
+        http::{DynHttpClient, HttpClient, HttpError},
     },
     Error, IoBuf, Read, Seek, Write,
 };

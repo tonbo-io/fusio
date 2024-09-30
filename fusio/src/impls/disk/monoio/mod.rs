@@ -1,11 +1,9 @@
 #[cfg(feature = "fs")]
 pub mod fs;
 
-use std::future::Future;
-
 use monoio::fs::File;
 
-use crate::{buf::IoBufMut, Error, IoBuf, MaybeSend, Read, Seek, Write};
+use crate::{buf::IoBufMut, Error, IoBuf, Read, Seek, Write};
 
 #[repr(transparent)]
 struct MonoioBuf<B> {

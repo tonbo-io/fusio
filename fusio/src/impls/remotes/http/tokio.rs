@@ -3,8 +3,7 @@ use http::{Request, Response};
 use http_body::Body;
 
 use super::{HttpClient, HttpError};
-use crate::error::BoxedError;
-use crate::{MaybeSend, MaybeSync};
+use crate::{error::BoxedError, MaybeSend, MaybeSync};
 
 pub struct TokioClient {
     client: reqwest::Client,

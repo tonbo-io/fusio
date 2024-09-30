@@ -177,9 +177,7 @@ impl<W: Write> Write for &mut W {
 
 #[cfg(test)]
 mod tests {
-    use std::future::Future;
-
-    use super::{MaybeSend, Read, Write};
+    use super::{Read, Write};
     use crate::{buf::IoBufMut, Error, IoBuf, Seek};
 
     #[allow(unused)]
@@ -294,6 +292,7 @@ mod tests {
         }
     }
 
+    #[allow(unused)]
     async fn test_local_fs<S>(fs: S) -> Result<(), Error>
     where
         S: crate::fs::Fs,

@@ -21,7 +21,7 @@ aws = [
 ]
 bytes = ["dep:bytes"]
 completion-based = []
-default = ["aws", "dyn", "fs", "tokio", "tokio-http"]
+default = ["dyn", "fs"]
 dyn = []
 fs = ["tokio?/rt"]
 http = [

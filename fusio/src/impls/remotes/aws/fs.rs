@@ -9,15 +9,13 @@ use http_body_util::{BodyExt, Empty};
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-use super::S3Error;
-use super::{credential::AwsCredential, options::S3Options, S3File};
-use crate::remotes::http::HttpError;
+use super::{credential::AwsCredential, options::S3Options, S3Error, S3File};
 use crate::{
     fs::{FileMeta, Fs, OpenOptions, WriteMode},
     path::Path,
     remotes::{
         aws::sign::Sign,
-        http::{DynHttpClient, HttpClient},
+        http::{DynHttpClient, HttpClient, HttpError},
     },
     Error,
 };
@@ -190,10 +188,7 @@ impl Fs for AmazonS3 {
             .uri(url.as_str())
             .body(Empty::<Bytes>::new())
             .map_err(|e| S3Error::from(HttpError::from(e)))?;
-        request
-            .sign(&self.options)
-            .await
-            .map_err(S3Error::from)?;
+        request.sign(&self.options).await.map_err(S3Error::from)?;
         let response = self
             .client
             .send_request(request)
