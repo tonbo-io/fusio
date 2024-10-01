@@ -6,6 +6,7 @@ pub(crate) mod options;
 mod s3;
 pub(crate) mod sign;
 
+pub use credential::AwsCredential;
 pub use error::S3Error;
 pub use s3::S3File;
 

@@ -39,14 +39,18 @@ impl Write for File {
 }
 
 impl Read for File {
-    async fn read_exact<B: IoBufMut>(&mut self, mut buf: B) -> Result<B, Error> {
-        AsyncReadExt::read_exact(self, buf.as_slice_mut()).await?;
-        Ok(buf)
+    async fn read<B: IoBufMut>(&mut self, mut buf: B) -> (Result<u64, Error>, B) {
+        match AsyncReadExt::read(self, buf.as_slice_mut()).await {
+            Ok(size) => (Ok(size as u64), buf),
+            Err(e) => (Err(Error::Io(e)), buf),
+        }
     }
 
-    async fn read_to_end(&mut self, mut buf: Vec<u8>) -> Result<Vec<u8>, Error> {
-        let _ = AsyncReadExt::read_to_end(self, &mut buf).await?;
-        Ok(buf)
+    async fn read_to_end(&mut self, mut buf: Vec<u8>) -> (Result<(), Error>, Vec<u8>) {
+        match AsyncReadExt::read_to_end(self, &mut buf).await {
+            Ok(_) => (Ok(()), buf),
+            Err(e) => (Err(Error::Io(e)), buf),
+        }
     }
 
     async fn size(&self) -> Result<u64, Error> {
@@ -57,7 +61,6 @@ impl Read for File {
 impl Seek for File {
     async fn seek(&mut self, pos: u64) -> Result<(), Error> {
         AsyncSeekExt::seek(self, SeekFrom::Start(pos)).await?;
-
         Ok(())
     }
 }

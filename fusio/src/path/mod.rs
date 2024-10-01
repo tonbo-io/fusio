@@ -263,6 +263,8 @@ pub fn path_to_local(location: &Path) -> Result<PathBuf, Error> {
 
 #[cfg(test)]
 mod tests {
+    use std::fs::canonicalize;
+
     use tempfile::NamedTempFile;
 
     use super::*;
@@ -513,6 +515,6 @@ mod tests {
         let this_path = Path::from_filesystem_path(temp_file.path()).unwrap();
         let std_path = path_to_local(&this_path).unwrap();
 
-        assert_eq!(std_path, temp_file.path());
+        assert_eq!(std_path, canonicalize(temp_file.path()).unwrap());
     }
 }

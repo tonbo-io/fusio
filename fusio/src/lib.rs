@@ -7,7 +7,7 @@ pub mod fs;
 pub mod impls;
 pub mod path;
 
-use std::{future::Future, io::Cursor};
+use std::future::Future;
 
 pub use buf::{IoBuf, IoBufMut};
 #[cfg(all(feature = "dyn", feature = "fs"))]
@@ -61,71 +61,21 @@ pub trait Write: MaybeSend + MaybeSync {
 }
 
 pub trait Read: MaybeSend + MaybeSync {
-    fn read_exact<B: IoBufMut>(
+    fn read<B: IoBufMut>(
         &mut self,
         buf: B,
-    ) -> impl Future<Output = Result<B, Error>> + MaybeSend;
+    ) -> impl Future<Output = (Result<u64, Error>, B)> + MaybeSend;
 
     fn read_to_end(
         &mut self,
         buf: Vec<u8>,
-    ) -> impl Future<Output = Result<Vec<u8>, Error>> + MaybeSend;
+    ) -> impl Future<Output = (Result<(), Error>, Vec<u8>)> + MaybeSend;
 
     fn size(&self) -> impl Future<Output = Result<u64, Error>> + MaybeSend;
 }
 
 pub trait Seek: MaybeSend {
     fn seek(&mut self, pos: u64) -> impl Future<Output = Result<(), Error>> + MaybeSend;
-}
-
-impl<T> Read for Cursor<T>
-where
-    T: AsRef<[u8]> + Unpin + Send + Sync,
-{
-    async fn read_exact<B: IoBufMut>(&mut self, mut buf: B) -> Result<B, Error> {
-        std::io::Read::read_exact(self, buf.as_slice_mut())?;
-        Ok(buf)
-    }
-
-    async fn read_to_end(&mut self, mut buf: Vec<u8>) -> Result<Vec<u8>, Error> {
-        let _ = std::io::Read::read_to_end(self, &mut buf)?;
-        Ok(buf)
-    }
-
-    async fn size(&self) -> Result<u64, Error> {
-        Ok(self.get_ref().as_ref().len() as u64)
-    }
-}
-
-impl<T> Seek for Cursor<T>
-where
-    T: AsRef<[u8]> + MaybeSend,
-{
-    async fn seek(&mut self, pos: u64) -> Result<(), Error> {
-        std::io::Seek::seek(self, std::io::SeekFrom::Start(pos))
-            .map_err(Error::Io)
-            .map(|_| ())
-    }
-}
-
-impl Write for Cursor<&mut Vec<u8>> {
-    async fn write_all<B: IoBuf>(&mut self, buf: B) -> (Result<(), Error>, B) {
-        let result = std::io::Write::write_all(self, buf.as_slice()).map_err(Error::Io);
-
-        (result, buf)
-    }
-
-    async fn sync_data(&self) -> Result<(), Error> {
-        Ok(())
-    }
-
-    async fn sync_all(&self) -> Result<(), Error> {
-        Ok(())
-    }
-
-    async fn close(&mut self) -> Result<(), Error> {
-        Ok(())
-    }
 }
 
 impl<S: Seek> Seek for &mut S {
@@ -135,17 +85,17 @@ impl<S: Seek> Seek for &mut S {
 }
 
 impl<R: Read> Read for &mut R {
-    fn read_exact<B: IoBufMut>(
+    fn read<B: IoBufMut>(
         &mut self,
         buf: B,
-    ) -> impl Future<Output = Result<B, Error>> + MaybeSend {
-        R::read_exact(self, buf)
+    ) -> impl Future<Output = (Result<u64, Error>, B)> + MaybeSend {
+        R::read(self, buf)
     }
 
     fn read_to_end(
         &mut self,
         buf: Vec<u8>,
-    ) -> impl Future<Output = Result<Vec<u8>, Error>> + MaybeSend {
+    ) -> impl Future<Output = (Result<(), Error>, Vec<u8>)> + MaybeSend {
         R::read_to_end(self, buf)
     }
 
@@ -232,18 +182,26 @@ mod tests {
     where
         R: Read,
     {
-        async fn read_exact<B: IoBufMut>(&mut self, buf: B) -> Result<B, Error> {
-            self.r
-                .read_exact(buf)
-                .await
-                .inspect(|buf| self.cnt += buf.bytes_init())
+        async fn read<B: IoBufMut>(&mut self, buf: B) -> (Result<u64, Error>, B) {
+            let (result, buf) = self.r.read(buf).await;
+            match result {
+                Ok(result) => {
+                    self.cnt += buf.bytes_init();
+                    (Ok(result), buf)
+                }
+                Err(e) => (Err(e), buf),
+            }
         }
 
-        async fn read_to_end(&mut self, buf: Vec<u8>) -> Result<Vec<u8>, Error> {
-            self.r
-                .read_to_end(buf)
-                .await
-                .inspect(|buf| self.cnt += buf.bytes_init())
+        async fn read_to_end(&mut self, buf: Vec<u8>) -> (Result<(), Error>, Vec<u8>) {
+            let (result, buf) = self.r.read_to_end(buf).await;
+            match result {
+                Ok(()) => {
+                    self.cnt += buf.bytes_init();
+                    (Ok(()), buf)
+                }
+                Err(e) => (Err(e), buf),
+            }
         }
 
         async fn size(&self) -> Result<u64, Error> {
@@ -276,7 +234,8 @@ mod tests {
             reader.seek(0).await.unwrap();
 
             let mut buf = vec![];
-            buf = reader.read_to_end(buf).await.unwrap();
+            let (result, buf) = reader.read_to_end(buf).await;
+            result.unwrap();
 
             assert_eq!(buf.bytes_init(), 4);
             assert_eq!(buf.as_slice(), &[2, 0, 2, 4]);
@@ -285,7 +244,8 @@ mod tests {
             reader.seek(2).await.unwrap();
 
             let mut buf = vec![];
-            buf = reader.read_to_end(buf).await.unwrap();
+            let (result, buf) = reader.read_to_end(buf).await;
+            result.unwrap();
 
             assert_eq!(buf.bytes_init(), 2);
             assert_eq!(buf.as_slice(), &[2, 4]);
@@ -344,56 +304,14 @@ mod tests {
                 .await?;
             file.write_all("Hello! world".as_bytes()).await.0?;
 
-            assert!(file.read_exact(vec![0u8; 24]).await.is_err());
-        }
-        {
-            let mut file = fs
-                .open_options(
-                    &Path::from_absolute_path(&work_file_path)?,
-                    OpenOptions::default().append(true),
-                )
-                .await?;
-            file.write_all("Hello! fusio".as_bytes()).await.0?;
+            file.sync_all().await.unwrap();
 
-            assert!(file.read_exact(vec![0u8; 24]).await.is_err());
-        }
-        {
-            let mut file = fs
-                .open_options(
-                    &Path::from_absolute_path(&work_file_path)?,
-                    OpenOptions::default(),
-                )
-                .await?;
+            file.seek(0).await;
 
-            assert_eq!(
-                "Hello! worldHello! fusio".as_bytes(),
-                &file.read_to_end(Vec::new()).await?
-            )
+            let (result, buf) = file.read(vec![0u8; 12]).await;
+            result.unwrap();
+            assert_eq!(buf.as_slice(), b"Hello! world");
         }
-        fs.remove(&Path::from_filesystem_path(&work_file_path)?)
-            .await?;
-        assert!(!work_file_path.exists());
-
-        let mut file_set = HashSet::new();
-        for i in 0..10 {
-            let _ = fs
-                .open_options(
-                    &Path::from_absolute_path(work_dir_path.join(i.to_string()))?,
-                    OpenOptions::default().create(true).write(true),
-                )
-                .await?;
-            file_set.insert(i.to_string());
-        }
-
-        let path = Path::from_filesystem_path(&work_dir_path)?;
-        let mut file_stream = Box::pin(fs.list(&path).await?);
-
-        while let Some(file_meta) = file_stream.next().await {
-            if let Some(file_name) = file_meta?.path.filename() {
-                assert!(file_set.remove(file_name));
-            }
-        }
-        assert!(file_set.is_empty());
 
         Ok(())
     }

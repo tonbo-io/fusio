@@ -8,6 +8,9 @@ pub(crate) mod tokio_uring;
 #[cfg(all(feature = "monoio", feature = "fs"))]
 #[allow(unused)]
 pub use monoio::fs::*;
+#[cfg(all(feature = "monoio", feature = "fs"))]
+#[allow(unused)]
+pub use monoio::MonoioFile;
 #[cfg(all(feature = "tokio", feature = "fs"))]
 #[allow(unused)]
 pub use tokio::fs::*;

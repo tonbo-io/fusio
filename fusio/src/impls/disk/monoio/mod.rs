@@ -81,23 +81,45 @@ impl Write for MonoioFile {
 }
 
 impl Read for MonoioFile {
-    async fn read_exact<B: IoBufMut>(&mut self, buf: B) -> Result<B, Error> {
+    async fn read<B: IoBufMut>(&mut self, buf: B) -> (Result<u64, Error>, B) {
+        let (result, buf) = self
+            .file
+            .as_ref()
+            .expect("read file after closed")
+            .read_at(MonoioBuf { buf }, self.pos)
+            .await;
+
+        match result {
+            Ok(n) => {
+                self.pos += n as u64;
+                (Ok(n as u64), buf.buf)
+            }
+            Err(e) => (Err(Error::from(e)), buf.buf),
+        }
+    }
+
+    async fn read_to_end(&mut self, mut buf: Vec<u8>) -> (Result<(), Error>, Vec<u8>) {
+        match self.size().await {
+            Ok(size) => {
+                buf.resize((size - self.pos) as usize, 0);
+            }
+            Err(e) => return (Err(e), buf),
+        }
+
         let (result, buf) = self
             .file
             .as_ref()
             .expect("read file after closed")
             .read_exact_at(MonoioBuf { buf }, self.pos)
             .await;
-        result?;
-        self.pos += buf.buf.bytes_init() as u64;
 
-        Ok(buf.buf)
-    }
-
-    async fn read_to_end(&mut self, mut buf: Vec<u8>) -> Result<Vec<u8>, Error> {
-        buf.resize((self.size().await? - self.pos) as usize, 0);
-
-        Ok(self.read_exact(buf).await?)
+        match result {
+            Ok(_) => {
+                self.pos += buf.buf.len() as u64;
+                (Ok(()), buf.buf)
+            }
+            Err(e) => (Err(Error::from(e)), buf.buf),
+        }
     }
 
     async fn size(&self) -> Result<u64, Error> {

@@ -18,27 +18,35 @@ impl<O: ObjectStore> S3File<O> {
         &mut self,
         range: GetRange,
         mut buf: B,
-    ) -> Result<B, Error> {
+    ) -> (Result<u64, Error>, B) {
         let opts = GetOptions {
             range: Some(range),
             ..Default::default()
         };
-        let result = self
+        let result = match self
             .inner
             .get_opts(&self.path, opts)
             .await
-            .map_err(BoxedError::from)?;
-        let bytes = result.bytes().await.map_err(BoxedError::from)?;
+            .map_err(BoxedError::from)
+        {
+            Ok(result) => result,
+            Err(e) => return (Err(e.into()), buf),
+        };
+
+        let bytes = match result.bytes().await.map_err(BoxedError::from) {
+            Ok(bytes) => bytes,
+            Err(e) => return (Err(e.into()), buf),
+        };
 
         buf.set_init(bytes.len());
 
         buf.as_slice_mut().copy_from_slice(&bytes);
-        Ok(buf)
+        (Ok(bytes.len() as u64), buf)
     }
 }
 
 impl<O: ObjectStore> Read for S3File<O> {
-    async fn read_exact<B: IoBufMut>(&mut self, buf: B) -> Result<B, Error> {
+    async fn read<B: IoBufMut>(&mut self, buf: B) -> (Result<u64, Error>, B) {
         let pos = self.pos as usize;
 
         let range = GetRange::Bounded(Range {
@@ -49,11 +57,18 @@ impl<O: ObjectStore> Read for S3File<O> {
         self.read_with_range(range, buf).await
     }
 
-    async fn read_to_end(&mut self, buf: Vec<u8>) -> Result<Vec<u8>, Error> {
+    async fn read_to_end(&mut self, buf: Vec<u8>) -> (Result<(), Error>, Vec<u8>) {
         let pos = self.pos as usize;
         let range = GetRange::Offset(pos);
 
-        self.read_with_range(range, buf).await
+        let (result, buf) = self.read_with_range(range, buf).await;
+        match result {
+            Ok(size) => {
+                self.pos += size;
+                (Ok(()), buf)
+            }
+            Err(e) => (Err(e), buf),
+        }
     }
 
     async fn size(&self) -> Result<u64, Error> {
@@ -147,7 +162,8 @@ mod tests {
             result.unwrap();
 
             let mut buf = vec![0_u8; bytes.len()];
-            let buf = store.read_exact(&mut buf[..]).await.unwrap();
+            let (result, buf) = store.read(&mut buf[..]).await;
+            result.unwrap();
             assert_eq!(buf, &bytes[..]);
         }
     }
