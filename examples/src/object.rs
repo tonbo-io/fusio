@@ -1,5 +1,4 @@
-use fusio::dynamic::DynFile;
-use fusio::{Error, IoBuf, IoBufMut, Read, Write};
+use fusio::{dynamic::DynFile, Error, IoBuf, IoBufMut, Read, Write};
 
 #[allow(unused)]
 #[cfg(feature = "tokio")]

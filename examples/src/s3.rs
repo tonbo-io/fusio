@@ -1,9 +1,9 @@
-use std::env;
-use std::sync::Arc;
+use std::{env, sync::Arc};
 
-use fusio::remotes::aws::fs::AmazonS3Builder;
-use fusio::remotes::aws::AwsCredential;
-use fusio::DynFs;
+use fusio::{
+    remotes::aws::{fs::AmazonS3Builder, AwsCredential},
+    DynFs,
+};
 
 use crate::write_without_runtime_awareness;
 

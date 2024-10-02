@@ -1,8 +1,6 @@
 use std::sync::Arc;
 
-use fusio::disk::LocalFs;
-use fusio::dynamic::DynFile;
-use fusio::DynFs;
+use fusio::{disk::LocalFs, dynamic::DynFile, DynFs};
 
 #[allow(unused)]
 async fn use_fs() {
