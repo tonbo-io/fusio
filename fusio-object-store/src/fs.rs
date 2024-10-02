@@ -1,27 +1,37 @@
 use std::sync::Arc;
 
 use async_stream::stream;
-use futures_core::Stream;
-use futures_util::stream::StreamExt;
-use object_store::{aws::AmazonS3, ObjectStore};
-
-use crate::{
+use fusio::{
     fs::{FileMeta, Fs, OpenOptions, WriteMode},
     path::Path,
-    remotes::object_store::S3File,
     Error,
 };
+use futures_core::Stream;
+use futures_util::stream::StreamExt;
+use object_store::ObjectStore;
 
-pub struct S3Store {
-    inner: Arc<AmazonS3>,
+use crate::{BoxedError, S3File};
+
+pub struct S3Store<O: ObjectStore> {
+    inner: Arc<O>,
 }
 
-impl Fs for S3Store {
-    type File = S3File;
+impl<O: ObjectStore> From<O> for S3Store<O> {
+    fn from(inner: O) -> Self {
+        Self {
+            inner: Arc::new(inner),
+        }
+    }
+}
+
+impl<O: ObjectStore> Fs for S3Store<O> {
+    type File = S3File<O>;
 
     async fn open_options(&self, path: &Path, options: OpenOptions) -> Result<Self::File, Error> {
         if let Some(WriteMode::Append) = options.write {
-            return Err(Error::Unsupported);
+            return Err(Error::Unsupported {
+                message: "append mode is not supported in Amazon S3".into(),
+            });
         }
         Ok(S3File {
             inner: self.inner.clone(),
@@ -42,7 +52,7 @@ impl Fs for S3Store {
         let mut stream = self.inner.list(Some(&path));
 
         Ok(stream! {
-            while let Some(meta) = stream.next().await.transpose()? {
+            while let Some(meta) = stream.next().await.transpose().map_err(BoxedError::from)? {
                 yield Ok(FileMeta { path: meta.location.into(), size: meta.size as u64 });
             }
         })
@@ -50,7 +60,7 @@ impl Fs for S3Store {
 
     async fn remove(&self, path: &Path) -> Result<(), Error> {
         let path = path.clone().into();
-        self.inner.delete(&path).await?;
+        self.inner.delete(&path).await.map_err(BoxedError::from)?;
 
         Ok(())
     }

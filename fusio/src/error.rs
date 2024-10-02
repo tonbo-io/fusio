@@ -7,24 +7,17 @@ use thiserror::Error;
 #[non_exhaustive]
 pub enum Error {
     Io(#[from] io::Error),
-    #[cfg(feature = "http")]
-    Http(#[from] http::Error),
-    #[cfg(feature = "object_store")]
-    ObjectStore(#[from] object_store::Error),
-    Path(#[from] crate::path::Error),
-    #[error("unsupported operation")]
-    Unsupported,
+    #[cfg(feature = "aws")]
+    #[error(transparent)]
+    S3Error(#[from] crate::remotes::aws::S3Error),
+    #[error(transparent)]
+    PathError(#[from] crate::path::Error),
+    #[error("unsupported operation: {message}")]
+    Unsupported {
+        message: String,
+    },
     #[error(transparent)]
     Other(#[from] BoxedError),
-    #[error("invalid url: {0}")]
-    InvalidUrl(BoxedError),
-    #[cfg(feature = "http")]
-    #[error("http request failed, status: {status_code}, body: {body}")]
-    HttpNotSuccess {
-        status_code: http::StatusCode,
-        body: String,
-    },
 }
 
-#[allow(unused)]
 pub type BoxedError = Box<dyn std::error::Error + Send + Sync + 'static>;

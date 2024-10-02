@@ -1,0 +1,16 @@
+[package]
+edition.workspace = true
+license.workspace = true
+name = "examples"
+repository.workspace = true
+version = "0.1.0"
+
+[features]
+default = ["fusio/aws", "tokio"]
+monoio = ["dep:monoio", "fusio/monoio"]
+tokio = ["dep:tokio", "fusio/tokio"]
+
+[dependencies]
+fusio = { path = "../fusio" }
+monoio = { version = "0.2", optional = true }
+tokio = { version = "1.0", features = ["full"], optional = true }

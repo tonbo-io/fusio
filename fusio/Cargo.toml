@@ -1,9 +1,10 @@
 [package]
+description = "Fusio provides lean, minimal cost abstraction and extensible Read / Write trait to multiple storage on multiple poll-based / completion-based async runtime."
 edition.workspace = true
 license.workspace = true
 name = "fusio"
 repository.workspace = true
-version = "0.1.0"
+version = "0.1.1"
 
 [features]
 aws = [
@@ -23,7 +24,6 @@ bytes = ["dep:bytes"]
 completion-based = []
 default = ["dyn", "fs"]
 dyn = []
-futures =  ["dep:futures-util"]
 fs = ["tokio?/rt"]
 http = [
     "async-stream",
@@ -38,7 +38,7 @@ http = [
 monoio = ["async-stream", "completion-based", "dep:monoio", "no-send"]
 monoio-http = ["h2", "http", "hyper"]
 no-send = []
-object_store = ["dep:futures-util", "dep:object_store", "tokio"]
+object_store = ["dep:object_store"]
 tokio = ["async-stream", "dep:tokio"]
 tokio-http = ["dep:reqwest", "http"]
 tokio-uring = ["async-stream", "completion-based", "dep:tokio-uring", "no-send"]
@@ -71,17 +71,13 @@ hyper = { version = "1", optional = true, default-features = false, features = [
 ] }
 itertools = { version = "0.13" }
 monoio = { version = "0.2", optional = true, default-features = false }
-object_store = { version = "0.11", optional = true, default-features = false, features = [
-    "aws",
-] }
-percent-encoding = { version = "2" }
+object_store = { version = "0.11", optional = true, default-features = false }
+percent-encoding = { version = "2", default-features = false }
 quick-xml = { version = "0.36", features = [
     "overlapped-lists",
     "serialize",
 ], optional = true }
-reqwest = { git = "https://github.com/seanmonstar/reqwest.git", optional = true, features = [
-    "stream",
-] }
+reqwest = { version = "0.12.8", optional = true }
 ring = { version = "0.17", optional = true, default-features = false, features = [
     "std",
 ] }
@@ -93,14 +89,13 @@ tokio = { version = "1", optional = true, default-features = false, features = [
     "fs",
     "io-util",
 ] }
-url = { version = "2" }
+url = { version = "2", default-features = false }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 tokio-uring = { version = "0.5", default-features = false, optional = true }
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["async_tokio", "html_reports"] }
-futures-executor = "0.3"
 futures-util = { version = "0.3" }
 hyper = { version = "1", features = ["full"] }
 hyper-util = { version = "0.1", features = ["full"] }

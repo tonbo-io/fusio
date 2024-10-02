@@ -2,10 +2,10 @@ use std::{cell::RefCell, io::SeekFrom, rc::Rc, sync::Arc};
 
 use criterion::{criterion_group, criterion_main, Criterion};
 use fusio::{
+    disk::TokioFs,
     fs::{Fs, OpenOptions},
-    local::TokioFs,
     path::Path,
-    IoBuf, IoBufMut, Write,
+    Write,
 };
 use rand::Rng;
 use tempfile::NamedTempFile;
@@ -39,11 +39,8 @@ fn write(c: &mut Criterion) {
             let file = file.clone();
 
             async move {
-                let (result, _) =
-                    fusio::dynamic::DynWrite::write_all(&mut *(*file).borrow_mut(), unsafe {
-                        (&bytes.as_ref()[..]).to_buf_nocopy()
-                    })
-                    .await;
+                let file = &mut *(*file).borrow_mut();
+                let (result, _) = fusio::Write::write_all(file, &bytes.as_ref()[..]).await;
                 result.unwrap();
             }
         })
@@ -96,16 +93,15 @@ fn read(c: &mut Criterion) {
     group.bench_function("fusio read 4K", |b| {
         b.to_async(&runtime).iter(|| {
             let file = file.clone();
+            let mut bytes = [0u8; 4096];
 
             async move {
-                let _ = fusio::dynamic::DynSeek::seek(&mut *(*file).borrow_mut(), 0)
+                fusio::dynamic::DynSeek::seek(&mut *(*file).borrow_mut(), 0)
                     .await
                     .unwrap();
-                let _ = fusio::dynamic::DynRead::read_exact(&mut *(*file).borrow_mut(), unsafe {
-                    vec![0u8; 4096].to_buf_mut_nocopy()
-                })
-                .await
-                .unwrap();
+                let (result, _) =
+                    fusio::Read::read(&mut *(*file).borrow_mut(), &mut bytes[..]).await;
+                result.unwrap();
             }
         })
     });

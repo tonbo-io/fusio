@@ -3,8 +3,8 @@ use futures_core::Stream;
 use tokio_uring::fs::{create_dir_all, remove_file};
 
 use crate::{
+    disk::tokio_uring::TokioUringFile,
     fs::{FileMeta, Fs, OpenOptions, WriteMode},
-    local::tokio_uring::TokioUringFile,
     path::{path_to_local, Path},
     Error,
 };

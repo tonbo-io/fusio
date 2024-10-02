@@ -21,12 +21,12 @@ impl<'seek> Seek for Box<dyn DynFile + 'seek> {
 }
 
 impl<'read> Read for Box<dyn DynFile + 'read> {
-    async fn read_exact<B: IoBufMut>(&mut self, buf: B) -> Result<B, Error> {
-        let buf = DynRead::read_exact(self.as_mut(), unsafe { buf.to_buf_mut_nocopy() }).await?;
-        Ok(unsafe { B::recover_from_buf_mut(buf) })
+    async fn read<B: IoBufMut>(&mut self, buf: B) -> (Result<u64, Error>, B) {
+        let (result, buf) = DynRead::read(self.as_mut(), unsafe { buf.to_buf_mut_nocopy() }).await;
+        (result, unsafe { B::recover_from_buf_mut(buf) })
     }
 
-    async fn read_to_end(&mut self, buf: Vec<u8>) -> Result<Vec<u8>, Error> {
+    async fn read_to_end(&mut self, buf: Vec<u8>) -> (Result<(), Error>, Vec<u8>) {
         DynRead::read_to_end(self.as_mut(), buf).await
     }
 

@@ -9,13 +9,13 @@ use http_body_util::{BodyExt, Empty};
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-use super::{credential::AwsCredential, options::S3Options, S3File};
+use super::{credential::AwsCredential, options::S3Options, S3Error, S3File};
 use crate::{
     fs::{FileMeta, Fs, OpenOptions, WriteMode},
     path::Path,
     remotes::{
         aws::sign::Sign,
-        http::{DynHttpClient, HttpClient},
+        http::{DynHttpClient, HttpClient, HttpError},
     },
     Error,
 };
@@ -30,22 +30,22 @@ pub struct AmazonS3Builder {
 }
 
 impl AmazonS3Builder {
+    #[allow(unused_variables)]
     pub fn new(bucket: String) -> Self {
         cfg_if::cfg_if! {
             if #[cfg(all(feature = "tokio-http", not(feature = "completion-based")))] {
                 let client = Arc::new(crate::remotes::http::tokio::TokioClient::new());
+                Self {
+                    region: "us-east-1".into(),
+                    bucket,
+                    credential: None,
+                    sign_payload: false,
+                    checksum: false,
+                    client,
+                }
             } else {
                 unreachable!()
             }
-        }
-
-        Self {
-            region: "us-east-1".into(),
-            bucket,
-            credential: None,
-            sign_payload: false,
-            checksum: false,
-            client,
         }
     }
 }
@@ -99,7 +99,9 @@ impl Fs for AmazonS3 {
         options: OpenOptions,
     ) -> Result<Self::File, crate::Error> {
         if let Some(WriteMode::Append) = options.write {
-            return Err(Error::Unsupported);
+            return Err(Error::Unsupported {
+                message: "append mode is not supported in Amazon S3".into(),
+            });
         }
 
         Ok(S3File::new(
@@ -126,29 +128,29 @@ impl Fs for AmazonS3 {
                     query.push(("continuation-token", token.as_str()));
                 }
 
-                let mut url = Url::from_str(self.options.endpoint.as_str()).map_err(|e| Error::InvalidUrl(e.into()))?;
+                let mut url = Url::from_str(self.options.endpoint.as_str()).map_err(|e| S3Error::from(HttpError::from(e)))?;
                 {
                     let mut pairs = url.query_pairs_mut();
                     let serializer = serde_urlencoded::Serializer::new(&mut pairs);
                     query
                         .serialize(serializer)
-                        .map_err(|e| Error::InvalidUrl(e.into()))?;
+                        .map_err(|e| S3Error::from(HttpError::from(e)))?;
                 }
 
                 let mut request = Request::builder()
                     .method(Method::GET)
                     .uri(url.as_str())
-                    .body(Empty::<Bytes>::new())?;
-                request.sign(&self.options).await?;
-                let response = self.client.send_request(request).await?;
+                    .body(Empty::<Bytes>::new()).map_err(|e| S3Error::from(HttpError::from(e)))?;
+                request.sign(&self.options).await.map_err(S3Error::from)?;
+                let response = self.client.send_request(request).await.map_err(S3Error::from)?;
 
                 if !response.status().is_success() {
-                    yield Err(Error::HttpNotSuccess { status_code: response.status(), body: String::from_utf8_lossy(
+                    yield Err(S3Error::from(HttpError::HttpNotSuccess { status: response.status(), body: String::from_utf8_lossy(
                         &response
                         .collect()
                         .await
                         .map_err(|e| Error::Other(e.into()))?.to_bytes()).to_string()
-                    });
+                    }).into());
                     return;
                 }
 
@@ -156,9 +158,9 @@ impl Fs for AmazonS3 {
                     response
                     .collect()
                     .await
-                    .map_err(|e| Error::Other(e.into()))?
+                    .map_err(S3Error::from)?
                     .aggregate().reader()
-                ).map_err(|e| Error::Other(e.into()))?;
+                ).map_err(S3Error::from)?;
 
                 next_token = response.next_continuation_token.take();
 
@@ -178,19 +180,24 @@ impl Fs for AmazonS3 {
 
     async fn remove(&self, path: &Path) -> Result<(), Error> {
         let mut url = Url::from_str(self.options.endpoint.as_str())
-            .map_err(|e| Error::InvalidUrl(e.into()))?;
+            .map_err(|e| S3Error::from(HttpError::from(e)))?;
         url.set_path(path.as_ref());
 
         let mut request = Request::builder()
             .method(Method::DELETE)
             .uri(url.as_str())
-            .body(Empty::<Bytes>::new())?;
-        request.sign(&self.options).await?;
-        let response = self.client.send_request(request).await?;
+            .body(Empty::<Bytes>::new())
+            .map_err(|e| S3Error::from(HttpError::from(e)))?;
+        request.sign(&self.options).await.map_err(S3Error::from)?;
+        let response = self
+            .client
+            .send_request(request)
+            .await
+            .map_err(S3Error::from)?;
 
         if !response.status().is_success() {
-            return Err(Error::HttpNotSuccess {
-                status_code: response.status(),
+            return Err(S3Error::from(HttpError::HttpNotSuccess {
+                status: response.status(),
                 body: String::from_utf8_lossy(
                     &response
                         .collect()
@@ -199,7 +206,8 @@ impl Fs for AmazonS3 {
                         .to_bytes(),
                 )
                 .to_string(),
-            });
+            })
+            .into());
         }
 
         Ok(())

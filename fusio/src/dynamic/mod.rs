@@ -7,7 +7,7 @@ use std::{future::Future, pin::Pin};
 pub use fs::{DynFile, DynFs};
 
 use crate::{
-    buf::{Buf, BufMut, IoBufMut},
+    buf::{Buf, BufMut},
     Error, MaybeSend, MaybeSync, Read, Seek, Write,
 };
 
@@ -50,21 +50,15 @@ impl<W: Write> DynWrite for W {
 }
 
 pub trait DynRead: MaybeSend + MaybeSync {
-    fn read_exact(
+    fn read(
         &mut self,
         buf: BufMut,
-    ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<BufMut, Error>> + '_>>;
+    ) -> Pin<Box<dyn MaybeSendFuture<Output = (Result<u64, Error>, BufMut)> + '_>>;
 
     fn read_to_end(
         &mut self,
-        mut buf: Vec<u8>,
-    ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<Vec<u8>, Error>> + '_>> {
-        Box::pin(async move {
-            buf.resize(self.size().await? as usize, 0);
-            let buf = self.read_exact(unsafe { buf.to_buf_mut_nocopy() }).await?;
-            Ok(unsafe { Vec::recover_from_buf_mut(buf) })
-        })
-    }
+        buf: Vec<u8>,
+    ) -> Pin<Box<dyn MaybeSendFuture<Output = (Result<(), Error>, Vec<u8>)> + '_>>;
 
     fn size(&self) -> Pin<Box<dyn MaybeSendFuture<Output = Result<u64, Error>> + '_>>;
 }
@@ -73,14 +67,18 @@ impl<R> DynRead for R
 where
     R: Read,
 {
-    fn read_exact(
+    fn read(
         &mut self,
         buf: BufMut,
-    ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<BufMut, Error>> + '_>> {
-        Box::pin(async move {
-            let buf = R::read_exact(self, buf).await?;
-            Ok(buf)
-        })
+    ) -> Pin<Box<dyn MaybeSendFuture<Output = (Result<u64, Error>, BufMut)> + '_>> {
+        Box::pin(async move { R::read(self, buf).await })
+    }
+
+    fn read_to_end(
+        &mut self,
+        buf: Vec<u8>,
+    ) -> Pin<Box<dyn MaybeSendFuture<Output = (Result<(), Error>, Vec<u8>)> + '_>> {
+        Box::pin(async move { R::read_to_end(self, buf).await })
     }
 
     fn size(&self) -> Pin<Box<dyn MaybeSendFuture<Output = Result<u64, Error>> + '_>> {

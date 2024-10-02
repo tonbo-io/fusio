@@ -40,6 +40,8 @@ pub trait IoBuf: Unpin + Sized + MaybeOwned + MaybeSend {
 }
 
 pub trait IoBufMut: IoBuf {
+    fn set_init(&mut self, init: usize);
+
     fn as_mut_ptr(&mut self) -> *mut u8;
 
     fn as_slice_mut(&mut self) -> &mut [u8] {
@@ -78,6 +80,10 @@ impl IoBuf for Vec<u8> {
 }
 
 impl IoBufMut for Vec<u8> {
+    fn set_init(&mut self, init: usize) {
+        self.resize(init, 0);
+    }
+
     fn as_mut_ptr(&mut self) -> *mut u8 {
         Vec::as_mut_ptr(self)
     }
@@ -146,6 +152,8 @@ impl IoBuf for &mut [u8] {
 
 #[cfg(not(feature = "completion-based"))]
 impl IoBufMut for &mut [u8] {
+    fn set_init(&mut self, _init: usize) {}
+
     fn as_mut_ptr(&mut self) -> *mut u8 {
         <[u8]>::as_mut_ptr(self)
     }
@@ -248,6 +256,10 @@ impl IoBuf for bytes::BytesMut {
 
 #[cfg(feature = "bytes")]
 impl IoBufMut for bytes::BytesMut {
+    fn set_init(&mut self, init: usize) {
+        self.resize(init, 0)
+    }
+
     fn as_mut_ptr(&mut self) -> *mut u8 {
         <[u8]>::as_mut_ptr(self)
     }
@@ -399,6 +411,15 @@ impl IoBuf for BufMut {
 }
 
 impl IoBufMut for BufMut {
+    fn set_init(&mut self, init: usize) {
+        match &mut self.0 {
+            BufMutInner::Slice { .. } => {}
+            BufMutInner::Vec(vec) => vec.set_init(init),
+            #[cfg(feature = "bytes")]
+            BufMutInner::BytesMut(bytes) => bytes.set_init(init),
+        }
+    }
+
     fn as_mut_ptr(&mut self) -> *mut u8 {
         match &mut self.0 {
             BufMutInner::Slice { ptr, .. } => *ptr,
