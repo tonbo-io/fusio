@@ -1,11 +1,11 @@
 # Fusio
 
-`fusio` provides [Read](https://github.com/tonbo-io/fusio/blob/main/fusio/src/lib.rs#L81) and [Write](https://github.com/tonbo-io/fusio/blob/main/fusio/src/lib.rs#L63) traits to operate on multiple storage backends (e.g., local disk, Amazon S3) across various asynchronous runtimes—both poll-based ([tokio](https://github.com/tokio-rs/tokio)) and completion-based ([tokio-uring](https://github.com/tokio-rs/tokio-uring), [monoio](https://github.com/bytedance/monoio))—with:
+`fusio` provides [Read](https://github.com/tonbo-io/fusio/blob/main/fusio/src/lib.rs#L63) and [Write](https://github.com/tonbo-io/fusio/blob/main/fusio/src/lib.rs#L50) traits to operate on multiple storage backends (e.g., local disk, Amazon S3) across various asynchronous runtimes—both poll-based ([tokio](https://github.com/tokio-rs/tokio)) and completion-based ([tokio-uring](https://github.com/tokio-rs/tokio-uring), [monoio](https://github.com/bytedance/monoio))—with:
 - lean: binary size is at least 14× smaller than others.
 - minimal-cost abstraction: compared to bare storage backends, trait definitions allow dispatching file operations without extra overhead.
 - extensible: exposes traits to support implementing storage backends as third-party crates.
 
-> **`fusio` is now at preview version, please join our [community](https://discord.gg/j27XVFVmJM) to attend its development and semantic / behavior discussion.**
+> **`fusio` is now at preview version, please join our [community](https://discord.gg/j27XVFVmJM) to attend its development and semantics / behaviors discussion.**
 
 ## Why do we need `fusio`?
 In developing [Tonbo](https://github.com/tonbo-io/tonbo), we needed a flexible and efficient way to handle file and file system operations across multiple storage backends—such as memory, local disk, and remote object storage. We also required compatibility with various asynchronous runtimes, including both completion-based runtimes and event loops in languages like Python and JavaScript.
@@ -53,7 +53,7 @@ You can freely transmute between them.
 
 ### compare with `object_store`
 
-`object_store` is locked to tokio and also depends on `bytes`. `fusio` uses `IoBuf` / `IoBufMut` to allow `&[u8]` and `Vec<u8>` to avoid potential runtime costs. If you do not need to consider other async runtimes, try `object_store`; as the official implementation, it integrates well with arrow and parquet.
+`object_store` is locked to tokio and also depends on `bytes`. `fusio` uses `IoBuf` / `IoBufMut` to allow `&[u8]` and `Vec<u8>` to avoid potential runtime costs. If you do not need to consider other async runtimes, try `object_store`; as the official implementation, it integrates well with Apache Arrow and Parquet.
 
 ### compare with `opendal`
 
