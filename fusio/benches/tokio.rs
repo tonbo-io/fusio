@@ -5,7 +5,7 @@ use fusio::{
     disk::TokioFs,
     fs::{Fs, OpenOptions},
     path::Path,
-    IoBuf, IoBufMut, Write,
+    Write,
 };
 use rand::Rng;
 use tempfile::NamedTempFile;
