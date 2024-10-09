@@ -38,7 +38,7 @@ http = [
 monoio = ["async-stream", "completion-based", "dep:monoio", "no-send"]
 monoio-http = ["h2", "http", "hyper"]
 no-send = []
-object_store = ["dep:object_store"]
+object_store = ["dep:fusio-object-store", "dep:object_store"]
 tokio = ["async-stream", "dep:tokio"]
 tokio-http = ["dep:reqwest", "http"]
 tokio-uring = ["async-stream", "completion-based", "dep:tokio-uring", "no-send"]
@@ -58,6 +58,7 @@ chrono = { version = "0.4", optional = true, default-features = false, features 
     "now",
     "std",
 ] }
+fusio-object-store = { version = "0.1.1", optional = true }
 futures-core = { version = "0.3" }
 futures-util = { version = "0.3", optional = true, default-features = false }
 h2 = { version = "0.4.6", optional = true }
