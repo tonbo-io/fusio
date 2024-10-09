@@ -66,6 +66,42 @@ pub trait Read: MaybeSend + MaybeSync {
         buf: B,
     ) -> impl Future<Output = (Result<u64, Error>, B)> + MaybeSend;
 
+    fn read_exact<B: IoBufMut>(
+        &mut self,
+        mut buf: B,
+    ) -> impl Future<Output = (Result<(), Error>, B)> + MaybeSend {
+        async move {
+            let len = buf.bytes_init() as u64;
+            let mut read = 0;
+
+            while read < len {
+                let mut buf_mut = unsafe { buf.to_buf_mut_nocopy() };
+                buf_mut.set_start(read as usize);
+                let (result, buf_mut) = self.read(buf_mut).await;
+                buf = unsafe { B::recover_from_buf_mut(buf_mut) };
+
+                match result {
+                    Ok(0) => {
+                        return (
+                            Err(std::io::Error::new(
+                                std::io::ErrorKind::UnexpectedEof,
+                                "failed to fill whole buffer",
+                            )
+                            .into()),
+                            buf,
+                        )
+                    }
+                    Ok(n) => {
+                        read += n;
+                    }
+                    Err(Error::Io(ref e)) if e.kind() == std::io::ErrorKind::Interrupted => {}
+                    Err(e) => return (Err(e), buf),
+                }
+            }
+            (Ok(()), buf)
+        }
+    }
+
     fn read_to_end(
         &mut self,
         buf: Vec<u8>,
@@ -334,6 +370,26 @@ mod tests {
         use crate::disk::TokioFs;
 
         test_local_fs(TokioFs).await.unwrap();
+    }
+
+    #[cfg(feature = "tokio")]
+    #[tokio::test]
+    async fn test_read_exact() {
+        use tempfile::tempfile;
+        use tokio::fs::File;
+
+        let mut file = File::from_std(tempfile().unwrap());
+        let (result, _) = file.write_all(&b"hello, world"[..]).await;
+        result.unwrap();
+        file.seek(0).await.unwrap();
+        let (result, buf) = file.read_exact(vec![0u8; 5]).await;
+        result.unwrap();
+        assert_eq!(buf.as_slice(), b"hello");
+        let (result, _) = file.read_exact(vec![0u8; 8]).await;
+        assert!(result.is_err());
+        if let Error::Io(e) = result.unwrap_err() {
+            assert_eq!(e.kind(), std::io::ErrorKind::UnexpectedEof);
+        }
     }
 
     #[cfg(feature = "monoio")]
