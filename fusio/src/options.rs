@@ -53,7 +53,7 @@ impl FsOptions {
                 if matches!(checksum, Some(true)) {
                     builder = builder.with_checksum_algorithm(object_store::aws::Checksum::SHA256);
                 }
-                Ok(Arc::new(S3Store::new(
+                Ok(Arc::new(S3Store::from(
                     builder.build().map_err(crate::error::BoxedError::from)?,
                 )))
             }
