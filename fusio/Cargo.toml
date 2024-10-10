@@ -38,7 +38,7 @@ http = [
 monoio = ["async-stream", "completion-based", "dep:monoio", "no-send"]
 monoio-http = ["h2", "http", "hyper"]
 no-send = []
-object_store = ["dep:fusio-object-store", "dep:object_store"]
+object_store = ["async-stream", "bytes", "dep:futures-util", "dep:object_store"]
 tokio = ["async-stream", "dep:tokio"]
 tokio-http = ["dep:reqwest", "http"]
 tokio-uring = ["async-stream", "completion-based", "dep:tokio-uring", "no-send"]
@@ -72,7 +72,7 @@ hyper = { version = "1", optional = true, default-features = false, features = [
 ] }
 itertools = { version = "0.13" }
 monoio = { version = "0.2", optional = true, default-features = false }
-object_store = { version = "0.11", optional = true, default-features = false }
+object_store = { version = "0.11", optional = true, features = ["aws"] }
 percent-encoding = { version = "2", default-features = false }
 quick-xml = { version = "0.36", features = [
     "overlapped-lists",
