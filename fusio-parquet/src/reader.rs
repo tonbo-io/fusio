@@ -62,6 +62,9 @@ impl AsyncFileReader for AsyncReader {
 
     fn get_metadata(&mut self) -> BoxFuture<'_, parquet::errors::Result<Arc<ParquetMetaData>>> {
         async move {
+            if self.content_length == 0 {
+                return Err(ParquetError::EOF("empty file".to_string()));
+            }
             let footer_size = self.prefetch_footer_size;
             let mut buf = BytesMut::with_capacity(footer_size);
             buf.resize(footer_size, 0);
