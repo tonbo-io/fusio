@@ -74,7 +74,7 @@ impl AsyncFileReader for AsyncReader {
                 .seek(self.content_length - footer_size as u64)
                 .await
                 .map_err(|err| ParquetError::External(Box::new(err)))?;
-            let (result, prefetched_footer_content) = self.inner.read(buf).await;
+            let (result, prefetched_footer_content) = self.inner.read_exact(buf).await;
             result.map_err(|err| ParquetError::External(Box::new(err)))?;
             let prefetched_footer_slice = prefetched_footer_content.as_ref();
             let prefetched_footer_length = prefetched_footer_slice.len();
@@ -104,7 +104,7 @@ impl AsyncFileReader for AsyncReader {
                 let mut buf = BytesMut::with_capacity(metadata_length);
                 buf.resize(metadata_length, 0);
 
-                let (result, bytes) = self.inner.read(buf).await;
+                let (result, bytes) = self.inner.read_exact(buf).await;
                 result.map_err(|err| ParquetError::External(Box::new(err)))?;
 
                 Ok(Arc::new(decode_metadata(&bytes)?))

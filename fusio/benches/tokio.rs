@@ -100,7 +100,7 @@ fn read(c: &mut Criterion) {
                     .await
                     .unwrap();
                 let (result, _) =
-                    fusio::Read::read(&mut *(*file).borrow_mut(), &mut bytes[..]).await;
+                    fusio::Read::read_exact(&mut *(*file).borrow_mut(), &mut bytes[..]).await;
                 result.unwrap();
             }
         })

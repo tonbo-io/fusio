@@ -344,7 +344,7 @@ mod tests {
 
             file.seek(0).await;
 
-            let (result, buf) = file.read(vec![0u8; 12]).await;
+            let (result, buf) = file.read_exact(vec![0u8; 12]).await;
             result.unwrap();
             assert_eq!(buf.as_slice(), b"Hello! world");
         }
