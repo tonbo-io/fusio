@@ -379,7 +379,7 @@ impl IoBuf for BufMut {
             BufMutInner::Slice { ptr, .. } => unsafe { (*ptr).add(self.start) },
             BufMutInner::Vec(vec) => vec[self.start..].as_ptr(),
             #[cfg(feature = "bytes")]
-            BufMutInner::BytesMut(bytes) => bytes.as_ptr(),
+            BufMutInner::BytesMut(bytes) => bytes[self.start..].as_ptr(),
         }
     }
 
@@ -443,10 +443,10 @@ impl IoBufMut for BufMut {
 
     fn as_mut_ptr(&mut self) -> *mut u8 {
         match &mut self.layout {
-            BufMutInner::Slice { ptr, .. } => *ptr,
-            BufMutInner::Vec(vec) => vec.as_mut_ptr(),
+            BufMutInner::Slice { ptr, .. } => unsafe { (*ptr).add(self.start) },
+            BufMutInner::Vec(vec) => vec[self.start..].as_mut_ptr(),
             #[cfg(feature = "bytes")]
-            BufMutInner::BytesMut(bytes) => bytes.as_mut_ptr(),
+            BufMutInner::BytesMut(bytes) => bytes[self.start..].as_mut_ptr(),
         }
     }
 
