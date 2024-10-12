@@ -5,8 +5,6 @@ mod error;
 #[cfg(feature = "fs")]
 pub mod fs;
 pub mod impls;
-#[cfg(feature = "fs")]
-pub mod options;
 pub mod path;
 
 use std::future::Future;

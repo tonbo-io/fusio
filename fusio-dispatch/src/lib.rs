@@ -1,16 +1,16 @@
 use std::sync::Arc;
 
-use crate::{DynFs, Error};
+use fusio::{DynFs, Error};
 
 #[derive(Clone)]
 #[non_exhaustive]
 pub enum FsOptions {
-    #[cfg(all(feature = "fs", any(feature = "tokio", feature = "monoio")))]
+    #[cfg(any(feature = "tokio", feature = "monoio"))]
     Local,
     #[cfg(feature = "aws")]
     S3 {
         bucket: String,
-        credential: Option<crate::remotes::aws::credential::AwsCredential>,
+        credential: Option<fusio::remotes::aws::AwsCredential>,
         region: Option<String>,
         sign_payload: Option<bool>,
         checksum: Option<bool>,
@@ -20,9 +20,9 @@ pub enum FsOptions {
 impl FsOptions {
     pub fn parse(self) -> Result<Arc<dyn DynFs>, Error> {
         match self {
-            #[cfg(all(feature = "fs", any(feature = "tokio", feature = "monoio")))]
-            FsOptions::Local => Ok(Arc::new(crate::impls::disk::LocalFs {})),
-            #[cfg(all(feature = "aws", feature = "object_store"))]
+            #[cfg(any(feature = "tokio", feature = "monoio"))]
+            FsOptions::Local => Ok(Arc::new(fusio::disk::LocalFs {})),
+            #[cfg(feature = "object_store")]
             FsOptions::S3 {
                 bucket,
                 credential,
@@ -53,9 +53,9 @@ impl FsOptions {
                 if matches!(checksum, Some(true)) {
                     builder = builder.with_checksum_algorithm(object_store::aws::Checksum::SHA256);
                 }
-                Ok(Arc::new(S3Store::new(
-                    builder.build().map_err(crate::error::BoxedError::from)?,
-                )))
+                Ok(Arc::new(S3Store::from(
+                    builder.build().map_err(|e| fusio::Error::Other(e.into()))?,
+                )) as Arc<dyn DynFs>)
             }
             #[cfg(feature = "aws")]
             FsOptions::S3 {
@@ -65,7 +65,7 @@ impl FsOptions {
                 sign_payload,
                 checksum,
             } => {
-                use crate::remotes::aws::fs::AmazonS3Builder;
+                use fusio::remotes::aws::fs::AmazonS3Builder;
 
                 let mut builder = AmazonS3Builder::new(bucket);
 
@@ -83,9 +83,6 @@ impl FsOptions {
                 }
                 Ok(Arc::new(builder.build()))
             }
-            _ => Err(Error::Unsupported {
-                message: "no matching `DynFS`".to_string(),
-            }),
         }
     }
 }

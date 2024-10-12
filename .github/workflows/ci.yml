@@ -47,6 +47,24 @@ jobs:
           command: build
           args: --package fusio --features=tokio-uring
 
+      - name: Run cargo build on fusio-dispatch
+        uses: actions-rs/cargo@v1
+        with:
+          command: build
+          args: --package fusio-dispatch --features=aws,tokio
+
+      - name: Run cargo build on fusio-object-store
+        uses: actions-rs/cargo@v1
+        with:
+          command: build
+          args: --package fusio-object-store
+
+      - name: Run cargo build on fusio-parquet
+        uses: actions-rs/cargo@v1
+        with:
+          command: build
+          args: --package fusio-parquet
+
       - name: Run cargo test on tokio
         uses: actions-rs/cargo@v1
         with:
