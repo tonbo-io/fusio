@@ -30,9 +30,8 @@ impl FsOptions {
                 sign_payload,
                 checksum,
             } => {
+                use fusio_object_store::fs::S3Store;
                 use object_store::aws::AmazonS3Builder;
-
-                use crate::remotes::object_store::fs::S3Store;
 
                 let mut builder = AmazonS3Builder::new().with_bucket_name(bucket);
 
