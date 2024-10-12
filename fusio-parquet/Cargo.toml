@@ -4,11 +4,11 @@ edition.workspace = true
 license.workspace = true
 name = "fusio-parquet"
 repository.workspace = true
-version = "0.1.1"
+version = "0.2.0"
 
 [dependencies]
 bytes = { workspace = true }
-fusio = { version = "0.1", path = "../fusio", features = [
+fusio = { version = "0.2.0", path = "../fusio", features = [
     "bytes",
     "dyn",
     "tokio",
