@@ -24,7 +24,7 @@ impl Fs for MonoIoFs {
                 .write(options.write.is_some())
                 .create(options.create)
                 .append(options.write == Some(WriteMode::Append))
-                .truncate(options.truncate)
+                .truncate(options.write == Some(WriteMode::Truncate))
                 .open(&local_path)
                 .await?,
         ))

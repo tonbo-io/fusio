@@ -1,14 +1,13 @@
 #[derive(PartialEq, Eq)]
 pub enum WriteMode {
     Append,
-    Overwrite,
+    Truncate,
 }
 
 pub struct OpenOptions {
     pub read: bool,
     pub write: Option<WriteMode>,
     pub create: bool,
-    pub truncate: bool,
 }
 
 impl Default for OpenOptions {
@@ -17,7 +16,6 @@ impl Default for OpenOptions {
             read: true,
             write: None,
             create: false,
-            truncate: false,
         }
     }
 }
@@ -29,7 +27,7 @@ impl OpenOptions {
     }
 
     pub fn write(mut self, write: bool) -> Self {
-        self.write = write.then_some(WriteMode::Overwrite);
+        self.write = write.then_some(WriteMode::Truncate);
         self
     }
 
@@ -44,7 +42,7 @@ impl OpenOptions {
     }
 
     pub fn truncate(mut self, truncate: bool) -> Self {
-        self.truncate = truncate;
+        self.write = truncate.then_some(WriteMode::Truncate);
         self
     }
 }
