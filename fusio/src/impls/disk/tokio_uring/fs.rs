@@ -22,7 +22,7 @@ impl Fs for TokioUringFs {
             .write(options.write.is_some())
             .create(options.create)
             .append(options.write == Some(WriteMode::Append))
-            .truncate(options.truncate)
+            .truncate(options.write == Some(WriteMode::Append))
             .open(&local_path)
             .await?;
 
