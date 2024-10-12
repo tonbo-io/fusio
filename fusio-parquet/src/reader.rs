@@ -53,7 +53,7 @@ impl AsyncFileReader for AsyncReader {
                 .seek(range.start as u64)
                 .await
                 .map_err(|err| ParquetError::External(Box::new(err)))?;
-            let (result, buf) = self.inner.read(buf).await;
+            let (result, buf) = self.inner.read_exact(buf).await;
             result.map_err(|err| ParquetError::External(Box::new(err)))?;
             Ok(buf.freeze())
         }
