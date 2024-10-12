@@ -7,7 +7,7 @@ use std::{future::Future, pin::Pin};
 pub use fs::{DynFile, DynFs};
 
 use crate::{
-    buf::{Buf, BufMut},
+    buf::{Slice, SliceMut},
     Error, MaybeSend, MaybeSync, Read, Seek, Write,
 };
 
@@ -18,8 +18,8 @@ impl<F> MaybeSendFuture for F where F: Future + MaybeSend {}
 pub trait DynWrite: MaybeSend + MaybeSync {
     fn write_all(
         &mut self,
-        buf: Buf,
-    ) -> Pin<Box<dyn MaybeSendFuture<Output = (Result<(), Error>, Buf)> + '_>>;
+        buf: Slice,
+    ) -> Pin<Box<dyn MaybeSendFuture<Output = (Result<(), Error>, Slice)> + '_>>;
 
     fn sync_data(&self) -> Pin<Box<dyn MaybeSendFuture<Output = Result<(), Error>> + '_>>;
 
@@ -31,8 +31,8 @@ pub trait DynWrite: MaybeSend + MaybeSync {
 impl<W: Write> DynWrite for W {
     fn write_all(
         &mut self,
-        buf: Buf,
-    ) -> Pin<Box<dyn MaybeSendFuture<Output = (Result<(), Error>, Buf)> + '_>> {
+        buf: Slice,
+    ) -> Pin<Box<dyn MaybeSendFuture<Output = (Result<(), Error>, Slice)> + '_>> {
         Box::pin(W::write_all(self, buf))
     }
 
@@ -52,8 +52,8 @@ impl<W: Write> DynWrite for W {
 pub trait DynRead: MaybeSend + MaybeSync {
     fn read(
         &mut self,
-        buf: BufMut,
-    ) -> Pin<Box<dyn MaybeSendFuture<Output = (Result<u64, Error>, BufMut)> + '_>>;
+        buf: SliceMut,
+    ) -> Pin<Box<dyn MaybeSendFuture<Output = (Result<u64, Error>, SliceMut)> + '_>>;
 
     fn read_to_end(
         &mut self,
@@ -69,8 +69,8 @@ where
 {
     fn read(
         &mut self,
-        buf: BufMut,
-    ) -> Pin<Box<dyn MaybeSendFuture<Output = (Result<u64, Error>, BufMut)> + '_>> {
+        buf: SliceMut,
+    ) -> Pin<Box<dyn MaybeSendFuture<Output = (Result<u64, Error>, SliceMut)> + '_>> {
         Box::pin(async move { R::read(self, buf).await })
     }
 
