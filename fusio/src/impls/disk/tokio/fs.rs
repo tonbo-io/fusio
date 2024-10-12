@@ -26,7 +26,7 @@ impl Fs for TokioFs {
             .write(options.write.is_some())
             .create(options.create)
             .append(options.write == Some(WriteMode::Append))
-            .truncate(options.write == Some(WriteMode::Overwrite))
+            .truncate(options.truncate)
             .open(&local_path)
             .await?)
     }
