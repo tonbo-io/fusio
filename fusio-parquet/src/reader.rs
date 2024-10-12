@@ -1,7 +1,7 @@
 use std::{cmp, ops::Range, sync::Arc};
 
 use bytes::{Bytes, BytesMut};
-use fusio::{dynamic::DynFile, Read};
+use fusio::{dynamic::DynFile, Read, Seek};
 use futures::{future::BoxFuture, FutureExt};
 use parquet::{
     arrow::async_reader::AsyncFileReader,
@@ -28,12 +28,17 @@ fn set_prefetch_footer_size(footer_size: usize, content_size: u64) -> usize {
 }
 
 impl AsyncReader {
-    pub fn new(reader: Box<dyn DynFile>, content_length: u64) -> Self {
-        Self {
+    pub async fn new(
+        mut reader: Box<dyn DynFile>,
+        content_length: u64,
+    ) -> Result<Self, fusio::Error> {
+        reader.seek(0).await?;
+
+        Ok(Self {
             inner: reader,
             content_length,
             prefetch_footer_size: set_prefetch_footer_size(PREFETCH_FOOTER_SIZE, content_length),
-        }
+        })
     }
 
     pub fn with_prefetch_footer_size(mut self, footer_size: usize) -> Self {
@@ -62,6 +67,10 @@ impl AsyncFileReader for AsyncReader {
 
     fn get_metadata(&mut self) -> BoxFuture<'_, parquet::errors::Result<Arc<ParquetMetaData>>> {
         async move {
+            if self.content_length == 0 {
+                return Err(ParquetError::EOF("file empty".to_string()));
+            }
+
             let footer_size = self.prefetch_footer_size;
             let mut buf = BytesMut::with_capacity(footer_size);
             buf.resize(footer_size, 0);
@@ -70,7 +79,7 @@ impl AsyncFileReader for AsyncReader {
                 .seek(self.content_length - footer_size as u64)
                 .await
                 .map_err(|err| ParquetError::External(Box::new(err)))?;
-            let (result, prefetched_footer_content) = self.inner.read(buf).await;
+            let (result, prefetched_footer_content) = self.inner.read_exact(buf).await;
             result.map_err(|err| ParquetError::External(Box::new(err)))?;
             let prefetched_footer_slice = prefetched_footer_content.as_ref();
             let prefetched_footer_length = prefetched_footer_slice.len();
@@ -100,7 +109,7 @@ impl AsyncFileReader for AsyncReader {
                 let mut buf = BytesMut::with_capacity(metadata_length);
                 buf.resize(metadata_length, 0);
 
-                let (result, bytes) = self.inner.read(buf).await;
+                let (result, bytes) = self.inner.read_exact(buf).await;
                 result.map_err(|err| ParquetError::External(Box::new(err)))?;
 
                 Ok(Arc::new(decode_metadata(&bytes)?))
@@ -135,20 +144,28 @@ mod tests {
 
     #[tokio::test]
     async fn test_async_reader_with_prefetch_footer_size() {
-        let reader = AsyncReader::new(Box::new(File::from_std(tempfile().unwrap())), 1024);
+        let reader = AsyncReader::new(Box::new(File::from_std(tempfile().unwrap())), 1024)
+            .await
+            .unwrap();
         assert_eq!(reader.prefetch_footer_size, 1024);
         assert_eq!(reader.content_length, 1024);
 
-        let reader = AsyncReader::new(Box::new(File::from_std(tempfile().unwrap())), 1024 * 1024);
+        let reader = AsyncReader::new(Box::new(File::from_std(tempfile().unwrap())), 1024 * 1024)
+            .await
+            .unwrap();
         assert_eq!(reader.prefetch_footer_size, PREFETCH_FOOTER_SIZE);
         assert_eq!(reader.content_length, 1024 * 1024);
 
         let reader = AsyncReader::new(Box::new(File::from_std(tempfile().unwrap())), 1024 * 1024)
+            .await
+            .unwrap()
             .with_prefetch_footer_size(2048 * 1024);
         assert_eq!(reader.prefetch_footer_size, 1024 * 1024);
         assert_eq!(reader.content_length, 1024 * 1024);
 
         let reader = AsyncReader::new(Box::new(File::from_std(tempfile().unwrap())), 1024 * 1024)
+            .await
+            .unwrap()
             .with_prefetch_footer_size(1);
         assert_eq!(reader.prefetch_footer_size, 8);
         assert_eq!(reader.content_length, 1024 * 1024);
@@ -215,7 +232,9 @@ mod tests {
             let metadata = temp_file_clone.metadata().unwrap();
             let content_len = metadata.len();
             let mut reader =
-                AsyncReader::new(Box::new(File::from_std(temp_file_clone)), content_len);
+                AsyncReader::new(Box::new(File::from_std(temp_file_clone)), content_len)
+                    .await
+                    .unwrap();
             if let Some(footer_size) = case.prefetch {
                 reader = reader.with_prefetch_footer_size(footer_size);
             }

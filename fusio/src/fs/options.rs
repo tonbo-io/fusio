@@ -8,6 +8,7 @@ pub struct OpenOptions {
     pub read: bool,
     pub write: Option<WriteMode>,
     pub create: bool,
+    pub truncate: bool,
 }
 
 impl Default for OpenOptions {
@@ -16,6 +17,7 @@ impl Default for OpenOptions {
             read: true,
             write: None,
             create: false,
+            truncate: false,
         }
     }
 }
@@ -38,6 +40,11 @@ impl OpenOptions {
 
     pub fn append(mut self, append: bool) -> Self {
         self.write = append.then_some(WriteMode::Append);
+        self
+    }
+
+    pub fn truncate(mut self, truncate: bool) -> Self {
+        self.truncate = truncate;
         self
     }
 }

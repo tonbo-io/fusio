@@ -162,7 +162,7 @@ mod tests {
             result.unwrap();
 
             let mut buf = vec![0_u8; bytes.len()];
-            let (result, buf) = store.read(&mut buf[..]).await;
+            let (result, buf) = store.read_exact(&mut buf[..]).await;
             result.unwrap();
             assert_eq!(buf, &bytes[..]);
         }

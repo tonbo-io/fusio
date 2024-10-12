@@ -57,7 +57,7 @@ impl FsOptions {
                     builder.build().map_err(|e| fusio::Error::Other(e.into()))?,
                 )) as Arc<dyn DynFs>)
             }
-            #[cfg(feature = "aws")]
+            #[cfg(all(feature = "aws", not(feature = "object_store")))]
             FsOptions::S3 {
                 bucket,
                 credential,
