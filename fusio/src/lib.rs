@@ -75,8 +75,7 @@ pub trait Read: MaybeSend + MaybeSync {
             let mut read = 0;
 
             while read < len {
-                let mut buf_mut = unsafe { buf.to_buf_mut_nocopy() };
-                buf_mut.set_start(read as usize);
+                let buf_mut = unsafe { buf.slice_mut_unchecked(read as usize..) };
                 let (result, buf_mut) = self.read(buf_mut).await;
                 buf = unsafe { B::recover_from_buf_mut(buf_mut) };
 

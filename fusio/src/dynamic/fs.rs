@@ -22,7 +22,8 @@ impl<'seek> Seek for Box<dyn DynFile + 'seek> {
 
 impl<'read> Read for Box<dyn DynFile + 'read> {
     async fn read<B: IoBufMut>(&mut self, buf: B) -> (Result<u64, Error>, B) {
-        let (result, buf) = DynRead::read(self.as_mut(), unsafe { buf.to_buf_mut_nocopy() }).await;
+        let (result, buf) =
+            DynRead::read(self.as_mut(), unsafe { buf.slice_mut_unchecked(..) }).await;
         (result, unsafe { B::recover_from_buf_mut(buf) })
     }
 
@@ -38,8 +39,8 @@ impl<'read> Read for Box<dyn DynFile + 'read> {
 impl<'write> Write for Box<dyn DynFile + 'write> {
     async fn write_all<B: IoBuf>(&mut self, buf: B) -> (Result<(), Error>, B) {
         let (result, buf) =
-            DynWrite::write_all(self.as_mut(), unsafe { buf.to_buf_nocopy() }).await;
-        (result, unsafe { B::recover_from_buf(buf) })
+            DynWrite::write_all(self.as_mut(), unsafe { buf.slice_unchecked(..) }).await;
+        (result, unsafe { B::recover_from_slice(buf) })
     }
 
     async fn sync_data(&self) -> Result<(), Error> {
@@ -143,7 +144,7 @@ impl<F: Fs> DynFs for F {
 #[cfg(test)]
 mod tests {
 
-    #[cfg(all(feature = "tokio", not(feature = "no-send")))]
+    #[cfg(all(feature = "tokio", not(feature = "completion-based")))]
     #[tokio::test]
     async fn test_dyn_fs() {
         use tempfile::tempfile;
