@@ -1,5 +1,11 @@
 [workspace]
-members = ["examples", "fusio", "fusio-dispatch", "fusio-object-store", "fusio-parquet"]
+members = [
+    "examples",
+    "fusio",
+    "fusio-dispatch",
+    "fusio-object-store",
+    "fusio-parquet",
+]
 resolver = "2"
 
 [workspace.package]

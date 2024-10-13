@@ -45,7 +45,7 @@ tokio-uring = ["async-stream", "completion-based", "dep:tokio-uring", "no-send"]
 [[bench]]
 harness = false
 name = "tokio"
-path = "benches/tokio.rs"
+path = "../benches/tokio.rs"
 required-features = ["tokio"]
 
 [dependencies]
