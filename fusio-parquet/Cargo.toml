@@ -8,7 +8,7 @@ version = "0.2.0"
 
 [dependencies]
 bytes = { workspace = true }
-fusio = { version = "0.2.0", path = "../fusio", features = [
+fusio = { version = "0.2.1", path = "../fusio", features = [
     "bytes",
     "dyn",
     "tokio",
