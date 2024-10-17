@@ -55,6 +55,11 @@ pub trait DynRead: MaybeSend + MaybeSync {
         buf: SliceMut,
     ) -> Pin<Box<dyn MaybeSendFuture<Output = (Result<u64, Error>, SliceMut)> + '_>>;
 
+    fn read_exact(
+        &mut self,
+        buf: SliceMut,
+    ) -> Pin<Box<dyn MaybeSendFuture<Output = (Result<(), Error>, SliceMut)> + '_>>;
+
     fn read_to_end(
         &mut self,
         buf: Vec<u8>,
@@ -72,6 +77,13 @@ where
         buf: SliceMut,
     ) -> Pin<Box<dyn MaybeSendFuture<Output = (Result<u64, Error>, SliceMut)> + '_>> {
         Box::pin(async move { R::read(self, buf).await })
+    }
+
+    fn read_exact(
+        &mut self,
+        buf: SliceMut,
+    ) -> Pin<Box<dyn MaybeSendFuture<Output = (Result<(), Error>, SliceMut)> + '_>> {
+        Box::pin(async move { R::read_exact(self, buf).await })
     }
 
     fn read_to_end(
