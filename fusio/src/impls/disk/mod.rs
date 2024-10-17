@@ -31,3 +31,38 @@ cfg_if::cfg_if! {
         pub type LocalFs = TokioUringFs;
     }
 }
+
+#[cfg(any(feature = "monoio", feature = "tokio-uring"))]
+pub(crate) struct Position {
+    read_pos: u64,
+    write_pos: u64,
+}
+
+#[cfg(any(feature = "monoio", feature = "tokio-uring"))]
+impl Default for Position {
+    fn default() -> Self {
+        Position {
+            read_pos: 0,
+            write_pos: 0,
+        }
+    }
+}
+
+#[cfg(any(feature = "monoio", feature = "tokio-uring"))]
+impl Position {
+    pub(crate) fn write_pos(&self) -> u64 {
+        self.write_pos
+    }
+    pub(crate) fn read_pos(&self) -> u64 {
+        self.read_pos
+    }
+    pub(crate) fn write_accumulation(&mut self, len: u64) {
+        self.write_pos += len;
+    }
+    pub(crate) fn read_accumulation(&mut self, len: u64) {
+        self.read_pos += len;
+    }
+    pub(crate) fn seek(&mut self, pos: u64) {
+        self.read_pos = pos;
+    }
+}

@@ -5,6 +5,7 @@ use futures_core::Stream;
 
 use super::MonoioFile;
 use crate::{
+    disk::Position,
     fs::{FileMeta, Fs, OpenOptions, WriteMode},
     path::{path_to_local, Path},
     Error,
@@ -17,17 +18,22 @@ impl Fs for MonoIoFs {
 
     async fn open_options(&self, path: &Path, options: OpenOptions) -> Result<Self::File, Error> {
         let local_path = path_to_local(path)?;
+        let file = monoio::fs::OpenOptions::new()
+            .read(options.read)
+            .write(options.write.is_some())
+            .create(options.create)
+            .append(options.write == Some(WriteMode::Append))
+            .truncate(options.write == Some(WriteMode::Truncate))
+            .open(&local_path)
+            .await?;
 
-        Ok(MonoioFile::from(
-            monoio::fs::OpenOptions::new()
-                .read(options.read)
-                .write(options.write.is_some())
-                .create(options.create)
-                .append(options.write == Some(WriteMode::Append))
-                .truncate(options.write == Some(WriteMode::Truncate))
-                .open(&local_path)
-                .await?,
-        ))
+        Ok(MonoioFile::from((
+            file,
+            Position {
+                read_pos: 0,
+                write_pos: 0,
+            },
+        )))
     }
 
     async fn create_dir_all(path: &Path) -> Result<(), Error> {

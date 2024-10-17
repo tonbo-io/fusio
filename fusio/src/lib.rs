@@ -397,14 +397,14 @@ mod tests {
         use monoio::fs::File;
         use tempfile::tempfile;
 
-        use crate::disk::monoio::MonoioFile;
+        use crate::disk::{monoio::MonoioFile, Position};
 
         let read = tempfile().unwrap();
         let write = read.try_clone().unwrap();
 
         write_and_read(
-            MonoioFile::from(File::from_std(write).unwrap()),
-            MonoioFile::from(File::from_std(read).unwrap()),
+            MonoioFile::from((File::from_std(write).unwrap(), Position::default())),
+            MonoioFile::from((File::from_std(read).unwrap(), Position::default())),
         )
         .await;
     }
@@ -415,15 +415,15 @@ mod tests {
         use tempfile::tempfile;
         use tokio_uring::fs::File;
 
-        use crate::disk::tokio_uring::TokioUringFile;
+        use crate::disk::{tokio_uring::TokioUringFile, Position};
 
         tokio_uring::start(async {
             let read = tempfile().unwrap();
             let write = read.try_clone().unwrap();
 
             write_and_read(
-                TokioUringFile::from(File::from_std(write)),
-                TokioUringFile::from(File::from_std(read)),
+                TokioUringFile::from((File::from_std(write), Position::default())),
+                TokioUringFile::from((File::from_std(read), Position::default())),
             )
             .await;
         });
