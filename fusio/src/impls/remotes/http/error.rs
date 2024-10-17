@@ -17,6 +17,7 @@ pub enum HttpError {
     Reqwest(#[from] reqwest::Error),
     #[error(transparent)]
     Url(#[from] url::ParseError),
+    #[cfg(feature = "serde_urlencoded")]
     #[error(transparent)]
     UrlEncode(#[from] serde_urlencoded::ser::Error),
     #[error(transparent)]
