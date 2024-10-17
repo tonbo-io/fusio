@@ -6,7 +6,7 @@ pub mod fs;
 pub use fs::TokioUringFs;
 use tokio_uring::fs::File;
 
-use crate::{Error, IoBuf, IoBufMut, Read, Seek, Write};
+use crate::{disk::Position, Error, IoBuf, IoBufMut, Read, Seek, Write};
 
 #[repr(transparent)]
 struct TokioUringBuf<B> {
@@ -43,14 +43,14 @@ where
 
 pub struct TokioUringFile {
     file: Option<File>,
-    pos: u64,
+    pos: Position,
 }
 
-impl From<File> for TokioUringFile {
-    fn from(file: File) -> Self {
+impl From<(File, Position)> for TokioUringFile {
+    fn from((file, pos): (File, Position)) -> Self {
         Self {
             file: Some(file),
-            pos: 0,
+            pos,
         }
     }
 }
@@ -61,9 +61,9 @@ impl Write for TokioUringFile {
             .file
             .as_ref()
             .expect("read file after closed")
-            .write_all_at(TokioUringBuf { buf }, self.pos)
+            .write_all_at(TokioUringBuf { buf }, self.pos.write_pos())
             .await;
-        self.pos += buf.buf.bytes_init() as u64;
+        self.pos.write_accumulation(buf.buf.bytes_init() as u64);
         (result.map_err(Error::from), buf.buf)
     }
 
@@ -89,13 +89,13 @@ impl Read for TokioUringFile {
             .file
             .as_ref()
             .expect("read file after closed")
-            .read_at(TokioUringBuf { buf }, self.pos)
+            .read_at(TokioUringBuf { buf }, self.pos.read_pos())
             .await;
 
         match result {
-            Ok(result) => {
-                self.pos += result as u64;
-                (Ok(result as u64), buf.buf)
+            Ok(n) => {
+                self.pos.read_accumulation(n as u64);
+                (Ok(n as u64), buf.buf)
             }
             Err(err) => (Err(Error::from(err)), buf.buf),
         }
@@ -103,7 +103,7 @@ impl Read for TokioUringFile {
 
     async fn read_to_end(&mut self, mut buf: Vec<u8>) -> (Result<(), Error>, Vec<u8>) {
         match self.size().await {
-            Ok(size) => buf.resize((size - self.pos) as usize, 0),
+            Ok(size) => buf.resize((size - self.pos.read_pos()) as usize, 0),
             Err(err) => return (Err(err), buf),
         }
 
@@ -111,12 +111,12 @@ impl Read for TokioUringFile {
             .file
             .as_ref()
             .expect("read file after closed")
-            .read_exact_at(TokioUringBuf { buf }, self.pos)
+            .read_exact_at(TokioUringBuf { buf }, self.pos.read_pos())
             .await;
 
         match result {
             Ok(()) => {
-                self.pos += buf.buf.len() as u64;
+                self.pos.read_accumulation(buf.buf.len() as u64);
                 (Ok(()), buf.buf)
             }
             Err(err) => (Err(Error::from(err)), buf.buf),
@@ -136,7 +136,7 @@ impl Read for TokioUringFile {
 
 impl Seek for TokioUringFile {
     async fn seek(&mut self, pos: u64) -> Result<(), Error> {
-        self.pos = pos;
+        self.pos.seek(pos);
 
         Ok(())
     }
