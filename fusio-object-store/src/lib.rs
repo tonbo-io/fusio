@@ -38,8 +38,6 @@ impl<O: ObjectStore> S3File<O> {
             Err(e) => return (Err(e.into()), buf),
         };
 
-        buf.set_init(bytes.len());
-
         buf.as_slice_mut().copy_from_slice(&bytes);
         (Ok(bytes.len() as u64), buf)
     }
