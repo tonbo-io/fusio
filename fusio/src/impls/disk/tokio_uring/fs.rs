@@ -3,7 +3,7 @@ use futures_core::Stream;
 use tokio_uring::fs::{create_dir_all, remove_file};
 
 use crate::{
-    disk::tokio_uring::TokioUringFile,
+    disk::{tokio_uring::TokioUringFile, Position},
     fs::{FileMeta, Fs, OpenOptions, WriteMode},
     path::{path_to_local, Path},
     Error,
@@ -26,10 +26,13 @@ impl Fs for TokioUringFs {
             .open(&local_path)
             .await?;
 
-        Ok(TokioUringFile {
-            file: Some(file),
-            pos: 0,
-        })
+        Ok(TokioUringFile::from((
+            file,
+            Position {
+                read_pos: 0,
+                write_pos: 0,
+            },
+        )))
     }
 
     async fn create_dir_all(path: &Path) -> Result<(), Error> {
