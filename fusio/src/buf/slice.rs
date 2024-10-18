@@ -196,15 +196,6 @@ impl IoBuf for SliceMut {
 }
 
 impl IoBufMut for SliceMut {
-    fn set_init(&mut self, init: usize) {
-        match &mut self.layout {
-            SliceMutLayout::Slice { .. } => {}
-            SliceMutLayout::Vec(vec) => vec.set_init(init),
-            #[cfg(feature = "bytes")]
-            SliceMutLayout::BytesMut(bytes) => bytes.set_init(init),
-        }
-    }
-
     fn as_mut_ptr(&mut self) -> *mut u8 {
         match &mut self.layout {
             SliceMutLayout::Slice { ptr, .. } => unsafe { (*ptr).add(self.start) },
