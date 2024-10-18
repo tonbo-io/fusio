@@ -82,7 +82,7 @@ impl Write for S3Writer {
     }
 
     async fn close(&mut self) -> Result<(), Error> {
-        let Some(upload_id) = self.upload_id.take() else {
+        let Some(upload_id) = self.upload_id.clone() else {
             if !self.buf.is_empty() {
                 let bytes = mem::replace(&mut self.buf, BytesMut::new()).freeze();
 
