@@ -6,7 +6,7 @@ use http::{
     request::Builder,
     Method, Request,
 };
-use http_body_util::{BodyExt, Empty, Full};
+use http_body_util::{BodyExt, Empty};
 use percent_encoding::utf8_percent_encode;
 
 use super::{options::S3Options, S3Error, STRICT_PATH_ENCODE_SET};
@@ -14,7 +14,7 @@ use crate::{
     buf::IoBufMut,
     path::Path,
     remotes::{
-        aws::sign::Sign,
+        aws::{multipart_upload::MultipartUpload, sign::Sign, writer::S3Writer},
         http::{DynHttpClient, HttpClient, HttpError},
     },
     Error, IoBuf, Read, Seek, Write,
@@ -26,6 +26,7 @@ pub struct S3File {
     pos: u64,
 
     client: Arc<dyn DynHttpClient>,
+    writer: Option<S3Writer>,
 }
 
 impl S3File {
@@ -35,6 +36,7 @@ impl S3File {
             path,
             pos: 0,
             client,
+            writer: None,
         }
     }
 
@@ -224,50 +226,16 @@ impl Seek for S3File {
 
 impl Write for S3File {
     async fn write_all<B: IoBuf>(&mut self, buf: B) -> (Result<(), Error>, B) {
-        let request = self
-            .build_request(Method::PUT)
-            .header(CONTENT_LENGTH, buf.as_slice().len())
-            .body(Full::new(buf.as_bytes()));
-        if let Err(e) = request {
-            return (Err(Error::Other(e.into())), buf);
-        }
-        let mut request = request.unwrap();
-
-        let result = request.sign(&self.options).await;
-        match result {
-            Ok(_) => {
-                let response = self.client.send_request(request).await;
-                match response {
-                    Ok(response) => {
-                        if response.status().is_success() {
-                            self.pos += buf.as_slice().len() as u64;
-                            (Ok(()), buf)
-                        } else {
-                            (
-                                Err(Error::Other(
-                                    format!(
-                                        "failed to write to S3, HTTP status: {} content: {}",
-                                        response.status(),
-                                        String::from_utf8_lossy(
-                                            &response
-                                                .into_body()
-                                                .collect()
-                                                .await
-                                                .unwrap()
-                                                .to_bytes()
-                                        )
-                                    )
-                                    .into(),
-                                )),
-                                buf,
-                            )
-                        }
-                    }
-                    Err(e) => (Err(S3Error::from(e).into()), buf),
-                }
-            }
-            Err(e) => (Err(S3Error::from(e).into()), buf),
-        }
+        self.writer
+            .get_or_insert_with(|| {
+                S3Writer::new(Arc::new(MultipartUpload::new(
+                    self.options.clone(),
+                    self.path.clone(),
+                    self.client.clone(),
+                )))
+            })
+            .write_all(buf)
+            .await
     }
 
     async fn sync_data(&self) -> Result<(), Error> {
@@ -279,6 +247,10 @@ impl Write for S3File {
     }
 
     async fn close(&mut self) -> Result<(), Error> {
+        if let Some(mut writer) = self.writer.take() {
+            writer.close().await?;
+        }
+
         Ok(())
     }
 }
