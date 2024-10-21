@@ -1,7 +1,7 @@
 use std::{cmp, ops::Range, sync::Arc};
 
 use bytes::{Bytes, BytesMut};
-use fusio::{dynamic::DynFile, Read, Seek};
+use fusio::{dynamic::DynFile, Read};
 use futures::{future::BoxFuture, FutureExt};
 use parquet::{
     arrow::async_reader::AsyncFileReader,
@@ -28,12 +28,7 @@ fn set_prefetch_footer_size(footer_size: usize, content_size: u64) -> usize {
 }
 
 impl AsyncReader {
-    pub async fn new(
-        mut reader: Box<dyn DynFile>,
-        content_length: u64,
-    ) -> Result<Self, fusio::Error> {
-        reader.seek(0).await?;
-
+    pub async fn new(reader: Box<dyn DynFile>, content_length: u64) -> Result<Self, fusio::Error> {
         Ok(Self {
             inner: reader,
             content_length,
@@ -54,11 +49,7 @@ impl AsyncFileReader for AsyncReader {
             let mut buf = BytesMut::with_capacity(len);
             buf.resize(len, 0);
 
-            self.inner
-                .seek(range.start as u64)
-                .await
-                .map_err(|err| ParquetError::External(Box::new(err)))?;
-            let (result, buf) = self.inner.read_exact(buf).await;
+            let (result, buf) = self.inner.read_exact_at(buf, range.start as u64).await;
             result.map_err(|err| ParquetError::External(Box::new(err)))?;
             Ok(buf.freeze())
         }
@@ -75,11 +66,10 @@ impl AsyncFileReader for AsyncReader {
             let mut buf = BytesMut::with_capacity(footer_size);
             buf.resize(footer_size, 0);
 
-            self.inner
-                .seek(self.content_length - footer_size as u64)
-                .await
-                .map_err(|err| ParquetError::External(Box::new(err)))?;
-            let (result, prefetched_footer_content) = self.inner.read_exact(buf).await;
+            let (result, prefetched_footer_content) = self
+                .inner
+                .read_exact_at(buf, self.content_length - footer_size as u64)
+                .await;
             result.map_err(|err| ParquetError::External(Box::new(err)))?;
             let prefetched_footer_slice = prefetched_footer_content.as_ref();
             let prefetched_footer_length = prefetched_footer_slice.len();
@@ -101,15 +91,16 @@ impl AsyncFileReader for AsyncReader {
                     ..(prefetched_footer_length - FOOTER_SIZE)];
                 Ok(Arc::new(decode_metadata(buf)?))
             } else {
-                self.inner
-                    .seek(self.content_length - metadata_length as u64 - FOOTER_SIZE as u64)
-                    .await
-                    .map_err(|err| ParquetError::External(Box::new(err)))?;
-
                 let mut buf = BytesMut::with_capacity(metadata_length);
                 buf.resize(metadata_length, 0);
 
-                let (result, bytes) = self.inner.read_exact(buf).await;
+                let (result, bytes) = self
+                    .inner
+                    .read_exact_at(
+                        buf,
+                        self.content_length - metadata_length as u64 - FOOTER_SIZE as u64,
+                    )
+                    .await;
                 result.map_err(|err| ParquetError::External(Box::new(err)))?;
 
                 Ok(Arc::new(decode_metadata(&bytes)?))

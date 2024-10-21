@@ -5,7 +5,7 @@ use futures_core::Stream;
 
 use super::MonoioFile;
 use crate::{
-    fs::{FileMeta, Fs, OpenOptions, WriteMode},
+    fs::{FileMeta, Fs, OpenOptions},
     path::{path_to_local, Path},
     Error,
 };
@@ -21,10 +21,9 @@ impl Fs for MonoIoFs {
         Ok(MonoioFile::from(
             monoio::fs::OpenOptions::new()
                 .read(options.read)
-                .write(options.write.is_some())
+                .write(options.write)
                 .create(options.create)
-                .append(options.write == Some(WriteMode::Append))
-                .truncate(options.write == Some(WriteMode::Truncate))
+                .truncate(options.truncate)
                 .open(&local_path)
                 .await?,
         ))

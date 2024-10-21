@@ -1,10 +1,11 @@
-use std::{mem, sync::Arc};
+use std::{mem, pin::Pin, sync::Arc};
 
 use bytes::{BufMut, BytesMut};
+use futures_util::{stream::FuturesUnordered, StreamExt};
 use http_body_util::Full;
-use tokio::{task, task::JoinHandle};
 
 use crate::{
+    dynamic::MaybeSendFuture,
     remotes::{aws::multipart_upload::MultipartUpload, serde::MultipartPart},
     Error, IoBuf, Write,
 };
@@ -17,7 +18,8 @@ pub struct S3Writer {
     next_part_numer: usize,
     buf: BytesMut,
 
-    handlers: Vec<JoinHandle<Result<MultipartPart, Error>>>,
+    handlers:
+        FuturesUnordered<Pin<Box<dyn MaybeSendFuture<Output = Result<MultipartPart, Error>>>>>,
 }
 
 impl S3Writer {
@@ -27,7 +29,7 @@ impl S3Writer {
             upload_id: None,
             next_part_numer: 0,
             buf: BytesMut::with_capacity(S3_PART_MINIMUM_SIZE),
-            handlers: vec![],
+            handlers: FuturesUnordered::new(),
         }
     }
 
@@ -48,7 +50,7 @@ impl S3Writer {
 
         let upload = self.inner.clone();
         let bytes = mem::replace(&mut self.buf, fn_bytes_init()).freeze();
-        self.handlers.push(task::spawn(async move {
+        self.handlers.push(Box::pin(async move {
             upload
                 .upload_part(&upload_id, part_num, bytes.len(), Full::new(bytes))
                 .await
@@ -73,15 +75,7 @@ impl Write for S3Writer {
         (Ok(()), buf)
     }
 
-    async fn sync_data(&self) -> Result<(), Error> {
-        Ok(())
-    }
-
-    async fn sync_all(&self) -> Result<(), Error> {
-        Ok(())
-    }
-
-    async fn close(&mut self) -> Result<(), Error> {
+    async fn complete(&mut self) -> Result<(), Error> {
         let Some(upload_id) = self.upload_id.clone() else {
             if !self.buf.is_empty() {
                 let bytes = mem::replace(&mut self.buf, BytesMut::new()).freeze();
@@ -96,8 +90,8 @@ impl Write for S3Writer {
             self.upload_part(BytesMut::new).await?;
         }
         let mut parts = Vec::with_capacity(self.handlers.len());
-        for handle in self.handlers.drain(..) {
-            parts.push(handle.await.map_err(|e| Error::Io(e.into()))??)
+        while let Some(handle) = self.handlers.next().await {
+            parts.push(handle?);
         }
         assert_eq!(self.next_part_numer, parts.len());
         self.inner.complete_part(&upload_id, &parts).await?;
@@ -148,6 +142,6 @@ mod tests {
         result.unwrap();
         let (result, _) = Write::write_all(&mut writer, Bytes::from("hello! World!")).await;
         result.unwrap();
-        Write::close(&mut writer).await.unwrap();
+        writer.complete().await.unwrap();
     }
 }

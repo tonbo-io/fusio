@@ -3,7 +3,7 @@ pub mod fs;
 
 use monoio::fs::File;
 
-use crate::{buf::IoBufMut, Error, IoBuf, Read, Seek, Write};
+use crate::{buf::IoBufMut, Error, IoBuf, Read, Write};
 
 #[repr(transparent)]
 struct MonoioBuf<B> {
@@ -64,44 +64,28 @@ impl Write for MonoioFile {
         (result.map_err(Error::from), buf.buf)
     }
 
-    async fn sync_data(&self) -> Result<(), Error> {
-        File::sync_data(self.file.as_ref().expect("read file after closed")).await?;
-        Ok(())
-    }
-
-    async fn sync_all(&self) -> Result<(), Error> {
-        File::sync_all(self.file.as_ref().expect("read file after closed")).await?;
-        Ok(())
-    }
-
-    async fn close(&mut self) -> Result<(), Error> {
+    async fn complete(&mut self) -> Result<(), Error> {
         File::close(self.file.take().expect("close file twice")).await?;
         Ok(())
     }
 }
 
 impl Read for MonoioFile {
-    async fn read<B: IoBufMut>(&mut self, buf: B) -> (Result<u64, Error>, B) {
+    async fn read_exact_at<B: IoBufMut>(&mut self, buf: B, pos: u64) -> (Result<(), Error>, B) {
         let (result, buf) = self
             .file
             .as_ref()
             .expect("read file after closed")
-            .read_at(MonoioBuf { buf }, self.pos)
+            .read_exact_at(MonoioBuf { buf }, pos)
             .await;
 
-        match result {
-            Ok(n) => {
-                self.pos += n as u64;
-                (Ok(n as u64), buf.buf)
-            }
-            Err(e) => (Err(Error::from(e)), buf.buf),
-        }
+        (result.map_err(Error::from), buf.buf)
     }
 
-    async fn read_to_end(&mut self, mut buf: Vec<u8>) -> (Result<(), Error>, Vec<u8>) {
+    async fn read_to_end_at(&mut self, mut buf: Vec<u8>, pos: u64) -> (Result<(), Error>, Vec<u8>) {
         match self.size().await {
             Ok(size) => {
-                buf.resize((size - self.pos) as usize, 0);
+                buf.resize((size - pos) as usize, 0);
             }
             Err(e) => return (Err(e), buf),
         }
@@ -110,28 +94,17 @@ impl Read for MonoioFile {
             .file
             .as_ref()
             .expect("read file after closed")
-            .read_exact_at(MonoioBuf { buf }, self.pos)
+            .read_exact_at(MonoioBuf { buf }, pos)
             .await;
 
         match result {
-            Ok(_) => {
-                self.pos += buf.buf.len() as u64;
-                (Ok(()), buf.buf)
-            }
+            Ok(_) => (Ok(()), buf.buf),
             Err(e) => (Err(Error::from(e)), buf.buf),
         }
     }
 
-    async fn size(&self) -> Result<u64, Error> {
+    async fn size(&mut self) -> Result<u64, Error> {
         let metadata = File::metadata(self.file.as_ref().expect("read file after closed")).await?;
         Ok(metadata.len())
-    }
-}
-
-impl Seek for MonoioFile {
-    async fn seek(&mut self, pos: u64) -> Result<(), Error> {
-        self.pos = pos;
-
-        Ok(())
     }
 }

@@ -8,7 +8,7 @@ use tokio::{
 };
 
 use crate::{
-    fs::{FileMeta, Fs, OpenOptions, WriteMode},
+    fs::{FileMeta, Fs, OpenOptions},
     path::{path_to_local, Path},
     Error,
 };
@@ -21,14 +21,18 @@ impl Fs for TokioFs {
     async fn open_options(&self, path: &Path, options: OpenOptions) -> Result<Self::File, Error> {
         let local_path = path_to_local(path)?;
 
-        Ok(tokio::fs::OpenOptions::new()
+        let file = tokio::fs::OpenOptions::new()
             .read(options.read)
-            .write(options.write.is_some())
+            .append(options.write)
             .create(options.create)
-            .append(options.write == Some(WriteMode::Append))
-            .truncate(options.write == Some(WriteMode::Truncate))
             .open(&local_path)
-            .await?)
+            .await?;
+
+        if options.truncate {
+            file.set_len(0).await?;
+        }
+
+        Ok(file)
     }
 
     async fn create_dir_all(path: &Path) -> Result<(), Error> {

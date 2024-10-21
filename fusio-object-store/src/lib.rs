@@ -2,15 +2,16 @@ pub mod fs;
 
 use std::{ops::Range, sync::Arc};
 
-use fusio::{Error, IoBuf, IoBufMut, Read, Seek, Write};
-use object_store::{path::Path, GetOptions, GetRange, ObjectStore, PutPayload};
+use fusio::{Error, IoBuf, IoBufMut, Read, Write};
+use object_store::{buffered::BufWriter, path::Path, GetOptions, GetRange, ObjectStore};
+use parquet::arrow::async_writer::{AsyncFileWriter, ParquetObjectWriter};
 
 pub type BoxedError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
 pub struct S3File<O: ObjectStore> {
     inner: Arc<O>,
     path: Path,
-    pos: u64,
+    buf: Option<ParquetObjectWriter>,
 }
 
 impl<O: ObjectStore> S3File<O> {
@@ -18,7 +19,7 @@ impl<O: ObjectStore> S3File<O> {
         &mut self,
         range: GetRange,
         mut buf: B,
-    ) -> (Result<u64, Error>, B) {
+    ) -> (Result<(), Error>, B) {
         let opts = GetOptions {
             range: Some(range),
             ..Default::default()
@@ -39,37 +40,31 @@ impl<O: ObjectStore> S3File<O> {
         };
 
         buf.as_slice_mut().copy_from_slice(&bytes);
-        (Ok(bytes.len() as u64), buf)
+        (Ok(()), buf)
     }
 }
 
 impl<O: ObjectStore> Read for S3File<O> {
-    async fn read<B: IoBufMut>(&mut self, buf: B) -> (Result<u64, Error>, B) {
-        let pos = self.pos as usize;
-
+    async fn read_exact_at<B: IoBufMut>(&mut self, buf: B, pos: u64) -> (Result<(), Error>, B) {
         let range = GetRange::Bounded(Range {
-            start: pos,
-            end: pos + buf.bytes_init(),
+            start: pos as usize,
+            end: pos as usize + buf.bytes_init(),
         });
 
         self.read_with_range(range, buf).await
     }
 
-    async fn read_to_end(&mut self, buf: Vec<u8>) -> (Result<(), Error>, Vec<u8>) {
-        let pos = self.pos as usize;
-        let range = GetRange::Offset(pos);
+    async fn read_to_end_at(&mut self, buf: Vec<u8>, pos: u64) -> (Result<(), Error>, Vec<u8>) {
+        let range = GetRange::Offset(pos as usize);
 
         let (result, buf) = self.read_with_range(range, buf).await;
         match result {
-            Ok(size) => {
-                self.pos += size;
-                (Ok(()), buf)
-            }
+            Ok(_) => (Ok(()), buf),
             Err(e) => (Err(e), buf),
         }
     }
 
-    async fn size(&self) -> Result<u64, Error> {
+    async fn size(&mut self) -> Result<u64, Error> {
         let options = GetOptions {
             head: true,
             ..Default::default()
@@ -83,34 +78,26 @@ impl<O: ObjectStore> Read for S3File<O> {
     }
 }
 
-impl<O: ObjectStore> Seek for S3File<O> {
-    async fn seek(&mut self, pos: u64) -> Result<(), Error> {
-        self.pos = pos;
-        Ok(())
-    }
-}
-
 impl<O: ObjectStore> Write for S3File<O> {
     async fn write_all<B: IoBuf>(&mut self, buf: B) -> (Result<(), Error>, B) {
-        let result = self
-            .inner
-            .put(&self.path, PutPayload::from_bytes(buf.as_bytes()))
-            .await
-            .map(|_| ())
-            .map_err(|e| BoxedError::from(e).into());
+        let buf_writer = match self.buf {
+            Some(ref mut buf) => buf,
+            None => {
+                self.buf = Some(BufWriter::new(self.inner.clone(), self.path.clone()).into());
+                self.buf.as_mut().unwrap()
+            }
+        };
+        if let Err(e) = buf_writer.write(buf.as_bytes()).await {
+            return (Err(Error::Other(e.into())), buf);
+        }
 
-        (result, buf)
+        (Ok(()), buf)
     }
 
-    async fn sync_data(&self) -> Result<(), Error> {
-        Ok(())
-    }
-
-    async fn sync_all(&self) -> Result<(), Error> {
-        Ok(())
-    }
-
-    async fn close(&mut self) -> Result<(), Error> {
+    async fn complete(&mut self) -> Result<(), Error> {
+        if let Some(mut buf) = self.buf.take() {
+            buf.complete().await.map_err(|e| Error::Other(e.into()))?;
+        }
         Ok(())
     }
 }
@@ -154,13 +141,13 @@ mod tests {
             let mut store = S3File {
                 inner: Arc::new(s3),
                 path,
-                pos: 0,
+                buf: None,
             };
             let (result, bytes) = store.write_all(Bytes::from("hello! Fusio!")).await;
             result.unwrap();
 
             let mut buf = vec![0_u8; bytes.len()];
-            let (result, buf) = store.read_exact(&mut buf[..]).await;
+            let (result, buf) = store.read_exact_at(&mut buf[..], 0).await;
             result.unwrap();
             assert_eq!(buf, &bytes[..]);
         }

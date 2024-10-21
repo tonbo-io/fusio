@@ -6,7 +6,7 @@ pub mod fs;
 pub use fs::TokioUringFs;
 use tokio_uring::fs::File;
 
-use crate::{Error, IoBuf, IoBufMut, Read, Seek, Write};
+use crate::{Error, IoBuf, IoBufMut, Read, Write};
 
 #[repr(transparent)]
 struct TokioUringBuf<B> {
@@ -67,63 +67,46 @@ impl Write for TokioUringFile {
         (result.map_err(Error::from), buf.buf)
     }
 
-    async fn sync_data(&self) -> Result<(), Error> {
-        File::sync_data(self.file.as_ref().expect("read file after closed")).await?;
-        Ok(())
-    }
-
-    async fn sync_all(&self) -> Result<(), Error> {
-        File::sync_all(self.file.as_ref().expect("read file after closed")).await?;
-        Ok(())
-    }
-
-    async fn close(&mut self) -> Result<(), Error> {
+    async fn complete(&mut self) -> Result<(), Error> {
         File::close(self.file.take().expect("close file twice")).await?;
         Ok(())
     }
 }
 
 impl Read for TokioUringFile {
-    async fn read<B: IoBufMut>(&mut self, buf: B) -> (Result<u64, Error>, B) {
+    async fn read_exact_at<B: IoBufMut>(&mut self, buf: B, pos: u64) -> (Result<(), Error>, B) {
         let (result, buf) = self
             .file
             .as_ref()
             .expect("read file after closed")
-            .read_at(TokioUringBuf { buf }, self.pos)
+            .read_exact_at(TokioUringBuf { buf }, pos)
             .await;
 
-        match result {
-            Ok(result) => {
-                self.pos += result as u64;
-                (Ok(result as u64), buf.buf)
-            }
-            Err(err) => (Err(Error::from(err)), buf.buf),
-        }
+        (result.map_err(Error::from), buf.buf)
     }
 
-    async fn read_to_end(&mut self, mut buf: Vec<u8>) -> (Result<(), Error>, Vec<u8>) {
+    async fn read_to_end_at(&mut self, mut buf: Vec<u8>, pos: u64) -> (Result<(), Error>, Vec<u8>) {
         match self.size().await {
-            Ok(size) => buf.resize((size - self.pos) as usize, 0),
-            Err(err) => return (Err(err), buf),
+            Ok(size) => {
+                buf.resize((size - pos) as usize, 0);
+            }
+            Err(e) => return (Err(e), buf),
         }
 
         let (result, buf) = self
             .file
             .as_ref()
             .expect("read file after closed")
-            .read_exact_at(TokioUringBuf { buf }, self.pos)
+            .read_exact_at(TokioUringBuf { buf }, pos)
             .await;
 
         match result {
-            Ok(()) => {
-                self.pos += buf.buf.len() as u64;
-                (Ok(()), buf.buf)
-            }
-            Err(err) => (Err(Error::from(err)), buf.buf),
+            Ok(_) => (Ok(()), buf.buf),
+            Err(e) => (Err(Error::from(e)), buf.buf),
         }
     }
 
-    async fn size(&self) -> Result<u64, Error> {
+    async fn size(&mut self) -> Result<u64, Error> {
         let stat = self
             .file
             .as_ref()
@@ -131,13 +114,5 @@ impl Read for TokioUringFile {
             .statx()
             .await?;
         Ok(stat.stx_size)
-    }
-}
-
-impl Seek for TokioUringFile {
-    async fn seek(&mut self, pos: u64) -> Result<(), Error> {
-        self.pos = pos;
-
-        Ok(())
     }
 }

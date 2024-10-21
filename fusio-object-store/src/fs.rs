@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use async_stream::stream;
 use fusio::{
-    fs::{FileMeta, Fs, OpenOptions, WriteMode},
+    fs::{FileMeta, Fs, OpenOptions},
     path::Path,
     Error,
 };
@@ -28,7 +28,7 @@ impl<O: ObjectStore> Fs for S3Store<O> {
     type File = S3File<O>;
 
     async fn open_options(&self, path: &Path, options: OpenOptions) -> Result<Self::File, Error> {
-        if let Some(WriteMode::Append) = options.write {
+        if !options.truncate {
             return Err(Error::Unsupported {
                 message: "append mode is not supported in Amazon S3".into(),
             });
@@ -36,7 +36,7 @@ impl<O: ObjectStore> Fs for S3Store<O> {
         Ok(S3File {
             inner: self.inner.clone(),
             path: path.clone().into(),
-            pos: 0,
+            buf: None,
         })
     }
 

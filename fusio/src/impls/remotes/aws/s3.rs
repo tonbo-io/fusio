@@ -17,13 +17,12 @@ use crate::{
         aws::{multipart_upload::MultipartUpload, sign::Sign, writer::S3Writer},
         http::{DynHttpClient, HttpClient, HttpError},
     },
-    Error, IoBuf, Read, Seek, Write,
+    Error, IoBuf, Read, Write,
 };
 
 pub struct S3File {
     options: Arc<S3Options>,
     path: Path,
-    pos: u64,
 
     client: Arc<dyn DynHttpClient>,
     writer: Option<S3Writer>,
@@ -34,7 +33,6 @@ impl S3File {
         Self {
             options,
             path,
-            pos: 0,
             client,
             writer: None,
         }
@@ -52,16 +50,12 @@ impl S3File {
 }
 
 impl Read for S3File {
-    async fn read<B: IoBufMut>(&mut self, mut buf: B) -> (Result<u64, Error>, B) {
+    async fn read_exact_at<B: IoBufMut>(&mut self, mut buf: B, pos: u64) -> (Result<(), Error>, B) {
         let request = self
             .build_request(Method::GET)
             .header(
                 RANGE,
-                format!(
-                    "bytes={}-{}",
-                    self.pos,
-                    self.pos + buf.as_slice().len() as u64 - 1
-                ),
+                format!("bytes={}-{}", pos, pos + buf.as_slice().len() as u64 - 1),
             )
             .body(Empty::new())
             .map_err(|e| S3Error::from(HttpError::from(e)));
@@ -115,13 +109,11 @@ impl Read for S3File {
                 Err(e) => return (Err(e.into()), buf),
             }
 
-            let size = buf.as_slice().len() as u64;
-            self.pos += size;
-            (Ok(size), buf)
+            (Ok(()), buf)
         }
     }
 
-    async fn size(&self) -> Result<u64, Error> {
+    async fn size(&mut self) -> Result<u64, Error> {
         let mut request = self
             .build_request(Method::HEAD)
             .body(Empty::new())
@@ -161,10 +153,10 @@ impl Read for S3File {
         }
     }
 
-    async fn read_to_end(&mut self, mut buf: Vec<u8>) -> (Result<(), Error>, Vec<u8>) {
+    async fn read_to_end_at(&mut self, mut buf: Vec<u8>, pos: u64) -> (Result<(), Error>, Vec<u8>) {
         let mut request = match self
             .build_request(Method::GET)
-            .header(RANGE, format!("bytes={}-", self.pos,))
+            .header(RANGE, format!("bytes={}-", pos))
             .body(Empty::new())
             .map_err(|e| S3Error::from(HttpError::from(e)))
         {
@@ -217,13 +209,6 @@ impl Read for S3File {
     }
 }
 
-impl Seek for S3File {
-    async fn seek(&mut self, pos: u64) -> Result<(), Error> {
-        self.pos = pos;
-        Ok(())
-    }
-}
-
 impl Write for S3File {
     async fn write_all<B: IoBuf>(&mut self, buf: B) -> (Result<(), Error>, B) {
         self.writer
@@ -238,19 +223,10 @@ impl Write for S3File {
             .await
     }
 
-    async fn sync_data(&self) -> Result<(), Error> {
-        Ok(())
-    }
-
-    async fn sync_all(&self) -> Result<(), Error> {
-        Ok(())
-    }
-
-    async fn close(&mut self) -> Result<(), Error> {
+    async fn complete(&mut self) -> Result<(), Error> {
         if let Some(mut writer) = self.writer.take() {
-            writer.close().await?;
+            writer.complete().await?;
         }
-
         Ok(())
     }
 }
@@ -267,7 +243,7 @@ mod tests {
                 aws::{credential::AwsCredential, options::S3Options, s3::S3File},
                 http::tokio::TokioClient,
             },
-            Read, Seek, Write,
+            Read, Write,
         };
 
         if env::var("AWS_ACCESS_KEY_ID").is_err() {
@@ -300,12 +276,10 @@ mod tests {
             .await;
         result.unwrap();
 
-        s3.seek(0).await.unwrap();
-
         let size = s3.size().await.unwrap();
         assert_eq!(size, 42);
         let buf = Vec::new();
-        let (result, buf) = s3.read_to_end(buf).await;
+        let (result, buf) = s3.read_to_end_at(buf, 0).await;
         result.unwrap();
         assert_eq!(buf, b"The answer of life, universe and everthing");
     }

@@ -11,7 +11,7 @@ use url::Url;
 
 use super::{credential::AwsCredential, options::S3Options, S3Error, S3File};
 use crate::{
-    fs::{FileMeta, Fs, OpenOptions, WriteMode},
+    fs::{FileMeta, Fs, OpenOptions},
     path::Path,
     remotes::{
         aws::sign::Sign,
@@ -98,7 +98,7 @@ impl Fs for AmazonS3 {
         path: &Path,
         options: OpenOptions,
     ) -> Result<Self::File, crate::Error> {
-        if let Some(WriteMode::Append) = options.write {
+        if !options.truncate {
             return Err(Error::Unsupported {
                 message: "append mode is not supported in Amazon S3".into(),
             });
