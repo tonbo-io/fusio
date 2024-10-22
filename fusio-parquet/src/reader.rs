@@ -7,8 +7,7 @@ use parquet::{
     arrow::async_reader::AsyncFileReader,
     errors::ParquetError,
     file::{
-        footer::{decode_footer, decode_metadata},
-        metadata::ParquetMetaData,
+        metadata::{ParquetMetaData, ParquetMetaDataReader},
         FOOTER_SIZE,
     },
 };
@@ -79,7 +78,7 @@ impl AsyncFileReader for AsyncReader {
                 let buf = &prefetched_footer_slice
                     [(prefetched_footer_length - FOOTER_SIZE)..prefetched_footer_length];
                 debug_assert!(buf.len() == FOOTER_SIZE);
-                decode_footer(buf.try_into().unwrap())?
+                ParquetMetaDataReader::decode_footer(buf.try_into().unwrap())?
             };
 
             // Try to read the metadata from the `prefetched_footer_content`.
@@ -89,7 +88,7 @@ impl AsyncFileReader for AsyncReader {
                     - metadata_length
                     - FOOTER_SIZE)
                     ..(prefetched_footer_length - FOOTER_SIZE)];
-                Ok(Arc::new(decode_metadata(buf)?))
+                Ok(Arc::new(ParquetMetaDataReader::decode_metadata(buf)?))
             } else {
                 let mut buf = BytesMut::with_capacity(metadata_length);
                 buf.resize(metadata_length, 0);
@@ -103,7 +102,7 @@ impl AsyncFileReader for AsyncReader {
                     .await;
                 result.map_err(|err| ParquetError::External(Box::new(err)))?;
 
-                Ok(Arc::new(decode_metadata(&bytes)?))
+                Ok(Arc::new(ParquetMetaDataReader::decode_metadata(&bytes)?))
             }
         }
         .boxed()

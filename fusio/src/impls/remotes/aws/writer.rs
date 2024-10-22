@@ -33,10 +33,10 @@ impl S3Writer {
         }
     }
 
-    async fn upload_part<F: FnOnce() -> BytesMut>(
-        &mut self,
-        fn_bytes_init: F,
-    ) -> Result<(), Error> {
+    async fn upload_part<F>(&mut self, fn_bytes_init: F) -> Result<(), Error>
+    where
+        F: FnOnce() -> BytesMut,
+    {
         let upload_id = match self.upload_id.clone() {
             None => {
                 let upload_id = Arc::new(self.inner.initiate().await?);
