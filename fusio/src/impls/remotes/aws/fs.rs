@@ -106,11 +106,7 @@ pub(super) struct AmazonS3Inner {
 impl Fs for AmazonS3 {
     type File = S3File;
 
-    async fn open_options(
-        &self,
-        path: &Path,
-        _: OpenOptions,
-    ) -> Result<Self::File, crate::Error> {
+    async fn open_options(&self, path: &Path, _: OpenOptions) -> Result<Self::File, crate::Error> {
         Ok(S3File::new(self.clone(), path.clone()))
     }
 
@@ -145,7 +141,7 @@ impl Fs for AmazonS3 {
                     .uri(url.as_str())
                     .body(Empty::<Bytes>::new()).map_err(|e| S3Error::from(HttpError::from(e)))?;
                 request.sign(&self.as_ref().options).await.map_err(S3Error::from)?;
-                let response = self.as_ref().client.as_ref().send_request(request).await.map_err(S3Error::from)?;
+                let response = self.as_ref().client.send_request(request).await.map_err(S3Error::from)?;
 
                 if !response.status().is_success() {
                     yield Err(S3Error::from(HttpError::HttpNotSuccess { status: response.status(), body: String::from_utf8_lossy(
@@ -198,7 +194,6 @@ impl Fs for AmazonS3 {
         let response = self
             .as_ref()
             .client
-            .as_ref()
             .send_request(request)
             .await
             .map_err(S3Error::from)?;
