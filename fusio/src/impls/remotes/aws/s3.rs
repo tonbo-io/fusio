@@ -74,7 +74,6 @@ impl Read for S3File {
             .fs
             .as_ref()
             .client
-            .as_ref()
             .send_request(request)
             .await
             .map_err(S3Error::from)
@@ -140,7 +139,6 @@ impl Read for S3File {
             .fs
             .as_ref()
             .client
-            .as_ref()
             .send_request(request)
             .await
             .map_err(S3Error::from)
@@ -193,7 +191,6 @@ impl Read for S3File {
             .fs
             .as_ref()
             .client
-            .as_ref()
             .send_request(request)
             .await
             .map_err(S3Error::from)?;
@@ -269,7 +266,7 @@ mod tests {
                     options::S3Options,
                     s3::S3File,
                 },
-                http::{tokio::TokioClient, DynHttpClient, HttpClient},
+                http::{tokio::TokioClient, DynHttpClient},
             },
             Read, Write,
         };

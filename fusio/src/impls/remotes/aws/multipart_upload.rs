@@ -61,7 +61,6 @@ impl MultipartUpload {
             .fs
             .as_ref()
             .client
-            .as_ref()
             .send_request(request)
             .await
             .map_err(|e| Error::S3Error(S3Error::from(e)))?;

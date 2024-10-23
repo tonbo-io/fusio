@@ -67,7 +67,7 @@ where
     }
 }
 
-impl<'client> HttpClient for &'client dyn DynHttpClient {
+impl HttpClient for Box<dyn DynHttpClient> {
     type RespBody = BoxBody;
 
     async fn send_request<B>(
@@ -87,7 +87,7 @@ impl<'client> HttpClient for &'client dyn DynHttpClient {
                     .map_err(|e| HttpError::from(e.into() as BoxedError)),
             ),
         );
-        let response = self.dyn_send_request(request).await?;
+        let response = self.as_ref().dyn_send_request(request).await?;
         Ok(response)
     }
 }

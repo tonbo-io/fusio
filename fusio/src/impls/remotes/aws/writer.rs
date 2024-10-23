@@ -138,12 +138,12 @@ mod tests {
             Write,
         };
 
-        let region = "ap-southeast-2";
+        let region = "ap-southeast-1";
         let options = S3Options {
-            endpoint: "endpoint".into(),
+            endpoint: "https://fusio-test.s3.ap-southeast-1.amazonaws.com".into(),
             credential: Some(AwsCredential {
                 key_id: "key".to_string(),
-                secret_key: "secret_key".to_string(),
+                secret_key: "secret".to_string(),
                 token: None,
             }),
             region: region.into(),
