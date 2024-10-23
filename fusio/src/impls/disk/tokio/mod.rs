@@ -22,7 +22,11 @@ impl Write for File {
         )
     }
 
-    async fn complete(&mut self) -> Result<(), Error> {
+    async fn flush(&mut self) -> Result<(), Error> {
+        AsyncWriteExt::flush(self).await.map_err(Error::from)
+    }
+
+    async fn close(&mut self) -> Result<(), Error> {
         AsyncWriteExt::flush(self).await.map_err(Error::from)?;
         File::shutdown(self).await?;
         Ok(())
@@ -52,7 +56,7 @@ impl Read for File {
         }
     }
 
-    async fn size(&mut self) -> Result<u64, Error> {
+    async fn size(&self) -> Result<u64, Error> {
         Ok(self.metadata().await?.len())
     }
 }

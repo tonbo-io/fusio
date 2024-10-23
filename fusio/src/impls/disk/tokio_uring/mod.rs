@@ -67,7 +67,16 @@ impl Write for TokioUringFile {
         (result.map_err(Error::from), buf.buf)
     }
 
-    async fn complete(&mut self) -> Result<(), Error> {
+    async fn flush(&mut self) -> Result<(), Error> {
+        self.file
+            .as_ref()
+            .expect("flush file after closed")
+            .sync_all()
+            .await?;
+        Ok(())
+    }
+
+    async fn close(&mut self) -> Result<(), Error> {
         File::close(self.file.take().expect("close file twice")).await?;
         Ok(())
     }
@@ -106,7 +115,7 @@ impl Read for TokioUringFile {
         }
     }
 
-    async fn size(&mut self) -> Result<u64, Error> {
+    async fn size(&self) -> Result<u64, Error> {
         let stat = self
             .file
             .as_ref()

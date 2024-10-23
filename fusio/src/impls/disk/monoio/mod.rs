@@ -64,7 +64,12 @@ impl Write for MonoioFile {
         (result.map_err(Error::from), buf.buf)
     }
 
-    async fn complete(&mut self) -> Result<(), Error> {
+    async fn flush(&mut self) -> Result<(), Error> {
+        File::sync_all(self.file.as_ref().expect("read file after closed")).await?;
+        Ok(())
+    }
+
+    async fn close(&mut self) -> Result<(), Error> {
         File::close(self.file.take().expect("close file twice")).await?;
         Ok(())
     }
@@ -103,7 +108,7 @@ impl Read for MonoioFile {
         }
     }
 
-    async fn size(&mut self) -> Result<u64, Error> {
+    async fn size(&self) -> Result<u64, Error> {
         let metadata = File::metadata(self.file.as_ref().expect("read file after closed")).await?;
         Ok(metadata.len())
     }

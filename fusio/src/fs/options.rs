@@ -28,6 +28,7 @@ impl OpenOptions {
     }
 
     pub fn create(mut self, create: bool) -> Self {
+        self = self.write(true);
         self.create = create;
         self
     }

@@ -53,10 +53,12 @@ pub trait Write: MaybeSend {
         buf: B,
     ) -> impl Future<Output = (Result<(), Error>, B)> + MaybeSend;
 
-    fn complete(&mut self) -> impl Future<Output = Result<(), Error>> + MaybeSend;
+    fn flush(&mut self) -> impl Future<Output = Result<(), Error>> + MaybeSend;
+
+    fn close(&mut self) -> impl Future<Output = Result<(), Error>> + MaybeSend;
 }
 
-pub trait Read: MaybeSend {
+pub trait Read: MaybeSend + MaybeSync {
     fn read_exact_at<B: IoBufMut>(
         &mut self,
         buf: B,
@@ -69,7 +71,7 @@ pub trait Read: MaybeSend {
         pos: u64,
     ) -> impl Future<Output = (Result<(), Error>, Vec<u8>)> + MaybeSend;
 
-    fn size(&mut self) -> impl Future<Output = Result<u64, Error>> + MaybeSend;
+    fn size(&self) -> impl Future<Output = Result<u64, Error>> + MaybeSend;
 }
 
 impl<R: Read> Read for &mut R {
@@ -89,7 +91,7 @@ impl<R: Read> Read for &mut R {
         R::read_to_end_at(self, buf, pos)
     }
 
-    fn size(&mut self) -> impl Future<Output = Result<u64, Error>> + MaybeSend {
+    fn size(&self) -> impl Future<Output = Result<u64, Error>> + MaybeSend {
         R::size(self)
     }
 }
@@ -102,8 +104,12 @@ impl<W: Write> Write for &mut W {
         W::write_all(self, buf)
     }
 
-    fn complete(&mut self) -> impl Future<Output = Result<(), Error>> + MaybeSend {
-        W::complete(self)
+    fn flush(&mut self) -> impl Future<Output = Result<(), Error>> + MaybeSend {
+        W::flush(self)
+    }
+
+    fn close(&mut self) -> impl Future<Output = Result<(), Error>> + MaybeSend {
+        W::close(self)
     }
 }
 
@@ -134,8 +140,12 @@ mod tests {
             (result.inspect(|_| self.cnt += buf.bytes_init()), buf)
         }
 
-        async fn complete(&mut self) -> Result<(), Error> {
-            self.w.complete().await
+        async fn flush(&mut self) -> Result<(), Error> {
+            self.w.flush().await
+        }
+
+        async fn close(&mut self) -> Result<(), Error> {
+            self.w.close().await
         }
     }
 
@@ -178,7 +188,7 @@ mod tests {
             }
         }
 
-        async fn size(&mut self) -> Result<u64, Error> {
+        async fn size(&self) -> Result<u64, Error> {
             self.r.size().await
         }
     }
@@ -195,7 +205,7 @@ mod tests {
         #[cfg(not(feature = "completion-based"))]
         writer.write_all(&[2, 0, 2, 4][..]).await;
 
-        writer.complete().await.unwrap();
+        writer.close().await.unwrap();
 
         let mut reader = CountRead::new(read);
         {
@@ -268,7 +278,7 @@ mod tests {
                 .await?;
             file.write_all("Hello! world".as_bytes()).await.0?;
 
-            file.complete().await.unwrap();
+            file.close().await.unwrap();
 
             let (result, buf) = file.read_exact_at(vec![0u8; 12], 12).await;
             result.unwrap();

@@ -9,31 +9,28 @@ use http::{
 use http_body_util::{BodyExt, Empty};
 use percent_encoding::utf8_percent_encode;
 
-use super::{options::S3Options, S3Error, STRICT_PATH_ENCODE_SET};
+use super::{fs::AmazonS3, sign::Sign, S3Error, STRICT_PATH_ENCODE_SET};
 use crate::{
     buf::IoBufMut,
     path::Path,
     remotes::{
-        aws::{multipart_upload::MultipartUpload, sign::Sign, writer::S3Writer},
-        http::{DynHttpClient, HttpClient, HttpError},
+        aws::{multipart_upload::MultipartUpload, writer::S3Writer},
+        http::{HttpClient, HttpError},
     },
     Error, IoBuf, Read, Write,
 };
 
 pub struct S3File {
-    options: Arc<S3Options>,
+    fs: AmazonS3,
     path: Path,
-
-    client: Arc<dyn DynHttpClient>,
     writer: Option<S3Writer>,
 }
 
 impl S3File {
-    pub(crate) fn new(options: Arc<S3Options>, path: Path, client: Arc<dyn DynHttpClient>) -> Self {
+    pub(crate) fn new(fs: AmazonS3, path: Path) -> Self {
         Self {
-            options,
+            fs,
             path,
-            client,
             writer: None,
         }
     }
@@ -41,7 +38,7 @@ impl S3File {
     fn build_request(&self, method: Method) -> Builder {
         let url = format!(
             "{}/{}",
-            self.options.endpoint,
+            self.fs.as_ref().options.endpoint,
             utf8_percent_encode(self.path.as_ref(), &STRICT_PATH_ENCODE_SET)
         );
 
@@ -65,12 +62,19 @@ impl Read for S3File {
             Err(e) => return (Err(e.into()), buf),
         };
 
-        if let Err(e) = request.sign(&self.options).await.map_err(S3Error::from) {
+        if let Err(e) = request
+            .sign(&self.fs.as_ref().options)
+            .await
+            .map_err(S3Error::from)
+        {
             return (Err(e.into()), buf);
         }
 
         let response = match self
+            .fs
+            .as_ref()
             .client
+            .as_ref()
             .send_request(request)
             .await
             .map_err(S3Error::from)
@@ -113,46 +117,6 @@ impl Read for S3File {
         }
     }
 
-    async fn size(&mut self) -> Result<u64, Error> {
-        let mut request = self
-            .build_request(Method::HEAD)
-            .body(Empty::new())
-            .map_err(|e| S3Error::from(HttpError::from(e)))?;
-        request.sign(&self.options).await.map_err(S3Error::from)?;
-
-        let response = self
-            .client
-            .send_request(request)
-            .await
-            .map_err(S3Error::from)?;
-
-        if !response.status().is_success() {
-            Err(S3Error::from(HttpError::HttpNotSuccess {
-                status: response.status(),
-                body: String::from_utf8_lossy(
-                    &response
-                        .into_body()
-                        .collect()
-                        .await
-                        .map_err(S3Error::from)?
-                        .to_bytes(),
-                )
-                .to_string(),
-            })
-            .into())
-        } else {
-            let size = response
-                .headers()
-                .get(CONTENT_LENGTH)
-                .ok_or_else(|| Error::Other("missing content-length header".into()))?
-                .to_str()
-                .map_err(|e| Error::Other(e.into()))?
-                .parse::<u64>()
-                .map_err(|e| Error::Other(e.into()))?;
-            Ok(size)
-        }
-    }
-
     async fn read_to_end_at(&mut self, mut buf: Vec<u8>, pos: u64) -> (Result<(), Error>, Vec<u8>) {
         let mut request = match self
             .build_request(Method::GET)
@@ -164,12 +128,19 @@ impl Read for S3File {
             Ok(request) => request,
         };
 
-        if let Err(e) = request.sign(&self.options).await.map_err(S3Error::from) {
+        if let Err(e) = request
+            .sign(&self.fs.as_ref().options)
+            .await
+            .map_err(S3Error::from)
+        {
             return (Err(e.into()), buf);
         }
 
         let response = match self
+            .fs
+            .as_ref()
             .client
+            .as_ref()
             .send_request(request)
             .await
             .map_err(S3Error::from)
@@ -207,6 +178,52 @@ impl Read for S3File {
             }
         }
     }
+
+    async fn size(&self) -> Result<u64, Error> {
+        let mut request = self
+            .build_request(Method::HEAD)
+            .body(Empty::new())
+            .map_err(|e| S3Error::from(HttpError::from(e)))?;
+        request
+            .sign(&self.fs.as_ref().options)
+            .await
+            .map_err(S3Error::from)?;
+
+        let response = self
+            .fs
+            .as_ref()
+            .client
+            .as_ref()
+            .send_request(request)
+            .await
+            .map_err(S3Error::from)?;
+
+        if !response.status().is_success() {
+            Err(S3Error::from(HttpError::HttpNotSuccess {
+                status: response.status(),
+                body: String::from_utf8_lossy(
+                    &response
+                        .into_body()
+                        .collect()
+                        .await
+                        .map_err(S3Error::from)?
+                        .to_bytes(),
+                )
+                .to_string(),
+            })
+            .into())
+        } else {
+            let size = response
+                .headers()
+                .get(CONTENT_LENGTH)
+                .ok_or_else(|| Error::Other("missing content-length header".into()))?
+                .to_str()
+                .map_err(|e| Error::Other(e.into()))?
+                .parse::<u64>()
+                .map_err(|e| Error::Other(e.into()))?;
+            Ok(size)
+        }
+    }
 }
 
 impl Write for S3File {
@@ -214,18 +231,24 @@ impl Write for S3File {
         self.writer
             .get_or_insert_with(|| {
                 S3Writer::new(Arc::new(MultipartUpload::new(
-                    self.options.clone(),
+                    self.fs.clone(),
                     self.path.clone(),
-                    self.client.clone(),
                 )))
             })
             .write_all(buf)
             .await
     }
 
-    async fn complete(&mut self) -> Result<(), Error> {
+    async fn flush(&mut self) -> Result<(), Error> {
+        if let Some(writer) = self.writer.as_mut() {
+            writer.flush().await?;
+        }
+        Ok(())
+    }
+
+    async fn close(&mut self) -> Result<(), Error> {
         if let Some(mut writer) = self.writer.take() {
-            writer.complete().await?;
+            writer.close().await?;
         }
         Ok(())
     }
@@ -240,8 +263,13 @@ mod tests {
 
         use crate::{
             remotes::{
-                aws::{credential::AwsCredential, options::S3Options, s3::S3File},
-                http::tokio::TokioClient,
+                aws::{
+                    credential::AwsCredential,
+                    fs::{AmazonS3, AmazonS3Inner},
+                    options::S3Options,
+                    s3::S3File,
+                },
+                http::{tokio::TokioClient, DynHttpClient, HttpClient},
             },
             Read, Write,
         };
@@ -255,7 +283,7 @@ mod tests {
 
         let client = TokioClient::new();
         let region = "ap-southeast-1";
-        let options = Arc::new(S3Options {
+        let options = S3Options {
             endpoint: "https://fusio-test.s3.ap-southeast-1.amazonaws.com".into(),
             credential: Some(AwsCredential {
                 key_id,
@@ -265,11 +293,16 @@ mod tests {
             region: region.into(),
             sign_payload: true,
             checksum: false,
-        });
+        };
 
-        let client = Arc::new(client);
+        let s3 = AmazonS3 {
+            inner: Arc::new(AmazonS3Inner {
+                options,
+                client: Box::new(client) as Box<dyn DynHttpClient>,
+            }),
+        };
 
-        let mut s3 = S3File::new(options, "read-write.txt".into(), client);
+        let mut s3 = S3File::new(s3, "read-write.txt".into());
 
         let (result, _) = s3
             .write_all(&b"The answer of life, universe and everthing"[..])

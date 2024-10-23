@@ -22,6 +22,8 @@ pub struct S3Writer {
         FuturesUnordered<Pin<Box<dyn MaybeSendFuture<Output = Result<MultipartPart, Error>>>>>,
 }
 
+unsafe impl Sync for S3Writer {}
+
 impl S3Writer {
     pub fn new(inner: Arc<MultipartUpload>) -> Self {
         Self {
@@ -75,7 +77,15 @@ impl Write for S3Writer {
         (Ok(()), buf)
     }
 
-    async fn complete(&mut self) -> Result<(), Error> {
+    async fn flush(&mut self) -> Result<(), Error> {
+        if self.buf.len() > S3_PART_MINIMUM_SIZE {
+            self.upload_part(BytesMut::new).await?;
+        }
+
+        Ok(())
+    }
+
+    async fn close(&mut self) -> Result<(), Error> {
         let Some(upload_id) = self.upload_id.clone() else {
             if !self.buf.is_empty() {
                 let bytes = mem::replace(&mut self.buf, BytesMut::new()).freeze();
@@ -115,15 +125,21 @@ mod tests {
         use bytes::Bytes;
 
         use crate::{
-            remotes::aws::{
-                multipart_upload::MultipartUpload, options::S3Options, writer::S3Writer,
-                AwsCredential,
+            remotes::{
+                aws::{
+                    fs::{AmazonS3, AmazonS3Inner},
+                    multipart_upload::MultipartUpload,
+                    options::S3Options,
+                    writer::S3Writer,
+                    AwsCredential,
+                },
+                http::DynHttpClient,
             },
             Write,
         };
 
         let region = "ap-southeast-2";
-        let options = Arc::new(S3Options {
+        let options = S3Options {
             endpoint: "endpoint".into(),
             credential: Some(AwsCredential {
                 key_id: "key".to_string(),
@@ -133,15 +149,23 @@ mod tests {
             region: region.into(),
             sign_payload: true,
             checksum: false,
-        });
-        let client = Arc::new(crate::impls::remotes::http::tokio::TokioClient::new());
-        let upload = MultipartUpload::new(options, "read-write.txt".into(), client);
+        };
+        let client = crate::impls::remotes::http::tokio::TokioClient::new();
+
+        let s3 = AmazonS3 {
+            inner: Arc::new(AmazonS3Inner {
+                options,
+                client: Box::new(client) as Box<dyn DynHttpClient>,
+            }),
+        };
+
+        let upload = MultipartUpload::new(s3, "read-write.txt".into());
         let mut writer = S3Writer::new(Arc::new(upload));
 
         let (result, _) = Write::write_all(&mut writer, Bytes::from("hello! Fusio!")).await;
         result.unwrap();
         let (result, _) = Write::write_all(&mut writer, Bytes::from("hello! World!")).await;
         result.unwrap();
-        writer.complete().await.unwrap();
+        writer.close().await.unwrap();
     }
 }

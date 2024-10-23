@@ -8,7 +8,7 @@ pub use fs::{DynFile, DynFs};
 
 use crate::{
     buf::{Slice, SliceMut},
-    Error, MaybeSend, Read, Write,
+    Error, MaybeSend, MaybeSync, Read, Write,
 };
 
 pub trait MaybeSendFuture: Future + MaybeSend {}
@@ -21,7 +21,9 @@ pub trait DynWrite: MaybeSend {
         buf: Slice,
     ) -> Pin<Box<dyn MaybeSendFuture<Output = (Result<(), Error>, Slice)> + '_>>;
 
-    fn complete(&mut self) -> Pin<Box<dyn MaybeSendFuture<Output = Result<(), Error>> + '_>>;
+    fn flush(&mut self) -> Pin<Box<dyn MaybeSendFuture<Output = Result<(), Error>> + '_>>;
+
+    fn close(&mut self) -> Pin<Box<dyn MaybeSendFuture<Output = Result<(), Error>> + '_>>;
 }
 
 impl<W: Write> DynWrite for W {
@@ -32,12 +34,16 @@ impl<W: Write> DynWrite for W {
         Box::pin(W::write_all(self, buf))
     }
 
-    fn complete(&mut self) -> Pin<Box<dyn MaybeSendFuture<Output = Result<(), Error>> + '_>> {
-        Box::pin(W::complete(self))
+    fn flush(&mut self) -> Pin<Box<dyn MaybeSendFuture<Output = Result<(), Error>> + '_>> {
+        Box::pin(W::flush(self))
+    }
+
+    fn close(&mut self) -> Pin<Box<dyn MaybeSendFuture<Output = Result<(), Error>> + '_>> {
+        Box::pin(W::close(self))
     }
 }
 
-pub trait DynRead: MaybeSend {
+pub trait DynRead: MaybeSend + MaybeSync {
     fn read_exact_at(
         &mut self,
         buf: SliceMut,
@@ -50,7 +56,7 @@ pub trait DynRead: MaybeSend {
         pos: u64,
     ) -> Pin<Box<dyn MaybeSendFuture<Output = (Result<(), Error>, Vec<u8>)> + '_>>;
 
-    fn size(&mut self) -> Pin<Box<dyn MaybeSendFuture<Output = Result<u64, Error>> + '_>>;
+    fn size(&self) -> Pin<Box<dyn MaybeSendFuture<Output = Result<u64, Error>> + '_>>;
 }
 
 impl<R> DynRead for R
@@ -73,7 +79,7 @@ where
         Box::pin(async move { R::read_to_end_at(self, buf, pos).await })
     }
 
-    fn size(&mut self) -> Pin<Box<dyn MaybeSendFuture<Output = Result<u64, Error>> + '_>> {
+    fn size(&self) -> Pin<Box<dyn MaybeSendFuture<Output = Result<u64, Error>> + '_>> {
         Box::pin(R::size(self))
     }
 }

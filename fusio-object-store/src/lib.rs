@@ -3,6 +3,7 @@ pub mod fs;
 use std::{ops::Range, sync::Arc};
 
 use fusio::{Error, IoBuf, IoBufMut, Read, Write};
+use futures_util::lock::Mutex;
 use object_store::{buffered::BufWriter, path::Path, GetOptions, GetRange, ObjectStore};
 use parquet::arrow::async_writer::{AsyncFileWriter, ParquetObjectWriter};
 
@@ -11,7 +12,7 @@ pub type BoxedError = Box<dyn std::error::Error + Send + Sync + 'static>;
 pub struct S3File<O: ObjectStore> {
     inner: Arc<O>,
     path: Path,
-    buf: Option<ParquetObjectWriter>,
+    buf: Option<Arc<Mutex<ParquetObjectWriter>>>,
 }
 
 impl<O: ObjectStore> S3File<O> {
@@ -64,7 +65,7 @@ impl<O: ObjectStore> Read for S3File<O> {
         }
     }
 
-    async fn size(&mut self) -> Result<u64, Error> {
+    async fn size(&self) -> Result<u64, Error> {
         let options = GetOptions {
             head: true,
             ..Default::default()
@@ -83,20 +84,30 @@ impl<O: ObjectStore> Write for S3File<O> {
         let buf_writer = match self.buf {
             Some(ref mut buf) => buf,
             None => {
-                self.buf = Some(BufWriter::new(self.inner.clone(), self.path.clone()).into());
+                self.buf = Some(Arc::new(Mutex::new(
+                    BufWriter::new(self.inner.clone(), self.path.clone()).into(),
+                )));
                 self.buf.as_mut().unwrap()
             }
         };
-        if let Err(e) = buf_writer.write(buf.as_bytes()).await {
+        if let Err(e) = buf_writer.lock().await.write(buf.as_bytes()).await {
             return (Err(Error::Other(e.into())), buf);
         }
 
         (Ok(()), buf)
     }
 
-    async fn complete(&mut self) -> Result<(), Error> {
-        if let Some(mut buf) = self.buf.take() {
-            buf.complete().await.map_err(|e| Error::Other(e.into()))?;
+    async fn flush(&mut self) -> Result<(), Error> {
+        Ok(())
+    }
+
+    async fn close(&mut self) -> Result<(), Error> {
+        if let Some(buf) = self.buf.take() {
+            buf.lock()
+                .await
+                .complete()
+                .await
+                .map_err(|e| Error::Other(e.into()))?;
         }
         Ok(())
     }

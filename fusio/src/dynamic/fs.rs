@@ -26,8 +26,8 @@ impl<'read> Read for Box<dyn DynFile + 'read> {
         DynRead::read_to_end_at(self.as_mut(), buf, pos).await
     }
 
-    async fn size(&mut self) -> Result<u64, Error> {
-        DynRead::size(self.as_mut()).await
+    async fn size(&self) -> Result<u64, Error> {
+        DynRead::size(self.as_ref()).await
     }
 }
 
@@ -38,8 +38,12 @@ impl<'write> Write for Box<dyn DynFile + 'write> {
         (result, unsafe { B::recover_from_slice(buf) })
     }
 
-    async fn complete(&mut self) -> Result<(), Error> {
-        DynWrite::complete(self.as_mut()).await
+    async fn flush(&mut self) -> Result<(), Error> {
+        DynWrite::flush(self.as_mut()).await
+    }
+
+    async fn close(&mut self) -> Result<(), Error> {
+        DynWrite::close(self.as_mut()).await
     }
 }
 

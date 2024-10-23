@@ -21,7 +21,7 @@ where
         return (result, write_buf, read_buf);
     }
 
-    file.complete().await.unwrap();
+    file.close().await.unwrap();
 
     let (result, read_buf) = file.read_exact_at(read_buf, 0).await;
     if result.is_err() {
