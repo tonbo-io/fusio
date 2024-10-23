@@ -109,14 +109,8 @@ impl Fs for AmazonS3 {
     async fn open_options(
         &self,
         path: &Path,
-        options: OpenOptions,
+        _: OpenOptions,
     ) -> Result<Self::File, crate::Error> {
-        if !options.truncate {
-            return Err(Error::Unsupported {
-                message: "append mode is not supported in Amazon S3".into(),
-            });
-        }
-
         Ok(S3File::new(self.clone(), path.clone()))
     }
 
