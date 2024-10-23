@@ -30,10 +30,6 @@ impl AsyncFileWriter for AsyncWriter {
         Box::pin(async move {
             if let Some(mut writer) = self.inner.take() {
                 writer
-                    .sync_all()
-                    .await
-                    .map_err(|err| ParquetError::External(Box::new(err)))?;
-                writer
                     .close()
                     .await
                     .map_err(|err| ParquetError::External(Box::new(err)))?;

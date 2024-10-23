@@ -3,7 +3,7 @@ mod multi_runtime;
 mod object;
 mod s3;
 
-use fusio::{Error, IoBuf, IoBufMut, Read, Seek, Write};
+use fusio::{Error, IoBuf, IoBufMut, Read, Write};
 
 #[allow(unused)]
 async fn write_without_runtime_awareness<F, B, BM>(
@@ -12,7 +12,7 @@ async fn write_without_runtime_awareness<F, B, BM>(
     read_buf: BM,
 ) -> (Result<(), Error>, B, BM)
 where
-    F: Read + Write + Seek,
+    F: Read + Write,
     B: IoBuf,
     BM: IoBufMut,
 {
@@ -21,10 +21,9 @@ where
         return (result, write_buf, read_buf);
     }
 
-    file.sync_all().await.unwrap();
-    file.seek(0).await.unwrap();
+    file.close().await.unwrap();
 
-    let (result, read_buf) = file.read(read_buf).await;
+    let (result, read_buf) = file.read_exact_at(read_buf, 0).await;
     if result.is_err() {
         return (result.map(|_| ()), write_buf, read_buf);
     }

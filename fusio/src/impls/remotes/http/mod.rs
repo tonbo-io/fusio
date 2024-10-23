@@ -2,7 +2,7 @@ mod error;
 #[cfg(all(feature = "tokio-http", not(feature = "completion-based")))]
 pub mod tokio;
 
-use std::{future::Future, pin::Pin, sync::Arc};
+use std::{future::Future, pin::Pin};
 
 use bytes::Bytes;
 pub use error::HttpError;
@@ -13,7 +13,7 @@ use http_body_util::BodyExt;
 
 use crate::{dynamic::MaybeSendFuture, error::BoxedError, MaybeSend, MaybeSync};
 
-pub trait HttpClient: MaybeSend + MaybeSync + 'static {
+pub trait HttpClient: MaybeSend + MaybeSync {
     type RespBody: Body<Data: Into<Bytes>, Error: Into<BoxedError>> + Send + MaybeSync + 'static;
 
     fn send_request<B>(
@@ -67,7 +67,7 @@ where
     }
 }
 
-impl HttpClient for Arc<dyn DynHttpClient> {
+impl<'client> HttpClient for &'client dyn DynHttpClient {
     type RespBody = BoxBody;
 
     async fn send_request<B>(
@@ -87,7 +87,7 @@ impl HttpClient for Arc<dyn DynHttpClient> {
                     .map_err(|e| HttpError::from(e.into() as BoxedError)),
             ),
         );
-        let response = self.as_ref().dyn_send_request(request).await?;
+        let response = self.dyn_send_request(request).await?;
         Ok(response)
     }
 }

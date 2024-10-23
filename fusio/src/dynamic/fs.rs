@@ -2,33 +2,28 @@ use std::pin::Pin;
 
 use futures_core::Stream;
 
-use super::{DynSeek, MaybeSendFuture};
+use super::MaybeSendFuture;
 use crate::{
     buf::IoBufMut,
     fs::{FileMeta, Fs, OpenOptions},
     path::Path,
-    DynRead, DynWrite, Error, IoBuf, MaybeSend, MaybeSync, Read, Seek, Write,
+    DynRead, DynWrite, Error, IoBuf, MaybeSend, MaybeSync, Read, Write,
 };
 
-pub trait DynFile: DynRead + DynSeek + DynWrite + 'static {}
+pub trait DynFile: DynRead + DynWrite + 'static {}
 
-impl<F> DynFile for F where F: DynRead + DynSeek + DynWrite + 'static {}
-
-impl<'seek> Seek for Box<dyn DynFile + 'seek> {
-    async fn seek(&mut self, pos: u64) -> Result<(), Error> {
-        DynSeek::seek(self.as_mut(), pos).await
-    }
-}
+impl<F> DynFile for F where F: DynRead + DynWrite + 'static {}
 
 impl<'read> Read for Box<dyn DynFile + 'read> {
-    async fn read<B: IoBufMut>(&mut self, buf: B) -> (Result<u64, Error>, B) {
+    async fn read_exact_at<B: IoBufMut>(&mut self, buf: B, pos: u64) -> (Result<(), Error>, B) {
         let (result, buf) =
-            DynRead::read(self.as_mut(), unsafe { buf.slice_mut_unchecked(..) }).await;
-        (result, unsafe { B::recover_from_buf_mut(buf) })
+            DynRead::read_exact_at(self.as_mut(), unsafe { buf.slice_mut_unchecked(..) }, pos)
+                .await;
+        (result, unsafe { B::recover_from_slice_mut(buf) })
     }
 
-    async fn read_to_end(&mut self, buf: Vec<u8>) -> (Result<(), Error>, Vec<u8>) {
-        DynRead::read_to_end(self.as_mut(), buf).await
+    async fn read_to_end_at(&mut self, buf: Vec<u8>, pos: u64) -> (Result<(), Error>, Vec<u8>) {
+        DynRead::read_to_end_at(self.as_mut(), buf, pos).await
     }
 
     async fn size(&self) -> Result<u64, Error> {
@@ -43,12 +38,8 @@ impl<'write> Write for Box<dyn DynFile + 'write> {
         (result, unsafe { B::recover_from_slice(buf) })
     }
 
-    async fn sync_data(&self) -> Result<(), Error> {
-        DynWrite::sync_data(self.as_ref()).await
-    }
-
-    async fn sync_all(&self) -> Result<(), Error> {
-        DynWrite::sync_all(self.as_ref()).await
+    async fn flush(&mut self) -> Result<(), Error> {
+        DynWrite::flush(self.as_mut()).await
     }
 
     async fn close(&mut self) -> Result<(), Error> {

@@ -223,7 +223,7 @@ impl IoBufMut for SliceMut {
         }
     }
 
-    unsafe fn recover_from_buf_mut(buf: SliceMut) -> Self {
+    unsafe fn recover_from_slice_mut(buf: SliceMut) -> Self {
         buf
     }
 }

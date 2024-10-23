@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use bytes::{Buf, Bytes};
 use http::{
     header::{CONTENT_LENGTH, CONTENT_TYPE, ETAG},
@@ -10,11 +8,12 @@ use http_body_util::{BodyExt, Empty, Full};
 use itertools::Itertools;
 use percent_encoding::utf8_percent_encode;
 
+use super::fs::AmazonS3;
 use crate::{
     path::Path,
     remotes::{
-        aws::{options::S3Options, sign::Sign, S3Error, S3ResponseError, STRICT_PATH_ENCODE_SET},
-        http::{BoxBody, DynHttpClient, HttpClient},
+        aws::{sign::Sign, S3Error, S3ResponseError, STRICT_PATH_ENCODE_SET},
+        http::{BoxBody, HttpClient},
         serde::{
             CompleteMultipartUploadRequest, CompleteMultipartUploadRequestPart,
             InitiateMultipartUploadResult, MultipartPart,
@@ -24,18 +23,13 @@ use crate::{
 };
 
 pub(crate) struct MultipartUpload {
-    options: Arc<S3Options>,
+    fs: AmazonS3,
     path: Path,
-    client: Arc<dyn DynHttpClient>,
 }
 
 impl MultipartUpload {
-    pub fn new(options: Arc<S3Options>, path: Path, client: Arc<dyn DynHttpClient>) -> Self {
-        Self {
-            options,
-            path,
-            client,
-        }
+    pub fn new(fs: AmazonS3, path: Path) -> Self {
+        Self { fs, path }
     }
 
     async fn check_response(response: Response<BoxBody>) -> Result<Response<BoxBody>, Error> {
@@ -60,11 +54,14 @@ impl MultipartUpload {
         B::Error: std::error::Error + Send + Sync + 'static,
     {
         request
-            .sign(&self.options)
+            .sign(&self.fs.as_ref().options)
             .await
             .map_err(|e| Error::S3Error(S3Error::from(e)))?;
         let response = self
+            .fs
+            .as_ref()
             .client
+            .as_ref()
             .send_request(request)
             .await
             .map_err(|e| Error::S3Error(S3Error::from(e)))?;
@@ -78,7 +75,7 @@ impl MultipartUpload {
     {
         let url = format!(
             "{}/{}",
-            self.options.endpoint,
+            self.fs.as_ref().options.endpoint,
             utf8_percent_encode(self.path.as_ref(), &STRICT_PATH_ENCODE_SET)
         );
         let request = Request::builder()
@@ -95,7 +92,7 @@ impl MultipartUpload {
     pub(crate) async fn initiate(&self) -> Result<String, Error> {
         let url = format!(
             "{}/{}?uploads",
-            self.options.endpoint,
+            self.fs.as_ref().options.endpoint,
             utf8_percent_encode(self.path.as_ref(), &STRICT_PATH_ENCODE_SET)
         );
         let request = Request::builder()
@@ -130,7 +127,7 @@ impl MultipartUpload {
     {
         let url = format!(
             "{}/{}?partNumber={}&uploadId={}",
-            self.options.endpoint,
+            self.fs.as_ref().options.endpoint,
             utf8_percent_encode(self.path.as_ref(), &STRICT_PATH_ENCODE_SET),
             part_num + 1,
             utf8_percent_encode(upload_id, &STRICT_PATH_ENCODE_SET),
@@ -162,7 +159,7 @@ impl MultipartUpload {
     ) -> Result<(), Error> {
         let url = format!(
             "{}/{}?uploadId={}",
-            self.options.endpoint,
+            self.fs.as_ref().options.endpoint,
             utf8_percent_encode(self.path.as_ref(), &STRICT_PATH_ENCODE_SET),
             utf8_percent_encode(upload_id, &STRICT_PATH_ENCODE_SET),
         );

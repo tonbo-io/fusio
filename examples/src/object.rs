@@ -29,7 +29,7 @@ where
         return (result, write_buf, read_buf);
     }
 
-    let (result, read_buf) = file.read(read_buf).await;
+    let (result, read_buf) = file.read_exact_at(read_buf, 0).await;
     if result.is_err() {
         return (result.map(|_| ()), write_buf, read_buf);
     }

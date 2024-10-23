@@ -73,7 +73,7 @@ pub trait IoBufMut: IoBuf {
 
     /// # Safety
     /// The buffer must be recovered from the same type.
-    unsafe fn recover_from_buf_mut(buf: SliceMut) -> Self;
+    unsafe fn recover_from_slice_mut(buf: SliceMut) -> Self;
 }
 
 impl IoBuf for Vec<u8> {
@@ -116,7 +116,7 @@ impl IoBufMut for Vec<u8> {
         }
     }
 
-    unsafe fn recover_from_buf_mut(buf: SliceMut) -> Self {
+    unsafe fn recover_from_slice_mut(buf: SliceMut) -> Self {
         match buf.layout {
             SliceMutLayout::Vec(vec) => vec,
             _ => unreachable!(),
@@ -202,7 +202,7 @@ impl IoBufMut for &mut [u8] {
         }
     }
 
-    unsafe fn recover_from_buf_mut(buf: SliceMut) -> Self {
+    unsafe fn recover_from_slice_mut(buf: SliceMut) -> Self {
         match buf.layout {
             SliceMutLayout::Slice { ptr, len } => std::slice::from_raw_parts_mut(ptr, len),
             _ => unreachable!(),
@@ -348,7 +348,7 @@ impl IoBufMut for bytes::BytesMut {
         }
     }
 
-    unsafe fn recover_from_buf_mut(buf: SliceMut) -> Self {
+    unsafe fn recover_from_slice_mut(buf: SliceMut) -> Self {
         match buf.layout {
             SliceMutLayout::BytesMut(bytes) => bytes,
             _ => unreachable!(),

@@ -4,7 +4,7 @@ use tokio_uring::fs::{create_dir_all, remove_file};
 
 use crate::{
     disk::tokio_uring::TokioUringFile,
-    fs::{FileMeta, Fs, OpenOptions, WriteMode},
+    fs::{FileMeta, Fs, OpenOptions},
     path::{path_to_local, Path},
     Error,
 };
@@ -19,10 +19,9 @@ impl Fs for TokioUringFs {
 
         let file = tokio_uring::fs::OpenOptions::new()
             .read(options.read)
-            .write(options.write.is_some())
+            .write(options.write)
             .create(options.create)
-            .append(options.write == Some(WriteMode::Append))
-            .truncate(options.write == Some(WriteMode::Append))
+            .truncate(options.truncate)
             .open(&local_path)
             .await?;
 

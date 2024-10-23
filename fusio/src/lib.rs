@@ -47,91 +47,48 @@ unsafe impl<T: Sync> MaybeSync for T {}
 #[cfg(feature = "no-send")]
 unsafe impl<T> MaybeSync for T {}
 
-pub trait Write: MaybeSend + MaybeSync {
+pub trait Write: MaybeSend {
     fn write_all<B: IoBuf>(
         &mut self,
         buf: B,
     ) -> impl Future<Output = (Result<(), Error>, B)> + MaybeSend;
 
-    fn sync_data(&self) -> impl Future<Output = Result<(), Error>> + MaybeSend;
-
-    fn sync_all(&self) -> impl Future<Output = Result<(), Error>> + MaybeSend;
+    fn flush(&mut self) -> impl Future<Output = Result<(), Error>> + MaybeSend;
 
     fn close(&mut self) -> impl Future<Output = Result<(), Error>> + MaybeSend;
 }
 
 pub trait Read: MaybeSend + MaybeSync {
-    fn read<B: IoBufMut>(
+    fn read_exact_at<B: IoBufMut>(
         &mut self,
         buf: B,
-    ) -> impl Future<Output = (Result<u64, Error>, B)> + MaybeSend;
+        pos: u64,
+    ) -> impl Future<Output = (Result<(), Error>, B)> + MaybeSend;
 
-    fn read_exact<B: IoBufMut>(
-        &mut self,
-        mut buf: B,
-    ) -> impl Future<Output = (Result<(), Error>, B)> + MaybeSend {
-        async move {
-            let len = buf.bytes_init() as u64;
-            let mut read = 0;
-
-            while read < len {
-                let buf_mut = unsafe { buf.slice_mut_unchecked(read as usize..) };
-                let (result, buf_mut) = self.read(buf_mut).await;
-                buf = unsafe { B::recover_from_buf_mut(buf_mut) };
-
-                match result {
-                    Ok(0) => {
-                        return (
-                            Err(std::io::Error::new(
-                                std::io::ErrorKind::UnexpectedEof,
-                                "failed to fill whole buffer",
-                            )
-                            .into()),
-                            buf,
-                        )
-                    }
-                    Ok(n) => {
-                        read += n;
-                    }
-                    Err(Error::Io(ref e)) if e.kind() == std::io::ErrorKind::Interrupted => {}
-                    Err(e) => return (Err(e), buf),
-                }
-            }
-            (Ok(()), buf)
-        }
-    }
-
-    fn read_to_end(
+    fn read_to_end_at(
         &mut self,
         buf: Vec<u8>,
+        pos: u64,
     ) -> impl Future<Output = (Result<(), Error>, Vec<u8>)> + MaybeSend;
 
     fn size(&self) -> impl Future<Output = Result<u64, Error>> + MaybeSend;
 }
 
-pub trait Seek: MaybeSend {
-    fn seek(&mut self, pos: u64) -> impl Future<Output = Result<(), Error>> + MaybeSend;
-}
-
-impl<S: Seek> Seek for &mut S {
-    fn seek(&mut self, pos: u64) -> impl Future<Output = Result<(), Error>> + MaybeSend {
-        S::seek(self, pos)
-    }
-}
-
 impl<R: Read> Read for &mut R {
-    fn read<B: IoBufMut>(
+    fn read_exact_at<B: IoBufMut>(
         &mut self,
         buf: B,
-    ) -> impl Future<Output = (Result<u64, Error>, B)> + MaybeSend {
-        R::read(self, buf)
+        pos: u64,
+    ) -> impl Future<Output = (Result<(), Error>, B)> + MaybeSend {
+        R::read_exact_at(self, buf, pos)
     }
 
-    fn read_to_end(
+    fn read_to_end_at(
         &mut self,
         buf: Vec<u8>,
+        pos: u64,
     ) -> impl Future<Output = (Result<(), Error>, Vec<u8>)> + MaybeSend {
-        R::read_to_end(self, buf)
+        R::read_to_end_at(self, buf, pos)
     }
 
     fn size(&self) -> impl Future<Output = Result<u64, Error>> + MaybeSend {
@@ -147,12 +104,8 @@ impl<W: Write> Write for &mut W {
         W::write_all(self, buf)
     }
 
-    fn sync_data(&self) -> impl Future<Output = Result<(), Error>> + MaybeSend {
-        W::sync_data(self)
-    }
-
-    fn sync_all(&self) -> impl Future<Output = Result<(), Error>> + MaybeSend {
-        W::sync_all(self)
+    fn flush(&mut self) -> impl Future<Output = Result<(), Error>> + MaybeSend {
+        W::flush(self)
     }
 
     fn close(&mut self) -> impl Future<Output = Result<(), Error>> + MaybeSend {
@@ -163,7 +116,7 @@ impl<W: Write> Write for &mut W {
 #[cfg(test)]
 mod tests {
     use super::{Read, Write};
-    use crate::{buf::IoBufMut, Error, IoBuf, Seek};
+    use crate::{buf::IoBufMut, Error, IoBuf};
 
     #[allow(unused)]
     struct CountWrite<W> {
@@ -187,12 +140,8 @@ mod tests {
             (result.inspect(|_| self.cnt += buf.bytes_init()), buf)
         }
 
-        async fn sync_data(&self) -> Result<(), Error> {
-            self.w.sync_data().await
-        }
-
-        async fn sync_all(&self) -> Result<(), Error> {
-            self.w.sync_all().await
+        async fn flush(&mut self) -> Result<(), Error> {
+            self.w.flush().await
         }
 
         async fn close(&mut self) -> Result<(), Error> {
@@ -217,19 +166,19 @@ mod tests {
     where
         R: Read,
     {
-        async fn read<B: IoBufMut>(&mut self, buf: B) -> (Result<u64, Error>, B) {
-            let (result, buf) = self.r.read(buf).await;
+        async fn read_exact_at<B: IoBufMut>(&mut self, buf: B, pos: u64) -> (Result<(), Error>, B) {
+            let (result, buf) = self.r.read_exact_at(buf, pos).await;
             match result {
-                Ok(result) => {
+                Ok(()) => {
                     self.cnt += buf.bytes_init();
-                    (Ok(result), buf)
+                    (Ok(()), buf)
                 }
                 Err(e) => (Err(e), buf),
             }
         }
 
-        async fn read_to_end(&mut self, buf: Vec<u8>) -> (Result<(), Error>, Vec<u8>) {
-            let (result, buf) = self.r.read_to_end(buf).await;
+        async fn read_to_end_at(&mut self, buf: Vec<u8>, pos: u64) -> (Result<(), Error>, Vec<u8>) {
+            let (result, buf) = self.r.read_to_end_at(buf, pos).await;
             match result {
                 Ok(()) => {
                     self.cnt += buf.bytes_init();
@@ -244,17 +193,11 @@ mod tests {
         }
     }
 
-    impl<R: Seek> Seek for CountRead<R> {
-        async fn seek(&mut self, pos: u64) -> Result<(), Error> {
-            self.r.seek(pos).await
-        }
-    }
-
     #[allow(unused)]
     async fn write_and_read<W, R>(write: W, read: R)
     where
         W: Write,
-        R: Read + Seek,
+        R: Read,
     {
         let mut writer = CountWrite::new(write);
         #[cfg(feature = "completion-based")]
@@ -262,24 +205,20 @@ mod tests {
         #[cfg(not(feature = "completion-based"))]
         writer.write_all(&[2, 0, 2, 4][..]).await;
 
-        writer.sync_data().await.unwrap();
+        writer.close().await.unwrap();
 
         let mut reader = CountRead::new(read);
         {
-            reader.seek(0).await.unwrap();
-
             let mut buf = vec![];
-            let (result, buf) = reader.read_to_end(buf).await;
+            let (result, buf) = reader.read_to_end_at(buf, 0).await;
             result.unwrap();
 
             assert_eq!(buf.bytes_init(), 4);
             assert_eq!(buf.as_slice(), &[2, 0, 2, 4]);
         }
         {
-            reader.seek(2).await.unwrap();
-
             let mut buf = vec![];
-            let (result, buf) = reader.read_to_end(buf).await;
+            let (result, buf) = reader.read_to_end_at(buf, 2).await;
             result.unwrap();
 
             assert_eq!(buf.bytes_init(), 2);
@@ -339,11 +278,9 @@ mod tests {
                 .await?;
             file.write_all("Hello! world".as_bytes()).await.0?;
 
-            file.sync_all().await.unwrap();
+            file.close().await.unwrap();
 
-            file.seek(0).await;
-
-            let (result, buf) = file.read_exact(vec![0u8; 12]).await;
+            let (result, buf) = file.read_exact_at(vec![0u8; 12], 12).await;
             result.unwrap();
             assert_eq!(buf.as_slice(), b"Hello! world");
         }
@@ -380,11 +317,10 @@ mod tests {
         let mut file = File::from_std(tempfile().unwrap());
         let (result, _) = file.write_all(&b"hello, world"[..]).await;
         result.unwrap();
-        file.seek(0).await.unwrap();
-        let (result, buf) = file.read_exact(vec![0u8; 5]).await;
+        let (result, buf) = file.read_exact_at(vec![0u8; 5], 0).await;
         result.unwrap();
         assert_eq!(buf.as_slice(), b"hello");
-        let (result, _) = file.read_exact(vec![0u8; 8]).await;
+        let (result, _) = file.read_exact_at(vec![0u8; 8], 5).await;
         assert!(result.is_err());
         if let Error::Io(e) = result.unwrap_err() {
             assert_eq!(e.kind(), std::io::ErrorKind::UnexpectedEof);
