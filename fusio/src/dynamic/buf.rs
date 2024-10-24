@@ -1,5 +1,3 @@
-use bytes::BufMut;
-
 use crate::{dynamic::DynFile, Error, IoBuf, IoBufMut, Read, Write};
 
 pub struct BufWriter {
@@ -53,7 +51,7 @@ impl Write for BufWriter {
             self.inner.write_all(buf).await
         } else {
             let owned_buf = self.buf.as_mut().unwrap();
-            owned_buf.put_slice(buf.as_slice());
+            owned_buf.extend_from_slice(buf.as_slice());
             self.pos += written_size;
             (Ok(()), buf)
         }
