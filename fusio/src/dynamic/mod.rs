@@ -1,4 +1,6 @@
 #[cfg(feature = "fs")]
+mod buf;
+#[cfg(feature = "fs")]
 pub mod fs;
 
 use std::{future::Future, pin::Pin};

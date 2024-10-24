@@ -2,7 +2,7 @@ use std::pin::Pin;
 
 use futures_core::Stream;
 
-use super::MaybeSendFuture;
+use super::{buf::BufWriter, MaybeSendFuture};
 use crate::{
     buf::IoBufMut,
     fs::{FileMeta, Fs, OpenOptions},
@@ -93,8 +93,15 @@ impl<F: Fs> DynFs for F {
         options: OpenOptions,
     ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<Box<dyn DynFile>, Error>> + 's>> {
         Box::pin(async move {
+            let buf_size = options.buf_size;
             let file = F::open_options(self, path, options).await?;
-            Ok(Box::new(file) as Box<dyn DynFile>)
+            let dyn_file = Box::new(file) as Box<dyn DynFile>;
+            match buf_size {
+                Some(buf_size) => {
+                    Ok(Box::new(BufWriter::new(dyn_file, buf_size)) as Box<dyn DynFile>)
+                }
+                None => Ok(dyn_file),
+            }
         })
     }
 
@@ -147,5 +154,42 @@ mod tests {
         let buf = [24, 9, 24, 0];
         let (result, _) = dyn_file.write_all(&buf[..]).await;
         result.unwrap();
+    }
+
+    #[cfg(all(feature = "tokio", not(feature = "completion-based")))]
+    #[tokio::test]
+    async fn test_dyn_buf_fs() {
+        use tempfile::NamedTempFile;
+
+        use crate::{disk::TokioFs, fs::OpenOptions, DynFs, Read, Write};
+
+        let open_options = OpenOptions::default()
+            .create(true)
+            .write(true)
+            .read(true)
+            .buf_size(Some(5));
+        let fs = Box::new(TokioFs) as Box<dyn DynFs>;
+        let temp_file = NamedTempFile::new().unwrap();
+        let path = temp_file.into_temp_path();
+        let mut dyn_file = fs
+            .open_options(&path.to_str().unwrap().into(), open_options)
+            .await
+            .unwrap();
+
+        let buf = [24, 9, 24, 0];
+        let (result, _) = dyn_file.write_all(&buf[..]).await;
+        result.unwrap();
+        let (_, buf) = dyn_file.read_to_end_at(vec![], 0).await;
+        assert!(buf.is_empty());
+
+        let buf = [34, 19, 34, 10];
+        let (result, _) = dyn_file.write_all(&buf[..]).await;
+        result.unwrap();
+        let (_, buf) = dyn_file.read_to_end_at(vec![], 0).await;
+        assert_eq!(buf.as_slice(), &[24, 9, 24, 0]);
+
+        dyn_file.flush().await.unwrap();
+        let (_, buf) = dyn_file.read_to_end_at(vec![], 0).await;
+        assert_eq!(buf.as_slice(), &[24, 9, 24, 0, 34, 19, 34, 10])
     }
 }
