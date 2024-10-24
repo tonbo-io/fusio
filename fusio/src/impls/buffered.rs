@@ -1,14 +1,14 @@
-use crate::{dynamic::DynFile, Error, IoBuf, IoBufMut, Read, Write};
+use crate::{Error, IoBuf, IoBufMut, Read, Write};
 
-pub struct BufWriter {
-    inner: Box<dyn DynFile>,
+pub struct BufWriter<F> {
+    inner: F,
     buf: Option<Vec<u8>>,
     capacity: usize,
     pos: usize,
 }
 
-impl BufWriter {
-    pub(crate) fn new(file: Box<dyn DynFile>, capacity: usize) -> Self {
+impl<F> BufWriter<F> {
+    pub fn new(file: F, capacity: usize) -> Self {
         Self {
             inner: file,
             buf: Some(Vec::with_capacity(capacity)),
@@ -18,7 +18,7 @@ impl BufWriter {
     }
 }
 
-impl Read for BufWriter {
+impl<F: Read> Read for BufWriter<F> {
     async fn read_exact_at<B: IoBufMut>(&mut self, buf: B, pos: u64) -> (Result<(), Error>, B) {
         self.inner.read_exact_at(buf, pos).await
     }
@@ -33,7 +33,7 @@ impl Read for BufWriter {
     }
 }
 
-impl Write for BufWriter {
+impl<F: Write> Write for BufWriter<F> {
     async fn write_all<B: IoBuf>(&mut self, buf: B) -> (Result<(), Error>, B) {
         let written_size = buf.bytes_init();
         if self.pos + written_size > self.capacity {
@@ -87,10 +87,10 @@ pub(crate) mod tests {
     async fn test_buf_read_write() {
         use tempfile::tempfile;
 
-        use crate::{dynamic::buf::BufWriter, Read, Write};
+        use crate::{impls::buffered::BufWriter, Read, Write};
 
         let file = tokio::fs::File::from_std(tempfile().unwrap());
-        let mut writer = BufWriter::new(Box::new(file), 4);
+        let mut writer = BufWriter::new(file, 4);
         {
             let _ = writer.write_all("Hello".as_bytes()).await;
             let buf = vec![];

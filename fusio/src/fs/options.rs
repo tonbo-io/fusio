@@ -3,7 +3,6 @@ pub struct OpenOptions {
     pub write: bool,
     pub create: bool,
     pub truncate: bool,
-    pub buf_size: Option<usize>,
 }
 
 impl Default for OpenOptions {
@@ -13,7 +12,6 @@ impl Default for OpenOptions {
             write: false,
             create: false,
             truncate: false,
-            buf_size: None,
         }
     }
 }
@@ -37,11 +35,6 @@ impl OpenOptions {
 
     pub fn truncate(mut self, truncate: bool) -> Self {
         self.truncate = truncate;
-        self
-    }
-
-    pub fn buf_size(mut self, buf_size: Option<usize>) -> Self {
-        self.buf_size = buf_size;
         self
     }
 }
