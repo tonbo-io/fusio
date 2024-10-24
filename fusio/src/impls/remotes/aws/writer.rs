@@ -1,7 +1,7 @@
 use std::{mem, pin::Pin, sync::Arc};
 
 use bytes::{BufMut, BytesMut};
-use futures_util::{stream::FuturesUnordered, StreamExt};
+use futures_util::{stream::FuturesOrdered, StreamExt};
 use http_body_util::Full;
 
 use crate::{
@@ -18,8 +18,7 @@ pub struct S3Writer {
     next_part_numer: usize,
     buf: BytesMut,
 
-    handlers:
-        FuturesUnordered<Pin<Box<dyn MaybeSendFuture<Output = Result<MultipartPart, Error>>>>>,
+    handlers: FuturesOrdered<Pin<Box<dyn MaybeSendFuture<Output = Result<MultipartPart, Error>>>>>,
 }
 
 unsafe impl Sync for S3Writer {}
@@ -31,7 +30,7 @@ impl S3Writer {
             upload_id: None,
             next_part_numer: 0,
             buf: BytesMut::with_capacity(S3_PART_MINIMUM_SIZE),
-            handlers: FuturesUnordered::new(),
+            handlers: FuturesOrdered::new(),
         }
     }
 
@@ -52,7 +51,7 @@ impl S3Writer {
 
         let upload = self.inner.clone();
         let bytes = mem::replace(&mut self.buf, fn_bytes_init()).freeze();
-        self.handlers.push(Box::pin(async move {
+        self.handlers.push_back(Box::pin(async move {
             upload
                 .upload_part(&upload_id, part_num, bytes.len(), Full::new(bytes))
                 .await
