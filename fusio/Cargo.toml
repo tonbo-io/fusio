@@ -3,8 +3,9 @@ description = "Fusio provides lean, minimal cost abstraction and extensible Read
 edition.workspace = true
 license.workspace = true
 name = "fusio"
+readme = "../README.md"
 repository.workspace = true
-version = "0.2.1"
+version = "0.3.0"
 
 [features]
 aws = [
