@@ -17,30 +17,50 @@ pub use dynamic::{DynRead, DynWrite};
 pub use error::Error;
 pub use impls::*;
 
-/// # Safety
-/// Do not implement it directly
 #[cfg(not(feature = "no-send"))]
-pub unsafe trait MaybeSend: Send {}
+pub unsafe trait MaybeSend: Send {
+    //! Considering lots of runtimes does not require `Send` for [`std::future::Future`] and
+    //! [`futures::stream::Stream`], we provide a trait to represent the future or stream that
+    //! may not require `Send`. Users could switch the feature `no-send` at compile-time to
+    //! disable the `Send` bound for [`std::future::Future`] and [`futures::stream::Stream`].
+    //!
+    //! # Safety
+    //! Do not implement it directly.
+}
 
 /// # Safety
 /// Do not implement it directly
 #[cfg(feature = "no-send")]
-pub unsafe trait MaybeSend {}
+pub unsafe trait MaybeSend {
+    //! Considering lots of runtimes does not require [`Send`] for [`std::future::Future`] and
+    //! [`futures::stream::Stream`], we provide a trait to represent the future or stream that
+    //! may not require `Send`. Users could switch the feature `no-send` at compile-time to
+    //! disable the `Send` bound for [`std::future::Future`] and [`futures::stream::Stream`].
+    //!
+    //! # Safety
+    //! Do not implement it directly
+}
 
 #[cfg(not(feature = "no-send"))]
 unsafe impl<T: Send> MaybeSend for T {}
 #[cfg(feature = "no-send")]
 unsafe impl<T> MaybeSend for T {}
 
-/// # Safety
-/// Do not implement it directly
 #[cfg(not(feature = "no-send"))]
-pub unsafe trait MaybeSync: Sync {}
+pub unsafe trait MaybeSync: Sync {
+    //! Same as [`MaybeSend`], but for [`Sync`].
+    //!
+    //! # Safety
+    //! Do not implement it directly
+}
 
-/// # Safety
-/// Do not implement it directly
 #[cfg(feature = "no-send")]
-pub unsafe trait MaybeSync {}
+pub unsafe trait MaybeSync {
+    //! Same as [`MaybeSend`], but for [`Sync`].
+    //!
+    //! # Safety
+    //! Do not implement it directly
+}
 
 #[cfg(not(feature = "no-send"))]
 unsafe impl<T: Sync> MaybeSync for T {}
@@ -48,6 +68,22 @@ unsafe impl<T: Sync> MaybeSync for T {}
 unsafe impl<T> MaybeSync for T {}
 
 pub trait Write: MaybeSend {
+    //! The core trait for writing data,
+    //! it is similar to [`std::io::Write`], but it takes the ownership of the buffer,
+    //! because completion-based IO requires the buffer to be pinned and should be safe to
+    //! cancellation.
+    //!
+    //! [`Write`] represents "truncate to 0 then append all" semantics,
+    //! which means the file will be truncated to 0 at first,
+    //! and each write operation will be appended to the end of the file.
+    //!
+    //! Contents are not be garanteed to be written to the file until the [`Write::close`] method is
+    //! called, [`Write::flush`] may be used to flush the data to the file in some
+    //! implementations, but not all implementations will do so.
+    //!
+    //! Whether the operation is successful or not, the buffer will be returned,
+    //! [`fusio`] promises that the returned buffer will be the same as the input buffer.
+
     fn write_all<B: IoBuf>(
         &mut self,
         buf: B,
@@ -59,6 +95,20 @@ pub trait Write: MaybeSend {
 }
 
 pub trait Read: MaybeSend + MaybeSync {
+    //! The core trait for reading data,
+    //! it is similar to [`std::io::Read`],
+    //! but it takes the ownership of the buffer,
+    //! because completion-based IO requires the buffer to be pinned and should be safe to
+    //! cancellation.
+    //!
+    //! [`Read`] represents "read exactly at" semantics,
+    //! which means the read operation will start at the specified position.
+    //!
+    //! The buffer will be returned with the result, whether the operation is successful or not,
+    //! [`fusio`] promises that the returned buffer will be the same as the input buffer.
+    //!
+    //! If you want sequential reading, try [`SeqRead`].
+
     fn read_exact_at<B: IoBufMut>(
         &mut self,
         buf: B,
