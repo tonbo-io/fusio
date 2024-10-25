@@ -148,4 +148,46 @@ mod tests {
         let (result, _) = dyn_file.write_all(&buf[..]).await;
         result.unwrap();
     }
+
+    #[cfg(all(feature = "tokio", not(feature = "completion-based")))]
+    #[tokio::test]
+    async fn test_dyn_buf_fs() {
+        use tempfile::NamedTempFile;
+
+        use crate::{
+            disk::TokioFs,
+            dynamic::DynFile,
+            fs::{Fs, OpenOptions},
+            impls::buffered::BufWriter,
+            Read, Write,
+        };
+
+        let open_options = OpenOptions::default().create(true).write(true).read(true);
+        let fs = TokioFs;
+        let temp_file = NamedTempFile::new().unwrap();
+        let path = temp_file.into_temp_path();
+        let mut dyn_file = Box::new(BufWriter::new(
+            fs.open_options(&path.to_str().unwrap().into(), open_options)
+                .await
+                .unwrap(),
+            5,
+        )) as Box<dyn DynFile>;
+
+        let buf = [24, 9, 24, 0];
+        let (result, _) = dyn_file.write_all(&buf[..]).await;
+        result.unwrap();
+        let (_, buf) = dyn_file.read_to_end_at(vec![], 0).await;
+        assert!(buf.is_empty());
+
+        let buf = [34, 19, 34, 10];
+        let (result, _) = dyn_file.write_all(&buf[..]).await;
+        result.unwrap();
+        dyn_file.flush().await.unwrap();
+        let (_, buf) = dyn_file.read_exact_at(vec![0; 4], 0).await;
+        assert_eq!(buf.as_slice(), &[24, 9, 24, 0]);
+
+        dyn_file.flush().await.unwrap();
+        let (_, buf) = dyn_file.read_to_end_at(vec![], 0).await;
+        assert_eq!(buf.as_slice(), &[24, 9, 24, 0, 34, 19, 34, 10])
+    }
 }

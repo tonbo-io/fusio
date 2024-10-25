@@ -1,3 +1,4 @@
+pub mod buffered;
 pub mod disk;
 pub mod remotes;
 
