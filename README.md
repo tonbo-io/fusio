@@ -1,6 +1,16 @@
 # Fusio
 
-`fusio` provides [Read](https://github.com/tonbo-io/fusio/blob/main/fusio/src/lib.rs#L63) and [Write](https://github.com/tonbo-io/fusio/blob/main/fusio/src/lib.rs#L50) traits to operate on multiple storage backends (e.g., local disk, Amazon S3) across various asynchronous runtimes—both poll-based ([tokio](https://github.com/tokio-rs/tokio)) and completion-based ([tokio-uring](https://github.com/tokio-rs/tokio-uring), [monoio](https://github.com/bytedance/monoio))—with:
+<p align="center">
+  <a href="https://crates.io/crates/fusio">
+    <img alt="crates.io" src="https://img.shields.io/crates/v/fusio">
+  </a>
+
+  <a href="https://docs.rs/fusio/latest/fusio/">
+    <img alt="docs.rs" src="https://img.shields.io/docsrs/fusio">
+  </a>
+</p>
+
+`fusio` provides [Read](https://docs.rs/fusio/latest/fusio/trait.Read.html) and [Write](https://docs.rs/fusio/latest/fusio/trait.Write.html) traits to operate on multiple storage backends (e.g., local disk, Amazon S3) across various asynchronous runtimes—both poll-based ([tokio](https://github.com/tokio-rs/tokio)) and completion-based ([tokio-uring](https://github.com/tokio-rs/tokio-uring), [monoio](https://github.com/bytedance/monoio))—with:
 - lean: binary size is at least 14× smaller than others.
 - minimal-cost abstraction: compared to bare storage backends, trait definitions allow dispatching file operations without extra overhead.
 - extensible: exposes traits to support implementing storage backends as third-party crates.

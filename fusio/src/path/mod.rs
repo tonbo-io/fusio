@@ -1,3 +1,5 @@
+//! A path abstraction that can be used to represent paths in a cloud-agnostic way.
+
 use std::{fmt::Formatter, path::PathBuf};
 
 use itertools::Itertools;

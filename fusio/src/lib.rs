@@ -1,4 +1,51 @@
-mod buf;
+//! Fusio is a library that provides a unified IO interface for different IO backends.
+//! # Example
+//! ```no_run
+//! use fusio::{Error, IoBuf, IoBufMut, Read, Write};
+//!
+//! async fn write_without_runtime_awareness<F, B, BM>(
+//!     file: &mut F,
+//!     write_buf: B,
+//!     read_buf: BM,
+//! ) -> (Result<(), Error>, B, BM)
+//! where
+//!     F: Read + Write,
+//!     B: IoBuf,
+//!     BM: IoBufMut,
+//! {
+//!     let (result, write_buf) = file.write_all(write_buf).await;
+//!     if result.is_err() {
+//!         return (result, write_buf, read_buf);
+//!     }
+//!
+//!     file.close().await.unwrap();
+//!
+//!     let (result, read_buf) = file.read_exact_at(read_buf, 0).await;
+//!     if result.is_err() {
+//!         return (result.map(|_| ()), write_buf, read_buf);
+//!     }
+//!
+//!     (Ok(()), write_buf, read_buf)
+//! }
+//!
+//! #[tokio::main]
+//! async fn main() {
+//!     #[cfg(feature = "tokio")]
+//!     {
+//!         use tokio::fs::File;
+//!
+//!         let mut file = File::open("foo.txt").await.unwrap();
+//!         let write_buf = "hello, world".as_bytes();
+//!         let mut read_buf = [0; 12];
+//!         let (result, _, read_buf) =
+//!             write_without_runtime_awareness(&mut file, write_buf, &mut read_buf[..]).await;
+//!         result.unwrap();
+//!         assert_eq!(&read_buf, b"hello, world");
+//!     }
+//! }
+//! ```
+
+pub mod buf;
 #[cfg(feature = "dyn")]
 pub mod dynamic;
 mod error;
@@ -19,10 +66,11 @@ pub use impls::*;
 
 #[cfg(not(feature = "no-send"))]
 pub unsafe trait MaybeSend: Send {
-    //! Considering lots of runtimes does not require `Send` for [`std::future::Future`] and
-    //! [`futures::stream::Stream`], we provide a trait to represent the future or stream that
-    //! may not require `Send`. Users could switch the feature `no-send` at compile-time to
-    //! disable the `Send` bound for [`std::future::Future`] and [`futures::stream::Stream`].
+    //! Considering lots of runtimes does not require [`std::marker::Send`] for
+    //! [`std::future::Future`] and [`futures_core::stream::Stream`], we provide a trait to
+    //! represent the future or stream that may not require [`std::marker::Send`]. Users could
+    //! switch the feature `no-send` at compile-time to disable the [`std::marker::Send`] bound
+    //! for [`std::future::Future`] and [`futures_core::stream::Stream`].
     //!
     //! # Safety
     //! Do not implement it directly.
@@ -31,15 +79,7 @@ pub unsafe trait MaybeSend: Send {
 /// # Safety
 /// Do not implement it directly
 #[cfg(feature = "no-send")]
-pub unsafe trait MaybeSend {
-    //! Considering lots of runtimes does not require [`Send`] for [`std::future::Future`] and
-    //! [`futures::stream::Stream`], we provide a trait to represent the future or stream that
-    //! may not require `Send`. Users could switch the feature `no-send` at compile-time to
-    //! disable the `Send` bound for [`std::future::Future`] and [`futures::stream::Stream`].
-    //!
-    //! # Safety
-    //! Do not implement it directly
-}
+pub unsafe trait MaybeSend {}
 
 #[cfg(not(feature = "no-send"))]
 unsafe impl<T: Send> MaybeSend for T {}
@@ -48,19 +88,14 @@ unsafe impl<T> MaybeSend for T {}
 
 #[cfg(not(feature = "no-send"))]
 pub unsafe trait MaybeSync: Sync {
-    //! Same as [`MaybeSend`], but for [`Sync`].
+    //! Same as [`MaybeSend`], but for [`std::marker::Sync`].
     //!
     //! # Safety
-    //! Do not implement it directly
+    //! Do not implement it directly.
 }
 
 #[cfg(feature = "no-send")]
-pub unsafe trait MaybeSync {
-    //! Same as [`MaybeSend`], but for [`Sync`].
-    //!
-    //! # Safety
-    //! Do not implement it directly
-}
+pub unsafe trait MaybeSync {}
 
 #[cfg(not(feature = "no-send"))]
 unsafe impl<T: Sync> MaybeSync for T {}
@@ -73,16 +108,20 @@ pub trait Write: MaybeSend {
     //! because completion-based IO requires the buffer to be pinned and should be safe to
     //! cancellation.
     //!
-    //! [`Write`] represents "truncate to 0 then append all" semantics,
-    //! which means the file will be truncated to 0 at first,
-    //! and each write operation will be appended to the end of the file.
+    //! [`Write`] represents "sequential write all and overwrite" semantics,
+    //! which means each buffer will be written to the file sequentially and overwrite the previous
+    //! file when closed.
     //!
     //! Contents are not be garanteed to be written to the file until the [`Write::close`] method is
     //! called, [`Write::flush`] may be used to flush the data to the file in some
     //! implementations, but not all implementations will do so.
     //!
     //! Whether the operation is successful or not, the buffer will be returned,
-    //! [`fusio`] promises that the returned buffer will be the same as the input buffer.
+    //! fusio promises that the returned buffer will be the same as the input buffer.
+    //!
+    //! # Dyn Compatibility
+    //! This trait is not dyn compatible.
+    //! If you want to use [`Write`] trait in a dynamic way, you could use [`DynWrite`] trait.
 
     fn write_all<B: IoBuf>(
         &mut self,
@@ -101,13 +140,18 @@ pub trait Read: MaybeSend + MaybeSync {
     //! because completion-based IO requires the buffer to be pinned and should be safe to
     //! cancellation.
     //!
-    //! [`Read`] represents "read exactly at" semantics,
-    //! which means the read operation will start at the specified position.
+    //! [`Read`] represents "random exactly read" semantics,
+    //! which means the read operation will start at the specified position, and the buffer will be
+    //! exactly filled with the data read.
     //!
     //! The buffer will be returned with the result, whether the operation is successful or not,
-    //! [`fusio`] promises that the returned buffer will be the same as the input buffer.
+    //! fusio promises that the returned buffer will be the same as the input buffer.
     //!
     //! If you want sequential reading, try [`SeqRead`].
+    //!
+    //! # Dyn Compatibility
+    //! This trait is not dyn compatible.
+    //! If you want to use [`Read`] trait in a dynamic way, you could use [`DynRead`] trait.
 
     fn read_exact_at<B: IoBufMut>(
         &mut self,
