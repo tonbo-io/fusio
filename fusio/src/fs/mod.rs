@@ -1,3 +1,6 @@
+//! This module contains the `Fs` trait, which is used to abstract file system operations across
+//! different file systems.
+
 mod options;
 
 use std::future::Future;
@@ -14,6 +17,8 @@ pub struct FileMeta {
 }
 
 pub trait Fs: MaybeSend + MaybeSync {
+    //! This trait is used to abstract file system operations across different file systems.
+
     type File: Read + Write + MaybeSend + 'static;
 
     fn open(&self, path: &Path) -> impl Future<Output = Result<Self::File, Error>> {

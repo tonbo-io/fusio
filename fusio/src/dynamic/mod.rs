@@ -1,3 +1,5 @@
+//! Dyn compatible(object safety) version of [`Read`], [`Write`] and others.
+
 #[cfg(feature = "fs")]
 pub mod fs;
 
@@ -16,6 +18,11 @@ pub trait MaybeSendFuture: Future + MaybeSend {}
 impl<F> MaybeSendFuture for F where F: Future + MaybeSend {}
 
 pub trait DynWrite: MaybeSend {
+    //! Dyn compatible(object safety) version of [`Write`].
+    //! All implementations of [`Write`] has already implemented this trait.
+    //! Also, all implementations of [`DynWrite`] has already implemented [`Write`].
+    //! User should not use this trait directly.
+
     fn write_all(
         &mut self,
         buf: Slice,
@@ -44,6 +51,9 @@ impl<W: Write> DynWrite for W {
 }
 
 pub trait DynRead: MaybeSend + MaybeSync {
+    //! Dyn compatible(object safety) version of [`Read`].
+    //! Same as [`DynWrite`].
+
     fn read_exact_at(
         &mut self,
         buf: SliceMut,

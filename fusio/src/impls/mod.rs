@@ -1,3 +1,5 @@
+//! Implementations of the traits in the `fusio` crate.
+
 pub mod buffered;
 pub mod disk;
 pub mod remotes;

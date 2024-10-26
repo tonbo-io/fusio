@@ -1,3 +1,5 @@
+//! Buffer abstraction for I/O operations.
+
 mod slice;
 
 use std::ops::{Bound, RangeBounds};
@@ -6,15 +8,20 @@ pub use slice::*;
 
 use crate::MaybeSend;
 
-/// # Safety
-/// Completion-based I/O operations require the buffer to be pinned.
 #[cfg(not(feature = "completion-based"))]
-pub unsafe trait MaybeOwned {}
+pub unsafe trait MaybeOwned {
+    //! A trait for determining whether the buffer is owned or borrowed.
+    //! Poll-based I/O operations require the buffer to be borrowed, while completion-based I/O
+    //! operations require the buffer to be owned. This trait provides a way to abstract over
+    //! the ownership of the buffer. Users could switch between poll-based and completion-based
+    //! I/O operations at compile-time by enabling or disabling the `completion-based` feature.
+    //!
+    //! # Safety
+    //! Do not implement this trait manually.
+}
 #[cfg(not(feature = "completion-based"))]
 unsafe impl<T> MaybeOwned for T {}
 
-/// # Safety
-/// Completion-based I/O operations require the buffer to be pinned.
 #[cfg(feature = "completion-based")]
 pub unsafe trait MaybeOwned: 'static {}
 
@@ -22,6 +29,13 @@ pub unsafe trait MaybeOwned: 'static {}
 unsafe impl<T: 'static> MaybeOwned for T {}
 
 pub trait IoBuf: Unpin + Sized + MaybeOwned + MaybeSend {
+    //! A poll-based I/O and completion-based I/O buffer compatible buffer.
+    //! The [`IoBuf`] trait is implemented by buffer types that can be used with [`crate::Read`].
+    //! Fusio has already implemented this trait for common buffer types
+    //! like `Vec<u8>`, `&[u8]`, `&mut [u8]`, `bytes::Bytes`, `bytes::BytesMut`, every buffer type
+    //! may be not be able to be used in all async runtimes, fusio provides compile-time safety to
+    //! ensure which buffer types are compatible with the async runtime.
+
     fn as_ptr(&self) -> *const u8;
 
     fn bytes_init(&self) -> usize;
@@ -60,6 +74,8 @@ pub trait IoBuf: Unpin + Sized + MaybeOwned + MaybeSend {
 }
 
 pub trait IoBufMut: IoBuf {
+    //! Mutable version of [`IoBuf`] which is used with [`crate::Write`].
+
     fn as_mut_ptr(&mut self) -> *mut u8;
 
     fn as_slice_mut(&mut self) -> &mut [u8] {
