@@ -8,14 +8,9 @@ version = "0.2.1"
 
 [dependencies]
 bytes = { workspace = true }
-fusio = { version = "0.3.0", path = "../fusio", features = [
-    "bytes",
-    "dyn",
-    "tokio",
-] }
+fusio = { version = "0.3.0", path = "../fusio", features = ["bytes", "dyn"] }
 futures = { version = "0.3" }
 parquet = { version = "53", features = ["arrow", "async"] }
-tokio = { version = "1.40" }
 
 [dev-dependencies]
 arrow = "53"
