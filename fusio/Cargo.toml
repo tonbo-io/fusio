@@ -42,7 +42,13 @@ no-send = []
 tokio = ["async-stream", "dep:tokio"]
 tokio-http = ["dep:reqwest", "http"]
 tokio-uring = ["async-stream", "completion-based", "dep:tokio-uring", "no-send"]
-
+opfs = [
+    "async-stream",
+    "dep:web-sys",
+    "dep:wasm-bindgen-futures",
+    "dep:js-sys",
+    "no-send",
+]
 [[bench]]
 harness = false
 name = "tokio"
@@ -91,18 +97,47 @@ tokio = { version = "1", optional = true, default-features = false, features = [
 ] }
 url = { version = "2", default-features = false }
 
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { version = "0.2", features = ["js"] }
+web-sys = { version = "0.3", optional = true, features = [
+    "File",
+    "FileSystemDirectoryHandle",
+    "FileSystemGetDirectoryOptions",
+    "FileSystemFileHandle",
+    "FileSystemGetFileOptions",
+    "FileSystemWritableFileStream",
+    "FileSystemCreateWritableOptions",
+    "FileSystemRemoveOptions",
+    "Window",
+    "Navigator",
+    "Storage",
+    "StorageManager",
+    "Blob",
+
+] }
+wasm-bindgen-futures = { version = "0.4.45", optional = true, features = [
+    "futures-core-03-stream",
+] }
+js-sys = { version = "0.3.72", optional = true }
+
 [target.'cfg(target_os = "linux")'.dependencies]
 tokio-uring = { version = "0.5", default-features = false, optional = true }
 
 [dev-dependencies]
+rand = "0.8"
+tempfile = "3"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 criterion = { version = "0.5", features = ["async_tokio", "html_reports"] }
 futures-util = { version = "0.3" }
 hyper = { version = "1", features = ["full"] }
 hyper-util = { version = "0.1", features = ["full"] }
 monoio = { version = "0.2" }
-rand = "0.8"
-tempfile = "3"
 tokio = { version = "1", features = ["full"] }
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 tokio-uring = { version = "0.5" }
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen = "0.2.95"
+wasm-bindgen-test = "0.3.9"

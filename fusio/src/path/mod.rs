@@ -47,34 +47,8 @@ pub struct Path {
     raw: String,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Path {
-    pub fn parse(path: impl AsRef<str>) -> Result<Self, Error> {
-        let path = path.as_ref();
-
-        let stripped = path.strip_prefix(DELIMITER).unwrap_or(path);
-        if stripped.is_empty() {
-            return Ok(Default::default());
-        }
-
-        let stripped = stripped.strip_suffix(DELIMITER).unwrap_or(stripped);
-
-        for segment in stripped.split(DELIMITER) {
-            if segment.is_empty() {
-                return Err(Error::EmptySegment {
-                    path: path.to_string(),
-                });
-            }
-            PathPart::parse(segment).map_err(|err| Error::BadSegment {
-                path: path.to_string(),
-                source: err,
-            })?;
-        }
-
-        Ok(Self {
-            raw: stripped.to_string(),
-        })
-    }
-
     pub fn from_filesystem_path(path: impl AsRef<std::path::Path>) -> Result<Self, Error> {
         let absolute = std::fs::canonicalize(&path).map_err(|err| Error::Canonicalize {
             path: path.as_ref().to_path_buf(),
@@ -107,6 +81,39 @@ impl Path {
 
         // Reverse any percent encoding performed by conversion to URL
         Self::from_url_path(path)
+    }
+}
+
+impl Path {
+    pub fn parse(path: impl AsRef<str>) -> Result<Self, Error> {
+        let path = path.as_ref();
+
+        let stripped = path.strip_prefix(DELIMITER).unwrap_or(path);
+        if stripped.is_empty() {
+            return Ok(Default::default());
+        }
+
+        let stripped = stripped.strip_suffix(DELIMITER).unwrap_or(stripped);
+
+        for segment in stripped.split(DELIMITER) {
+            if segment.is_empty() {
+                return Err(Error::EmptySegment {
+                    path: path.to_string(),
+                });
+            }
+            PathPart::parse(segment).map_err(|err| Error::BadSegment {
+                path: path.to_string(),
+                source: err,
+            })?;
+        }
+
+        Ok(Self {
+            raw: stripped.to_string(),
+        })
+    }
+
+    pub fn from_opfs_path(path: impl AsRef<std::path::Path>) -> Result<Self, Error> {
+        Self::parse(path.as_ref().to_str().unwrap())
     }
 
     pub fn from_url_path(path: impl AsRef<str>) -> Result<Self, Error> {
@@ -230,12 +237,14 @@ where
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn absolute_path_to_url(path: impl AsRef<std::path::Path>) -> Result<Url, Error> {
     Url::from_file_path(&path).map_err(|_| Error::InvalidPath {
         path: path.as_ref().into(),
     })
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub fn path_to_local(location: &Path) -> Result<PathBuf, Error> {
     let mut url = Url::parse("file:///").unwrap();
     url.path_segments_mut()
@@ -264,6 +273,7 @@ pub fn path_to_local(location: &Path) -> Result<PathBuf, Error> {
 }
 
 #[cfg(test)]
+#[cfg(not(target_arch = "wasm32"))]
 mod tests {
     use std::fs::canonicalize;
 

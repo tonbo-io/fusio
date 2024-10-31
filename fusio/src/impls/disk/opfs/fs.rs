@@ -1,0 +1,159 @@
+use async_stream::stream;
+use futures_core::Stream;
+use futures_util::StreamExt;
+use js_sys::{
+    wasm_bindgen::{JsCast, JsValue},
+    Array, JsString,
+};
+use wasm_bindgen_futures::{stream::JsStream, JsFuture};
+use web_sys::{
+    FileSystemDirectoryHandle, FileSystemFileHandle, FileSystemGetDirectoryOptions,
+    FileSystemGetFileOptions, FileSystemRemoveOptions,
+};
+
+use super::OPFSFile;
+use crate::{
+    disk::opfs::storage,
+    fs::{FileMeta, Fs, OpenOptions},
+    path::Path,
+    Error,
+};
+
+pub struct OPFS;
+
+impl Fs for OPFS {
+    type File = OPFSFile;
+
+    async fn open_options(&self, path: &Path, options: OpenOptions) -> Result<Self::File, Error> {
+        let segments: Vec<&str> = path.as_ref().trim_matches('/').split("/").collect();
+
+        if segments.len() == 1 && segments[0].is_empty() {
+            return Err(Error::PathError(crate::path::Error::EmptySegment {
+                path: path.to_string(),
+            }));
+        }
+
+        let dir_options = FileSystemGetDirectoryOptions::new();
+        dir_options.set_create(options.create);
+        let parent = Self::access_parent_dir(path, &dir_options).await?;
+
+        let file_name = segments.last().unwrap();
+        let option = FileSystemGetFileOptions::new();
+        option.set_create(options.create);
+
+        let file_handle = JsFuture::from(parent.get_file_handle_with_options(file_name, &option))
+            .await
+            .unwrap()
+            .dyn_into::<FileSystemFileHandle>()
+            .unwrap();
+
+        Ok(OPFSFile::new(Some(file_handle)))
+    }
+
+    async fn create_dir_all(path: &Path) -> Result<(), Error> {
+        let options = FileSystemGetDirectoryOptions::new();
+        options.set_create(true);
+
+        Self::access_dir(path, &options).await?;
+
+        Ok(())
+    }
+
+    async fn list(
+        &self,
+        path: &Path,
+    ) -> Result<impl Stream<Item = Result<FileMeta, Error>>, Error> {
+        let dir_options = FileSystemGetDirectoryOptions::new();
+        dir_options.set_create(false);
+
+        let dir = Self::access_dir(path, &dir_options).await?;
+
+        let entries = JsStream::from(dir.entries())
+            .map(|x| {
+                let array: Vec<JsValue> = x.unwrap().dyn_into::<Array>().unwrap().to_vec();
+                assert_eq!(array.len(), 2);
+                let path: String = array[0].clone().dyn_into::<JsString>().unwrap().into();
+                path
+            })
+            .collect::<Vec<String>>()
+            .await;
+
+        Ok(stream! {
+            for path in entries {
+                yield Ok(FileMeta{ path: path.into(), size: 0 })
+            }
+        })
+    }
+
+    async fn remove(&self, path: &Path) -> Result<(), Error> {
+        let dir_options = FileSystemGetDirectoryOptions::new();
+        dir_options.set_create(false);
+        let parent = Self::access_parent_dir(path, &dir_options).await?;
+
+        let removed_entry = path.as_ref().trim_matches('/').split("/").last().unwrap();
+        let options = FileSystemRemoveOptions::new();
+        options.set_recursive(true);
+        JsFuture::from(parent.remove_entry_with_options(removed_entry, &options))
+            .await
+            .unwrap();
+        Ok(())
+    }
+}
+
+impl OPFS {
+    async fn access_dir(
+        path: &Path,
+        options: &FileSystemGetDirectoryOptions,
+    ) -> Result<FileSystemDirectoryHandle, Error> {
+        let mut parent = storage().await;
+        let segments: Vec<&str> = path.as_ref().trim_matches('/').split("/").collect();
+
+        if segments.len() == 1 && segments[0].is_empty() {
+            // "" case, return the root directory
+            return Ok(parent);
+        }
+        for segment in segments {
+            if segment.is_empty() {
+                return Err(Error::PathError(crate::path::Error::EmptySegment {
+                    path: path.to_string(),
+                }));
+            }
+            parent =
+                JsFuture::from(parent.get_directory_handle_with_options(segment.as_ref(), options))
+                    .await
+                    .unwrap()
+                    .dyn_into::<FileSystemDirectoryHandle>()
+                    .unwrap();
+        }
+        Ok(parent)
+    }
+
+    /// Return the handle of parent directory. e.g. path "a/b/c" will return the handle of b
+    async fn access_parent_dir(
+        path: &Path,
+        options: &FileSystemGetDirectoryOptions,
+    ) -> Result<FileSystemDirectoryHandle, Error> {
+        let mut parent = storage().await;
+        let segments: Vec<&str> = path.as_ref().trim_matches('/').split("/").collect();
+        let part_len = segments.len();
+
+        if part_len == 1 && segments[0].is_empty() {
+            // "" case, return the root directory
+            return Ok(parent);
+        }
+        for segment in &segments[0..part_len - 1] {
+            if segment.is_empty() {
+                return Err(Error::PathError(crate::path::Error::EmptySegment {
+                    path: path.to_string(),
+                }));
+            }
+            parent =
+                JsFuture::from(parent.get_directory_handle_with_options(segment.as_ref(), options))
+                    .await
+                    .unwrap()
+                    .dyn_into::<FileSystemDirectoryHandle>()
+                    .unwrap();
+        }
+        Ok(parent)
+    }
+}

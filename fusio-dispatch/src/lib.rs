@@ -5,7 +5,7 @@ use fusio::{DynFs, Error};
 #[derive(Clone)]
 #[non_exhaustive]
 pub enum FsOptions {
-    #[cfg(any(feature = "tokio", feature = "monoio"))]
+    #[cfg(any(feature = "tokio", feature = "monoio", feature = "opfs"))]
     Local,
     #[cfg(feature = "aws")]
     S3 {
@@ -20,7 +20,7 @@ pub enum FsOptions {
 impl FsOptions {
     pub fn parse(self) -> Result<Arc<dyn DynFs>, Error> {
         match self {
-            #[cfg(any(feature = "tokio", feature = "monoio"))]
+            #[cfg(any(feature = "tokio", feature = "monoio", feature = "opfs"))]
             FsOptions::Local => Ok(Arc::new(fusio::disk::LocalFs {})),
             #[cfg(feature = "object_store")]
             FsOptions::S3 {

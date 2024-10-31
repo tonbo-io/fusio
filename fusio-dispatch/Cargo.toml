@@ -10,6 +10,7 @@ version = "0.2.1"
 aws = ["fusio/aws"]
 default = []
 monoio = ["fusio/monoio"]
+opfs = ["fusio/opfs"]
 object_store = ["dep:fusio-object-store", "object_store/aws"]
 tokio = ["fusio/tokio"]
 
