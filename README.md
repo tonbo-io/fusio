@@ -67,7 +67,7 @@ You can freely transmute between them.
 
 ### compare with `opendal`
 
-`fusio` does not aim to be a full data access layer like `opendal`. `fusio` keeps features lean, and you are able to enable features and their dependencies one by one. The default binary size of `fusio` is 245KB, which is much smaller than `opendal` (8.9MB). If you need a full ecosystem of DAL (tracing, cache, etc.), try opendal.
+`fusio` does not aim to be a full data access layer like `opendal`. `fusio` keeps features lean, and you are able to enable features and their dependencies one by one. The default binary size of `fusio` is 245KB, which is smaller than `opendal` (439KB). If you need a full ecosystem of DAL (tracing, cache, etc.), try opendal.
 
 Also, compared with `opendal::Operator`, fusio exposes core traits and allows them to be implemented in third-party crates.
 
