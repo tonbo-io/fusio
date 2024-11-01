@@ -1,0 +1,13 @@
+[package]
+description = "the Apache OpenDAL integration of Fusio."
+edition.workspace = true
+license.workspace = true
+name = "fusio-opendal"
+repository.workspace = true
+version = "0.1.0"
+
+[dependencies]
+fusio = { version = "0.3.0", path = "../fusio", features = [ "bytes" ] }
+futures-core = { version = "0.3" }
+futures-util = { version = "0.3" }
+opendal = { version ="0.50.1", default-features = false }

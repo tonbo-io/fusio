@@ -5,6 +5,7 @@ members = [
     "fusio",
     "fusio-dispatch",
     "fusio-object-store",
+    "fusio-opendal",
     "fusio-parquet",
 ]
 resolver = "2"
