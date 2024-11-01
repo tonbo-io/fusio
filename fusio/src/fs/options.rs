@@ -1,3 +1,4 @@
+#[derive(Debug)]
 pub struct OpenOptions {
     pub read: bool,
     pub write: bool,
