@@ -21,6 +21,7 @@ use crate::{
 };
 
 pub struct AmazonS3Builder {
+    endpoint: Option<String>,
     region: String,
     bucket: String,
     credential: Option<AwsCredential>,
@@ -36,6 +37,7 @@ impl AmazonS3Builder {
             if #[cfg(all(feature = "tokio-http", not(feature = "completion-based")))] {
                 let client = Box::new(crate::remotes::http::tokio::TokioClient::new());
                 Self {
+                    endpoint: None,
                     region: "us-east-1".into(),
                     bucket,
                     credential: None,
@@ -56,6 +58,11 @@ impl AmazonS3Builder {
         self
     }
 
+    pub fn endpoint(mut self, endpoint: String) -> Self {
+        self.endpoint = Some(endpoint);
+        self
+    }
+
     pub fn credential(mut self, credential: AwsCredential) -> Self {
         self.credential = Some(credential);
         self
@@ -72,10 +79,21 @@ impl AmazonS3Builder {
     }
 
     pub fn build(self) -> AmazonS3 {
+        let trimmed_bucket = self.bucket.trim_start_matches('/');
+        let endpoint = if let Some(endpoint) = self.endpoint {
+            let trimmed_endpoint = endpoint.trim_end_matches('/');
+            format!("{}/{}", trimmed_endpoint, trimmed_bucket)
+        } else {
+            format!(
+                "https://{}.s3.{}.amazonaws.com",
+                trimmed_bucket, self.region
+            )
+        };
+
         AmazonS3 {
             inner: Arc::new(AmazonS3Inner {
                 options: S3Options {
-                    endpoint: format!("https://{}.s3.{}.amazonaws.com", self.bucket, self.region),
+                    endpoint,
                     region: self.region,
                     credential: self.credential,
                     sign_payload: self.sign_payload,
