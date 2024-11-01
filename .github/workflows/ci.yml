@@ -59,6 +59,12 @@ jobs:
           command: build
           args: --package fusio-object-store
 
+      - name: Run cargo build on fusio-opendal
+        uses: actions-rs/cargo@v1
+        with:
+          command: build
+          args: --package fusio-opendal
+
       - name: Run cargo build on fusio-parquet
         uses: actions-rs/cargo@v1
         with:
