@@ -139,10 +139,10 @@ mod tests {
 
         let region = "ap-southeast-2";
         let options = S3Options {
-            endpoint: "endpoint".into(),
+            endpoint: "http://localhost:9000/data".into(),
             credential: Some(AwsCredential {
-                key_id: "key".to_string(),
-                secret_key: "secret_key".to_string(),
+                key_id: "user".to_string(),
+                secret_key: "password".to_string(),
                 token: None,
             }),
             region: region.into(),
