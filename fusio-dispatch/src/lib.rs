@@ -11,6 +11,7 @@ pub enum FsOptions {
     S3 {
         bucket: String,
         credential: Option<fusio::remotes::aws::AwsCredential>,
+        endpoint: Option<String>,
         region: Option<String>,
         sign_payload: Option<bool>,
         checksum: Option<bool>,
@@ -26,6 +27,7 @@ impl FsOptions {
             FsOptions::S3 {
                 bucket,
                 credential,
+                endpoint,
                 region,
                 sign_payload,
                 checksum,
@@ -44,6 +46,9 @@ impl FsOptions {
                         builder = builder.with_token(token);
                     }
                 }
+                if let Some(endpoint) = endpoint {
+                    builder = builder.with_endpoint(endpoint);
+                }
                 if let Some(region) = region {
                     builder = builder.with_region(region);
                 }
@@ -61,6 +66,7 @@ impl FsOptions {
             FsOptions::S3 {
                 bucket,
                 credential,
+                endpoint,
                 region,
                 sign_payload,
                 checksum,
@@ -71,6 +77,9 @@ impl FsOptions {
 
                 if let Some(credential) = credential {
                     builder = builder.credential(credential);
+                }
+                if let Some(endpoint) = endpoint {
+                    builder = builder.endpoint(endpoint);
                 }
                 if let Some(region) = region {
                     builder = builder.region(region);
