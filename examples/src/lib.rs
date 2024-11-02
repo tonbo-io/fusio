@@ -1,6 +1,7 @@
 mod fs;
 mod multi_runtime;
 mod object;
+mod opendal;
 mod s3;
 
 use fusio::{Error, IoBuf, IoBufMut, Read, Write};
