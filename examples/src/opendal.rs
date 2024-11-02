@@ -1,8 +1,8 @@
+use std::sync::Arc;
+
 use fusio::{dynamic::DynFile, DynFs};
 use fusio_opendal::OpendalFs;
-use opendal::services::Memory;
-use opendal::Operator;
-use std::sync::Arc;
+use opendal::{services::Memory, Operator};
 
 #[allow(unused)]
 async fn use_opendalfs() {

@@ -12,7 +12,9 @@ tokio = ["dep:tokio", "fusio/tokio"]
 
 [dependencies]
 fusio = { path = "../fusio" }
-monoio = { version = "0.2", optional = true }
-tokio = { version = "1.0", features = ["full"], optional = true }
 fusio-opendal = { path = "../fusio-opendal" }
-opendal = { version = "0.50.1", default-features = false, features = ["services-memory"] }
+monoio = { version = "0.2", optional = true }
+opendal = { version = "0.50.1", default-features = false, features = [
+    "services-memory",
+] }
+tokio = { version = "1.0", features = ["full"], optional = true }
