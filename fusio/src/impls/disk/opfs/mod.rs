@@ -1,22 +1,20 @@
 #[cfg(feature = "fs")]
 pub mod fs;
 
-use std::usize;
-
-use js_sys::JsString;
+use js_sys::Uint8Array;
 use wasm_bindgen_futures::JsFuture;
 use web_sys::{
     wasm_bindgen::JsCast, window, File, FileSystemCreateWritableOptions, FileSystemDirectoryHandle,
-    FileSystemFileHandle, FileSystemWritableFileStream,
+    FileSystemFileHandle, FileSystemWritableFileStream, ReadableStreamDefaultReader,
+    ReadableStreamReadResult,
 };
 
-use crate::{Error, IoBuf, IoBufMut, Read, Write};
+use crate::{error::wasm_err, Error, IoBuf, IoBufMut, Read, Write};
 
 pub struct OPFSFile {
     file_handle: Option<FileSystemFileHandle>,
     write_stream: Option<FileSystemWritableFileStream>,
     pos: u32,
-    remain: Option<u8>,
 }
 
 impl OPFSFile {
@@ -25,7 +23,6 @@ impl OPFSFile {
             file_handle,
             write_stream: None,
             pos: 0,
-            remain: None,
         }
     }
 }
@@ -43,24 +40,18 @@ impl Write for OPFSFile {
                     .dyn_into::<FileSystemWritableFileStream>()
                     .unwrap();
 
-                JsFuture::from(writer.seek_with_u32(self.pos as u32).unwrap())
+                JsFuture::from(writer.seek_with_u32(self.pos).unwrap())
                     .await
                     .unwrap();
                 self.write_stream = Some(writer);
             }
 
             let writer = self.write_stream.as_ref().unwrap();
-            let (s, remain) = Self::encode(buf.as_slice(), self.remain.take());
 
-            let len = s.len();
-            self.remain = remain;
-            JsFuture::from(
-                writer
-                    .write_with_u8_array(s.into_bytes().as_slice())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
+            let len = buf.bytes_init();
+            JsFuture::from(writer.write_with_u8_array(buf.as_slice()).unwrap())
+                .await
+                .unwrap();
             self.pos += len as u32;
         }
         (Ok(()), buf)
@@ -73,12 +64,7 @@ impl Write for OPFSFile {
     async fn close(&mut self) -> Result<(), Error> {
         let writer = self.write_stream.take();
         if let Some(writer) = writer {
-            if let Some(remain) = self.remain.take() {
-                JsFuture::from(writer.write_with_u8_array(&[remain]).unwrap())
-                    .await
-                    .unwrap();
-            }
-            JsFuture::from(writer.close()).await.unwrap();
+            JsFuture::from(writer.close()).await.map_err(wasm_err)?;
         }
         Ok(())
     }
@@ -87,38 +73,30 @@ impl Write for OPFSFile {
 impl Read for OPFSFile {
     async fn read_exact_at<B: IoBufMut>(&mut self, mut buf: B, pos: u64) -> (Result<(), Error>, B) {
         if let Some(file_handle) = self.file_handle.as_ref() {
-            let buf_len = buf.bytes_init();
-            let start = 2_i32.max(pos as i32) - 2;
-            let end = pos as i32 + 2 * buf_len as i32 + 2;
+            let buf_len = buf.bytes_init() as i32;
+            let buf_slice = buf.as_slice_mut();
+            let end = pos as i32 + buf_len;
 
             let file = JsFuture::from(file_handle.get_file())
                 .await
                 .unwrap()
                 .dyn_into::<File>()
+                .map_err(wasm_err)
                 .unwrap();
-            let blob = file.slice_with_i32_and_i32(start, end).unwrap();
-            let text = JsFuture::from(blob.text())
-                .await
-                .unwrap()
-                .dyn_into::<JsString>()
+            let blob = file.slice_with_i32_and_i32(pos as i32, end).unwrap();
+            let reader = blob
+                .stream()
+                .get_reader()
+                .dyn_into::<ReadableStreamDefaultReader>()
                 .unwrap();
-
-            let data = Self::decode(&text);
-
-            let start = (pos - start as u64) as usize;
-            let end = start + buf_len;
-            if end >= data.len() {
-                return (
-                    Err(Error::Io(std::io::Error::new(
-                        std::io::ErrorKind::UnexpectedEof,
-                        "Read end of file",
-                    ))),
-                    buf,
-                );
+            while let Ok(v) = JsFuture::from(reader.read()).await {
+                let result = ReadableStreamReadResult::from(v);
+                if result.get_done().unwrap() {
+                    break;
+                }
+                let chunk = result.get_value().dyn_into::<Uint8Array>().unwrap();
+                buf_slice.copy_from_slice(chunk.to_vec().as_slice());
             }
-
-            let buf_slice = buf.as_slice_mut();
-            buf_slice.copy_from_slice(&data[start..end]);
         }
         (Ok(()), buf)
     }
@@ -131,56 +109,26 @@ impl Read for OPFSFile {
                 .dyn_into::<File>()
                 .unwrap();
 
-            let start = 2_i32.max(pos as i32) - 2;
-            let blob = file.slice_with_i32(start).unwrap();
-            let text = JsFuture::from(blob.text())
-                .await
-                .unwrap()
-                .dyn_into::<JsString>()
+            let blob = file.slice_with_i32(pos as i32).unwrap();
+            let reader = blob
+                .stream()
+                .get_reader()
+                .dyn_into::<ReadableStreamDefaultReader>()
                 .unwrap();
-
-            let mut data = Self::decode(&text);
-            let start = (pos - start as u64) as usize;
-            buf.extend_from_slice(&mut data[start..]);
+            while let Ok(v) = JsFuture::from(reader.read()).await {
+                let result = ReadableStreamReadResult::from(v);
+                if result.get_done().unwrap() {
+                    break;
+                }
+                let chunk = result.get_value().dyn_into::<Uint8Array>().unwrap();
+                buf.extend(chunk.to_vec());
+            }
         }
         (Ok(()), buf)
     }
 
     async fn size(&self) -> Result<u64, Error> {
         Ok(self.pos as u64)
-    }
-}
-
-impl OPFSFile {
-    fn encode(src: &[u8], mut remain: Option<u8>) -> (String, Option<u8>) {
-        let mut data = Vec::new();
-        let mut iter = src.iter();
-        let mut remain_data = None;
-        while let Some(num) = iter.next() {
-            let (low, high) = match remain.take() {
-                Some(low) => (low, Some(num)),
-                None => (*num, iter.next()),
-            };
-
-            if high.is_none() {
-                remain_data = Some(low);
-                break;
-            }
-            data.push(((*high.unwrap() as u16) << 8) | low as u16);
-        }
-        let s = String::from_utf16(&data).unwrap();
-        (s, remain_data)
-    }
-
-    fn decode(s: &JsString) -> Vec<u8> {
-        let mut data = Vec::with_capacity(s.length() as usize);
-        for n in s.iter() {
-            let low = n & 0xFF;
-            let high = n >> 8;
-            data.push(low as u8);
-            data.push(high as u8);
-        }
-        data
     }
 }
 

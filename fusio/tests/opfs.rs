@@ -102,14 +102,17 @@ pub(crate) mod tests {
         result.unwrap();
         file.close().await.unwrap();
 
-        let (result, data) = file.read_to_end_at(vec![], 3).await;
-        result.unwrap();
-        assert_eq!(data, [3, 4, 11, 23, 34, 47, 121, 93, 94, 97]);
+        let expected = [1_u8, 2, 3, 4, 11, 23, 34, 47, 121, 93, 94, 97];
+        for i in 0..12 {
+            let (result, data) = file.read_to_end_at(vec![], i).await;
+            result.unwrap();
+            assert_eq!(data.as_slice(), &expected[i as usize..]);
+        }
 
-        let mut buf = [0; 6];
-        let (result, data) = file.read_exact_at(buf.as_mut(), 0).await;
+        let mut buf = [0; 7];
+        let (result, data) = file.read_exact_at(buf.as_mut(), 3).await;
         result.unwrap();
-        assert_eq!(data, [1, 2, 3, 4, 11, 23]);
+        assert_eq!(data, [4, 11, 23, 34, 47, 121, 93]);
         remove_all(&fs, &["file"]).await;
     }
 
@@ -141,31 +144,4 @@ pub(crate) mod tests {
 
         remove_all(&fs, &["file"]).await;
     }
-
-    // #[wasm_bindgen_test]
-    // async fn test_opfs_write_padding() {
-    //     let fs = OPFS;
-    //     let mut file = fs
-    //         .open_options(&"file".into(), OpenOptions::default().create(true))
-    //         .await
-    //         .unwrap();
-    //     let (result, _) = file.write_all([1, 2, 3].as_mut()).await;
-    //     result.unwrap();
-    //     let (result, _) = file.write_all([11, 23, 34].as_mut()).await;
-    //     result.unwrap();
-    //     // file.close().await.unwrap();
-    //     let (result, _) = file.write_all([121, 93, 94].as_mut()).await;
-    //     result.unwrap();
-    //     file.close().await.unwrap();
-    //
-    //     let (result, data) = file.read_to_end_at(vec![], 0).await;
-    //     result.unwrap();
-    //     assert_eq!(data, [1, 2, 3, 11, 23, 34, 121, 93, 94]);
-    //
-    //     let mut buf = [0; 4];
-    //     let (result, data) = file.read_exact_at(buf.as_mut(), 0).await;
-    //     result.unwrap();
-    //     assert_eq!(data, [1, 2, 3, 11]);
-    //     remove_all(&fs, &["file"]).await;
-    // }
 }
