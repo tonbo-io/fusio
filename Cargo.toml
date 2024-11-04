@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "examples",
+    "examples/opfs",
     "fusio",
     "fusio-dispatch",
     "fusio-object-store",
