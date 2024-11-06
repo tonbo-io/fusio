@@ -1,7 +1,7 @@
 use std::{cmp, ops::Range, sync::Arc};
 
 use bytes::{Bytes, BytesMut};
-use fusio::{dynamic::DynFile, Read};
+use fusio::{buffered::BufReader, dynamic::DynFile, Read};
 use futures::{future::BoxFuture, FutureExt};
 use parquet::{
     arrow::async_reader::AsyncFileReader,
@@ -13,9 +13,10 @@ use parquet::{
 };
 
 const PREFETCH_FOOTER_SIZE: usize = 512 * 1024;
+const DEFAULT_BUFFER_SIZE: usize = 512 * 1024;
 
 pub struct AsyncReader {
-    inner: Box<dyn DynFile>,
+    inner: BufReader<Box<dyn DynFile>>,
     content_length: u64,
     // The prefetch size for fetching file footer.
     prefetch_footer_size: usize,
@@ -29,7 +30,7 @@ fn set_prefetch_footer_size(footer_size: usize, content_size: u64) -> usize {
 impl AsyncReader {
     pub async fn new(reader: Box<dyn DynFile>, content_length: u64) -> Result<Self, fusio::Error> {
         Ok(Self {
-            inner: reader,
+            inner: BufReader::new(reader, DEFAULT_BUFFER_SIZE).await?,
             content_length,
             prefetch_footer_size: set_prefetch_footer_size(PREFETCH_FOOTER_SIZE, content_length),
         })
