@@ -47,7 +47,7 @@ impl Fs for OPFS {
             .dyn_into::<FileSystemFileHandle>()
             .unwrap();
 
-        Ok(OPFSFile::new(Some(file_handle)))
+        Ok(OPFSFile::new(file_handle))
     }
 
     async fn create_dir_all(path: &Path) -> Result<(), Error> {

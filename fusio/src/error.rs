@@ -23,6 +23,6 @@ pub enum Error {
 pub type BoxedError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
 #[cfg(all(feature = "opfs", target_arch = "wasm32"))]
-pub(crate) fn wasm_err(js_val: js_sys::wasm_bindgen::JsValue) -> BoxedError {
-    format!("{js_val:?}").into()
+pub(crate) fn wasm_err(js_val: js_sys::wasm_bindgen::JsValue) -> Error {
+    Error::Other(format!("{js_val:?}").into())
 }
