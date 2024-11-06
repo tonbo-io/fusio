@@ -103,3 +103,36 @@ jobs:
         with:
           command: fmt
           args: -- --check
+  wasm:
+    name: WASM
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install latest
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+          components: rustfmt, clippy
+
+      - name: Setup for wasm32
+        run: |
+          rustup target add wasm32-unknown-unknown
+
+      - name: Run cargo build on fusio
+        uses: actions-rs/cargo@v1
+        with:
+          command: build
+          args: --target wasm32-unknown-unknown --package fusio --features=opfs
+
+      - name: Run cargo build on fusio-parquet
+        uses: actions-rs/cargo@v1
+        with:
+          command: build
+          args: --target wasm32-unknown-unknown --package fusio-parquet --features=opfs
+
+      - name: Run cargo build on fusio-dispatch
+        uses: actions-rs/cargo@v1
+        with:
+          command: build
+          args: --target wasm32-unknown-unknown --package fusio-dispatch --features=opfs
