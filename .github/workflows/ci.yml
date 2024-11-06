@@ -123,7 +123,7 @@ jobs:
         uses: actions-rs/cargo@v1
         with:
           command: build
-          args: --target wasm32-unknown-unknown --package fusio --features=opfs
+          args: --target wasm32-unknown-unknown --package fusio --features=opfs,aws
 
       - name: Run cargo build on fusio-parquet
         uses: actions-rs/cargo@v1
@@ -135,4 +135,4 @@ jobs:
         uses: actions-rs/cargo@v1
         with:
           command: build
-          args: --target wasm32-unknown-unknown --package fusio-dispatch --features=opfs
+          args: --target wasm32-unknown-unknown --package fusio-dispatch --features=opfs,aws
