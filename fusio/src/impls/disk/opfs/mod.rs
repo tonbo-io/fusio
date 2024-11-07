@@ -6,9 +6,9 @@ use std::sync::Arc;
 use js_sys::Uint8Array;
 use wasm_bindgen_futures::JsFuture;
 use web_sys::{
-    wasm_bindgen::JsCast, window, Blob, File, FileSystemCreateWritableOptions,
-    FileSystemDirectoryHandle, FileSystemFileHandle, FileSystemWritableFileStream,
-    ReadableStreamDefaultReader, ReadableStreamReadResult,
+    wasm_bindgen::JsCast, window, File, FileSystemCreateWritableOptions, FileSystemDirectoryHandle,
+    FileSystemFileHandle, FileSystemWritableFileStream, ReadableStreamDefaultReader,
+    ReadableStreamReadResult,
 };
 
 use crate::{error::wasm_err, Error, IoBuf, IoBufMut, Read, Write};
@@ -94,8 +94,9 @@ impl FileHandle {
         (Ok(()), buf)
     }
 
-    pub async fn read_exact_at<B: IoBufMut>(&self, buf: B, pos: u64) -> (Result<(), Error>, B) {
+    pub async fn read_exact_at<B: IoBufMut>(&self, mut buf: B, pos: u64) -> (Result<(), Error>, B) {
         let buf_len = buf.bytes_init() as i32;
+        let buf_slice = buf.as_slice_mut();
         let end = pos as i32 + buf_len;
 
         let file = JsFuture::from(self.file_handle.get_file())
@@ -106,27 +107,36 @@ impl FileHandle {
             .unwrap();
 
         let blob = file.slice_with_i32_and_i32(pos as i32, end).unwrap();
-
-        Self::read_blob(&blob, buf).await
-    }
-
-    async fn read_blob<B: IoBufMut>(blob: &Blob, mut buf: B) -> (Result<(), Error>, B) {
-        let buf_slice = buf.as_slice_mut();
         let reader = blob
             .stream()
             .get_reader()
             .dyn_into::<ReadableStreamDefaultReader>()
             .unwrap();
+
+        let mut offset = 0;
         while let Ok(v) = JsFuture::from(reader.read()).await {
             let result = ReadableStreamReadResult::from(v);
             if result.get_done().unwrap() {
                 break;
             }
+
             let chunk = result.get_value().dyn_into::<Uint8Array>().unwrap();
-            buf_slice.copy_from_slice(chunk.to_vec().as_slice());
+            let chunk_len = chunk.length() as usize;
+            buf_slice[offset..offset + chunk_len].copy_from_slice(chunk.to_vec().as_slice());
+            offset += chunk_len;
         }
 
         (Ok(()), buf)
+    }
+
+    pub async fn size(&self) -> Result<u64, Error> {
+        let file = JsFuture::from(self.file_handle.get_file())
+            .await
+            .unwrap()
+            .dyn_into::<File>()
+            .map_err(wasm_err)?;
+
+        Ok(file.size() as u64)
     }
 }
 
@@ -206,7 +216,8 @@ impl Read for OPFSFile {
     }
 
     async fn size(&self) -> Result<u64, Error> {
-        Ok(self.pos as u64)
+        let file_handle = self.file_handle.as_ref().expect("read file after closed");
+        file_handle.size().await
     }
 }
 

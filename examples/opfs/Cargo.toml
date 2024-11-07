@@ -7,16 +7,22 @@ version = "0.1.0"
 [lib]
 crate-type = ["cdylib", "rlib"]
 
-# [features]
-# default = ["fusio/aws", "fusio/opfs"]
-
-
 [dependencies]
+arrow = "53"
 fusio = { path = "../../fusio", features = ["opfs"] }
 fusio-dispatch = { path = "../../fusio-dispatch", features = ["opfs"] }
+fusio-parquet = { path = "../../fusio-parquet", features = ["opfs"] }
+futures = { version = "0.3" }
+parquet = { version = "53", default-features = false, features = [
+    "arrow",
+    "async",
+] }
 wasm-bindgen = "0.2.95"
 wasm-bindgen-futures = { version = "0.4.45" }
+web-sys = { version = "0.3", features = [
+    "console",
 
+] }
 
 [dev-dependencies]
 wasm-bindgen-test = "0.3.34"
