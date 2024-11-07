@@ -136,3 +136,25 @@ jobs:
         with:
           command: build
           args: --target wasm32-unknown-unknown --package fusio-dispatch --features=opfs,aws
+
+      - name: Install Chrome Environment
+        run: |
+          mkdir -p /tmp/chrome
+          wget $(curl https://googlechromelabs.github.io/chrome-for-testing/known-good-versions-with-downloads.json | jq -r '.versions | sort_by(.version) | reverse | .[0] | .downloads.chrome | .[] | select(.platform == "linux64") | .url')
+          wget $(curl https://googlechromelabs.github.io/chrome-for-testing/known-good-versions-with-downloads.json | jq -r '.versions | sort_by(.version) | reverse | .[0] | .downloads.chromedriver | .[] | select(.platform == "linux64") | .url')
+          unzip chromedriver-linux64.zip
+          unzip chrome-linux64.zip
+          cp -r chrome-linux64/ /tmp/chrome/
+          cp -r chromedriver-linux64 /tmp/chrome/chromedriver
+
+      - name: Setup wasm-pack
+        run: |
+          cargo install wasm-pack
+
+      - name: Run wasm-pack test on fusion
+        run: |
+          wasm-pack test --chrome --headless fusio --features opfs 
+
+      - name: Run wasm-pack test on fusion-parquet
+        run: |
+          wasm-pack test --chrome --headless fusio-parquet --features opfs 
