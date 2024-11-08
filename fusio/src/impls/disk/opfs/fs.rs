@@ -13,7 +13,8 @@ use web_sys::{
 
 use super::OPFSFile;
 use crate::{
-    disk::opfs::storage,
+    disk::opfs::{promise, storage},
+    error::wasm_err,
     fs::{FileMeta, Fs, OpenOptions},
     path::Path,
     Error,
@@ -41,11 +42,10 @@ impl Fs for OPFS {
         let option = FileSystemGetFileOptions::new();
         option.set_create(options.create);
 
-        let file_handle = JsFuture::from(parent.get_file_handle_with_options(file_name, &option))
-            .await
-            .unwrap()
-            .dyn_into::<FileSystemFileHandle>()
-            .unwrap();
+        let file_handle = promise::<FileSystemFileHandle>(
+            parent.get_file_handle_with_options(file_name, &option),
+        )
+        .await?;
 
         Ok(OPFSFile::new(file_handle))
     }
@@ -71,7 +71,6 @@ impl Fs for OPFS {
         let entries = JsStream::from(dir.entries())
             .map(|x| {
                 let array: Vec<JsValue> = x.unwrap().dyn_into::<Array>().unwrap().to_vec();
-                assert_eq!(array.len(), 2);
                 let path: String = array[0].clone().dyn_into::<JsString>().unwrap().into();
                 path
             })
@@ -95,7 +94,7 @@ impl Fs for OPFS {
         options.set_recursive(true);
         JsFuture::from(parent.remove_entry_with_options(removed_entry, &options))
             .await
-            .unwrap();
+            .map_err(wasm_err)?;
         Ok(())
     }
 }
@@ -118,12 +117,10 @@ impl OPFS {
                     path: path.to_string(),
                 }));
             }
-            parent =
-                JsFuture::from(parent.get_directory_handle_with_options(segment.as_ref(), options))
-                    .await
-                    .unwrap()
-                    .dyn_into::<FileSystemDirectoryHandle>()
-                    .unwrap();
+            parent = promise::<FileSystemDirectoryHandle>(
+                parent.get_directory_handle_with_options(segment.as_ref(), options),
+            )
+            .await?;
         }
         Ok(parent)
     }
@@ -147,12 +144,10 @@ impl OPFS {
                     path: path.to_string(),
                 }));
             }
-            parent =
-                JsFuture::from(parent.get_directory_handle_with_options(segment.as_ref(), options))
-                    .await
-                    .unwrap()
-                    .dyn_into::<FileSystemDirectoryHandle>()
-                    .unwrap();
+            parent = promise::<FileSystemDirectoryHandle>(
+                parent.get_directory_handle_with_options(segment.as_ref(), options),
+            )
+            .await?;
         }
         Ok(parent)
     }

@@ -16,6 +16,12 @@ pub enum Error {
     Unsupported {
         message: String,
     },
+    #[error("Performs dynamic cast failed.")]
+    CastError,
+    #[error("Error occurs in wasm: {message}")]
+    Wasm {
+        message: String,
+    },
     #[error(transparent)]
     Other(#[from] BoxedError),
 }
@@ -24,5 +30,7 @@ pub type BoxedError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
 #[cfg(all(feature = "opfs", target_arch = "wasm32"))]
 pub(crate) fn wasm_err(js_val: js_sys::wasm_bindgen::JsValue) -> Error {
-    Error::Other(format!("{js_val:?}").into())
+    Error::Wasm {
+        message: format!("{js_val:?}"),
+    }
 }

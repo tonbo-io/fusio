@@ -13,6 +13,15 @@ use web_sys::{
 
 use crate::{error::wasm_err, Error, IoBuf, IoBufMut, Read, Write};
 
+pub(crate) async fn promise<T>(promise: js_sys::Promise) -> Result<T, Error>
+where
+    T: JsCast,
+{
+    let js_val = JsFuture::from(promise).await.map_err(wasm_err)?;
+
+    js_val.dyn_into::<T>().map_err(|_obj| Error::CastError)
+}
+
 pub struct FileHandle {
     file_handle: FileSystemFileHandle,
 }
@@ -27,15 +36,16 @@ impl FileHandle {
     pub async fn write_at<B: IoBuf>(&self, buf: B, pos: u64) -> (Result<(), Error>, B) {
         let options = FileSystemCreateWritableOptions::new();
         options.set_keep_existing_data(true);
-        let writer = JsFuture::from(self.create_writable_with_options(&options))
-            .await
-            .unwrap()
-            .dyn_into::<FileSystemWritableFileStream>()
-            .unwrap();
 
-        JsFuture::from(writer.seek_with_u32(pos as u32).unwrap())
-            .await
-            .unwrap();
+        let writer_promise = self.create_writable_with_options(&options);
+        let writer = match promise::<FileSystemWritableFileStream>(writer_promise).await {
+            Ok(writer) => writer,
+            Err(err) => return (Err(err), buf),
+        };
+
+        if let Err(err) = JsFuture::from(writer.seek_with_u32(pos as u32).unwrap()).await {
+            return (Err(wasm_err(err)), buf);
+        }
 
         let (result, buf) = self.write_with_stream(buf, &writer).await;
         if result.is_err() {
@@ -45,6 +55,7 @@ impl FileHandle {
             .await
             .map_err(wasm_err)
             .map(|_| ());
+
         (result, buf)
     }
 
@@ -53,10 +64,10 @@ impl FileHandle {
         buf: B,
         stream: &FileSystemWritableFileStream,
     ) -> (Result<(), Error>, B) {
-        JsFuture::from(stream.write_with_u8_array(buf.as_slice()).unwrap())
-            .await
-            .unwrap();
-        (Ok(()), buf)
+        match JsFuture::from(stream.write_with_u8_array(buf.as_slice()).unwrap()).await {
+            Ok(_) => (Ok(()), buf),
+            Err(err) => (Err(wasm_err(err)), buf),
+        }
     }
 
     fn create_writable_with_options(
@@ -69,18 +80,22 @@ impl FileHandle {
 
 impl FileHandle {
     async fn read_to_end_at(&self, mut buf: Vec<u8>, pos: u64) -> (Result<(), Error>, Vec<u8>) {
-        let file = JsFuture::from(self.file_handle.get_file())
-            .await
-            .unwrap()
-            .dyn_into::<File>()
-            .unwrap();
+        let file_promise = self.file_handle.get_file();
+        let file = match promise::<File>(file_promise).await {
+            Ok(file) => file,
+            Err(err) => return (Err(err), buf),
+        };
 
         let blob = file.slice_with_i32(pos as i32).unwrap();
-        let reader = blob
+        let reader = match blob
             .stream()
             .get_reader()
             .dyn_into::<ReadableStreamDefaultReader>()
-            .unwrap();
+            .map_err(|_obj| Error::CastError)
+        {
+            Ok(reader) => reader,
+            Err(err) => return (Err(err), buf),
+        };
 
         while let Ok(v) = JsFuture::from(reader.read()).await {
             let result = ReadableStreamReadResult::from(v);
@@ -99,19 +114,21 @@ impl FileHandle {
         let buf_slice = buf.as_slice_mut();
         let end = pos as i32 + buf_len;
 
-        let file = JsFuture::from(self.file_handle.get_file())
-            .await
-            .unwrap()
-            .dyn_into::<File>()
-            .map_err(wasm_err)
-            .unwrap();
+        let file = match promise::<File>(self.file_handle.get_file()).await {
+            Ok(file) => file,
+            Err(err) => return (Err(err), buf),
+        };
 
         let blob = file.slice_with_i32_and_i32(pos as i32, end).unwrap();
-        let reader = blob
+        let reader = match blob
             .stream()
             .get_reader()
             .dyn_into::<ReadableStreamDefaultReader>()
-            .unwrap();
+            .map_err(|_obj| Error::CastError)
+        {
+            Ok(reader) => reader,
+            Err(err) => return (Err(err), buf),
+        };
 
         let mut offset = 0;
         while let Ok(v) = JsFuture::from(reader.read()).await {
@@ -130,11 +147,7 @@ impl FileHandle {
     }
 
     pub async fn size(&self) -> Result<u64, Error> {
-        let file = JsFuture::from(self.file_handle.get_file())
-            .await
-            .unwrap()
-            .dyn_into::<File>()
-            .map_err(wasm_err)?;
+        let file = promise::<File>(self.file_handle.get_file()).await?;
 
         Ok(file.size() as u64)
     }
@@ -169,16 +182,20 @@ impl Write for OPFSFile {
         if self.write_stream.is_none() {
             let options = FileSystemCreateWritableOptions::new();
             options.set_keep_existing_data(true);
+            let writer_promise = file_handle.create_writable_with_options(&options);
 
-            let writer = JsFuture::from(file_handle.create_writable_with_options(&options))
-                .await
-                .unwrap()
-                .dyn_into::<FileSystemWritableFileStream>()
-                .unwrap();
+            let writer = match promise::<FileSystemWritableFileStream>(writer_promise).await {
+                Ok(writer) => writer,
+                Err(err) => return (Err(err), buf),
+            };
 
-            JsFuture::from(writer.seek_with_u32(self.pos).unwrap())
+            if let Err(err) = JsFuture::from(writer.seek_with_u32(self.pos).unwrap())
                 .await
-                .unwrap();
+                .map_err(wasm_err)
+            {
+                return (Err(err), buf);
+            }
+
             self.write_stream = Some(writer);
         }
 
