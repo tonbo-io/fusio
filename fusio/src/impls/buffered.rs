@@ -168,6 +168,7 @@ impl<F: Write> Write for BufWriter<F> {
     }
 }
 
+#[cfg(feature = "tokio")]
 #[cfg(test)]
 pub(crate) mod tests {
     use tokio::io::AsyncWriteExt;
