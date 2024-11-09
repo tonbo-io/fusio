@@ -107,21 +107,6 @@ impl<F> BufWriter<F> {
     }
 }
 
-impl<F: Read> Read for BufWriter<F> {
-    async fn read_exact_at<B: IoBufMut>(&mut self, buf: B, pos: u64) -> (Result<(), Error>, B) {
-        self.inner.read_exact_at(buf, pos).await
-    }
-
-    async fn read_to_end_at(&mut self, buf: Vec<u8>, pos: u64) -> (Result<(), Error>, Vec<u8>) {
-        self.inner.read_to_end_at(buf, pos).await
-    }
-
-    async fn size(&self) -> Result<u64, Error> {
-        let size = self.inner.size().await?;
-        Ok(size)
-    }
-}
-
 impl<F: Write> Write for BufWriter<F> {
     async fn write_all<B: IoBuf>(&mut self, buf: B) -> (Result<(), Error>, B) {
         let written_size = buf.bytes_init();
@@ -172,7 +157,23 @@ impl<F: Write> Write for BufWriter<F> {
 pub(crate) mod tests {
     use tokio::io::AsyncWriteExt;
 
-    use crate::{buffered::BufReader, Read};
+    use super::BufWriter;
+    use crate::{buffered::BufReader, Error, IoBufMut, Read};
+
+    impl<F: Read> Read for BufWriter<F> {
+        async fn read_exact_at<B: IoBufMut>(&mut self, buf: B, pos: u64) -> (Result<(), Error>, B) {
+            self.inner.read_exact_at(buf, pos).await
+        }
+
+        async fn read_to_end_at(&mut self, buf: Vec<u8>, pos: u64) -> (Result<(), Error>, Vec<u8>) {
+            self.inner.read_to_end_at(buf, pos).await
+        }
+
+        async fn size(&self) -> Result<u64, Error> {
+            let size = self.inner.size().await?;
+            Ok(size)
+        }
+    }
 
     #[cfg(all(feature = "tokio", not(feature = "completion-based")))]
     #[tokio::test]
