@@ -10,7 +10,7 @@ pub use fs::{DynFile, DynFs};
 
 use crate::{
     buf::{Slice, SliceMut},
-    Error, MaybeSend, MaybeSync, Read, Write,
+    Error, IoBuf, IoBufMut, MaybeSend, MaybeSync, Read, Write,
 };
 
 pub trait MaybeSendFuture: Future + MaybeSend {}
@@ -47,6 +47,22 @@ impl<W: Write> DynWrite for W {
 
     fn close(&mut self) -> Pin<Box<dyn MaybeSendFuture<Output = Result<(), Error>> + '_>> {
         Box::pin(W::close(self))
+    }
+}
+
+impl<'write> Write for Box<dyn DynWrite + 'write> {
+    async fn write_all<B: IoBuf>(&mut self, buf: B) -> (Result<(), Error>, B) {
+        let (result, buf) =
+            DynWrite::write_all(self.as_mut(), unsafe { buf.slice_unchecked(..) }).await;
+        (result, unsafe { B::recover_from_slice(buf) })
+    }
+
+    async fn flush(&mut self) -> Result<(), Error> {
+        DynWrite::flush(self.as_mut()).await
+    }
+
+    async fn close(&mut self) -> Result<(), Error> {
+        DynWrite::close(self.as_mut()).await
     }
 }
 
@@ -91,5 +107,22 @@ where
 
     fn size(&self) -> Pin<Box<dyn MaybeSendFuture<Output = Result<u64, Error>> + '_>> {
         Box::pin(R::size(self))
+    }
+}
+
+impl<'read> Read for Box<dyn DynRead + 'read> {
+    async fn read_exact_at<B: IoBufMut>(&mut self, buf: B, pos: u64) -> (Result<(), Error>, B) {
+        let (result, buf) =
+            DynRead::read_exact_at(self.as_mut(), unsafe { buf.slice_mut_unchecked(..) }, pos)
+                .await;
+        (result, unsafe { B::recover_from_slice_mut(buf) })
+    }
+
+    async fn read_to_end_at(&mut self, buf: Vec<u8>, pos: u64) -> (Result<(), Error>, Vec<u8>) {
+        DynRead::read_to_end_at(self.as_mut(), buf, pos).await
+    }
+
+    async fn size(&self) -> Result<u64, Error> {
+        DynRead::size(self.as_ref()).await
     }
 }
