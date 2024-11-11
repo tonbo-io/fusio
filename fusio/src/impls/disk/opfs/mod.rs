@@ -1,7 +1,7 @@
 #[cfg(feature = "fs")]
 pub mod fs;
 
-use std::sync::Arc;
+use std::{io, sync::Arc};
 
 use js_sys::Uint8Array;
 use wasm_bindgen_futures::JsFuture;
@@ -86,6 +86,16 @@ impl FileHandle {
             Err(err) => return (Err(err), buf),
         };
 
+        if (file.size().round() as u64) < pos + buf.bytes_init() as u64 {
+            return (
+                Err(Error::Io(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "Read unexpected eof",
+                ))),
+                buf,
+            );
+        }
+
         let blob = file.slice_with_i32(pos as i32).unwrap();
         let reader = match blob
             .stream()
@@ -119,6 +129,15 @@ impl FileHandle {
             Err(err) => return (Err(err), buf),
         };
 
+        if (file.size().round() as u64) < pos + buf_len as u64 {
+            return (
+                Err(Error::Io(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "Read unexpected eof",
+                ))),
+                buf,
+            );
+        }
         let blob = file.slice_with_i32_and_i32(pos as i32, end).unwrap();
         let reader = match blob
             .stream()

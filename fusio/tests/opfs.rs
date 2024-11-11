@@ -186,4 +186,32 @@ pub(crate) mod tests {
         assert_eq!(data, [4, 11, 23, 34, 47, 121, 93]);
         remove_all(&fs, &["file"]).await;
     }
+
+    #[wasm_bindgen_test]
+    async fn test_opfs_read_eof() {
+        let fs = OPFS;
+        let mut file = fs
+            .open_options(&"file".into(), OpenOptions::default().create(true))
+            .await
+            .unwrap();
+
+        let mut buf = [0; 1];
+        let (result, _) = file.read_exact_at(buf.as_mut(), 0).await;
+        assert!(result.is_err());
+
+        let (result, _) = file.write_all([1, 2, 3, 4].as_mut()).await;
+        result.unwrap();
+        file.close().await.unwrap();
+
+        let mut file = fs
+            .open_options(&"file".into(), OpenOptions::default().create(true))
+            .await
+            .unwrap();
+
+        let mut buf = [0; 1];
+        let (result, data) = file.read_exact_at(buf.as_mut(), 5).await;
+        assert!(result.is_err());
+        assert_eq!(data, [0]);
+        remove_all(&fs, &["file"]).await;
+    }
 }
