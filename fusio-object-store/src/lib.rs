@@ -141,7 +141,7 @@ mod tests {
         if let Ok((region, bucket_name, access_key_id, secret_access_key)) = fn_env() {
             let path = object_store::path::Path::parse("/test_file").unwrap();
             let s3 = AmazonS3Builder::new()
-                .with_aws_region(region)
+                .with_region(region)
                 .with_bucket_name(bucket_name)
                 .with_access_key_id(access_key_id)
                 .with_secret_access_key(secret_access_key)

@@ -5,7 +5,7 @@ license.workspace = true
 name = "fusio"
 readme = "../README.md"
 repository.workspace = true
-version = "0.3.1"
+version = "0.3.2"
 
 [features]
 aws = [
@@ -94,7 +94,7 @@ thiserror = "1"
 tokio = { version = "1", optional = true, default-features = false, features = [
     "io-util",
 ] }
-url = { version = "2" }
+url = { version = "2.5.3", default-features = false, features = ["std"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { version = "0.2", features = ["js"] }

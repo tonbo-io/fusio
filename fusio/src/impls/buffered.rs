@@ -92,8 +92,6 @@ impl<F: Read> BufReader<F> {
 pub struct BufWriter<F> {
     inner: F,
     buf: Option<Vec<u8>>,
-    capacity: usize,
-    pos: usize,
 }
 
 impl<F> BufWriter<F> {
@@ -101,31 +99,19 @@ impl<F> BufWriter<F> {
         Self {
             inner: file,
             buf: Some(Vec::with_capacity(capacity)),
-            capacity,
-            pos: 0,
         }
-    }
-}
-
-impl<F: Read> Read for BufWriter<F> {
-    async fn read_exact_at<B: IoBufMut>(&mut self, buf: B, pos: u64) -> (Result<(), Error>, B) {
-        self.inner.read_exact_at(buf, pos).await
-    }
-
-    async fn read_to_end_at(&mut self, buf: Vec<u8>, pos: u64) -> (Result<(), Error>, Vec<u8>) {
-        self.inner.read_to_end_at(buf, pos).await
-    }
-
-    async fn size(&self) -> Result<u64, Error> {
-        let size = self.inner.size().await?;
-        Ok(size)
     }
 }
 
 impl<F: Write> Write for BufWriter<F> {
     async fn write_all<B: IoBuf>(&mut self, buf: B) -> (Result<(), Error>, B) {
+        let (len, capacity) = {
+            let buf = self.buf.as_ref().expect("no buffer available");
+            (buf.len(), buf.capacity())
+        };
+
         let written_size = buf.bytes_init();
-        if self.pos + written_size > self.capacity {
+        if len + written_size > capacity {
             let result = self.flush().await;
             if result.is_err() {
                 return (result, buf);
@@ -136,12 +122,11 @@ impl<F: Write> Write for BufWriter<F> {
         // 1. There is no enough space to hold data, which means buffer is empty and written size >
         //    capacity
         // 2. Data can be written to buffer
-        if self.pos + written_size > self.capacity {
+        if len + written_size > capacity {
             self.inner.write_all(buf).await
         } else {
             let owned_buf = self.buf.as_mut().unwrap();
             owned_buf.extend_from_slice(buf.as_slice());
-            self.pos += written_size;
             (Ok(()), buf)
         }
     }
@@ -152,9 +137,8 @@ impl<F: Write> Write for BufWriter<F> {
         let (result, mut data) = self.inner.write_all(data).await;
         result?;
 
-        data.drain(..self.pos);
+        data.clear();
         self.buf = Some(data);
-        self.pos = 0;
         self.inner.flush().await?;
 
         Ok(())
@@ -173,7 +157,23 @@ impl<F: Write> Write for BufWriter<F> {
 pub(crate) mod tests {
     use tokio::io::AsyncWriteExt;
 
-    use crate::{buffered::BufReader, Read};
+    use super::BufWriter;
+    use crate::{buffered::BufReader, Error, IoBufMut, Read};
+
+    impl<F: Read> Read for BufWriter<F> {
+        async fn read_exact_at<B: IoBufMut>(&mut self, buf: B, pos: u64) -> (Result<(), Error>, B) {
+            self.inner.read_exact_at(buf, pos).await
+        }
+
+        async fn read_to_end_at(&mut self, buf: Vec<u8>, pos: u64) -> (Result<(), Error>, Vec<u8>) {
+            self.inner.read_to_end_at(buf, pos).await
+        }
+
+        async fn size(&self) -> Result<u64, Error> {
+            let size = self.inner.size().await?;
+            Ok(size)
+        }
+    }
 
     #[cfg(all(feature = "tokio", not(feature = "completion-based")))]
     #[tokio::test]
