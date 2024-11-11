@@ -109,3 +109,60 @@ jobs:
         with:
           command: fmt
           args: -- --check
+  wasm:
+    name: WASM
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install latest
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+          components: rustfmt, clippy
+
+      - name: Setup for wasm32
+        run: |
+          rustup target add wasm32-unknown-unknown
+
+      - name: Run cargo build on fusio
+        uses: actions-rs/cargo@v1
+        with:
+          command: build
+          args: --target wasm32-unknown-unknown --package fusio --features=opfs,aws
+
+      - name: Run cargo build on fusio-parquet
+        uses: actions-rs/cargo@v1
+        with:
+          command: build
+          args: --target wasm32-unknown-unknown --package fusio-parquet --features=opfs
+
+      - name: Run cargo build on fusio-dispatch
+        uses: actions-rs/cargo@v1
+        with:
+          command: build
+          args: --target wasm32-unknown-unknown --package fusio-dispatch --features=opfs,aws
+
+      - name: Install Chrome Environment
+        run: |
+          mkdir -p /tmp/chrome
+          wget $(curl https://googlechromelabs.github.io/chrome-for-testing/known-good-versions-with-downloads.json | jq -r '.versions | sort_by(.version) | reverse | .[0] | .downloads.chrome | .[] | select(.platform == "linux64") | .url')
+          wget $(curl https://googlechromelabs.github.io/chrome-for-testing/known-good-versions-with-downloads.json | jq -r '.versions | sort_by(.version) | reverse | .[0] | .downloads.chromedriver | .[] | select(.platform == "linux64") | .url')
+          unzip chromedriver-linux64.zip
+          unzip chrome-linux64.zip
+          cp -r chrome-linux64/ /tmp/chrome/
+          cp -r chromedriver-linux64 /tmp/chrome/chromedriver
+
+      - name: Setup wasm-pack
+        run: |
+          cargo install wasm-pack
+
+      - name: Run wasm-pack test on fusion
+        run: |
+          export PATH=$PATH:/tmp/chrome/chrome-linux64/:/tmp/chrome/chromedriver-linux64/
+          wasm-pack test --chrome --headless fusio --features opfs
+
+      - name: Run wasm-pack test on fusion-parquet
+        run: |
+          export PATH=$PATH:/tmp/chrome/chrome-linux64/:/tmp/chrome/chromedriver-linux64/
+          wasm-pack test --chrome --headless fusio-parquet --features opfs

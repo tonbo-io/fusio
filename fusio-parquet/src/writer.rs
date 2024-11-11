@@ -1,45 +1,93 @@
 use bytes::Bytes;
+#[allow(unused)]
 use fusio::{dynamic::DynFile, Write};
 use futures::future::BoxFuture;
 use parquet::{arrow::async_writer::AsyncFileWriter, errors::ParquetError};
 
 pub struct AsyncWriter {
     inner: Option<Box<dyn DynFile>>,
+    #[cfg(feature = "opfs")]
+    pos: u64,
 }
 
+unsafe impl Send for AsyncWriter {}
 impl AsyncWriter {
     pub fn new(writer: Box<dyn DynFile>) -> Self {
         Self {
             inner: Some(writer),
+            #[cfg(feature = "opfs")]
+            pos: 0,
         }
     }
 }
 
 impl AsyncFileWriter for AsyncWriter {
     fn write(&mut self, bs: Bytes) -> BoxFuture<'_, parquet::errors::Result<()>> {
-        Box::pin(async move {
-            if let Some(writer) = self.inner.as_mut() {
-                let (result, _) = writer.write_all(bs).await;
-                result.map_err(|err| ParquetError::External(Box::new(err)))?;
+        cfg_if::cfg_if! {
+            if #[cfg(all(feature = "opfs", target_arch = "wasm32"))] {
+                match self.inner.as_mut() {
+                    Some(writer) => {
+                        let pos = self.pos;
+                        self.pos += bs.len() as u64;
+                        let (sender, receiver) =
+                            futures::channel::oneshot::channel::<Result<(), ParquetError>>();
+                        let opfs = unsafe {
+                            std::mem::transmute::<&Box<dyn DynFile>, &Box<fusio::disk::OPFSFile>>(writer)
+                        };
+                        let handle = opfs.file_handle().unwrap();
+
+                        wasm_bindgen_futures::spawn_local(async move {
+                            let (result, _) = handle.write_at(bs, pos).await;
+                            let _ = sender.send(result
+                                .map_err(|err| ParquetError::External(Box::new(err))));
+                        });
+
+                        Box::pin(async move {
+                            receiver.await.unwrap()?;
+                            Ok(())
+                        })
+
+                    },
+                    None => Box::pin(async move {
+                        Ok(())
+                    })
+
+                }
+            } else {
+                Box::pin(async move {
+                    if let Some(writer) = self.inner.as_mut() {
+                        let (result, _) = writer.write_all(bs).await;
+                        result.map_err(|err| ParquetError::External(Box::new(err)))?;
+                    }
+                    Ok(())
+                })
             }
-            Ok(())
-        })
+        }
     }
 
     fn complete(&mut self) -> BoxFuture<'_, parquet::errors::Result<()>> {
-        Box::pin(async move {
-            if let Some(mut writer) = self.inner.take() {
-                writer
-                    .close()
-                    .await
-                    .map_err(|err| ParquetError::External(Box::new(err)))?;
-            }
+        cfg_if::cfg_if! {
+            if #[cfg(all(feature = "opfs", target_arch = "wasm32"))] {
+                Box::pin(async move {
+                    Ok(())
+                })
+            } else {
+                Box::pin(async move {
+                    if let Some(mut writer) = self.inner.take() {
+                        writer
+                            .close()
+                            .await
+                            .map_err(|err| ParquetError::External(Box::new(err)))?;
+                    }
 
-            Ok(())
-        })
+                    Ok(())
+                })
+            }
+        }
     }
 }
 
+#[cfg(feature = "tokio")]
 #[cfg(test)]
 mod tests {
     use std::{

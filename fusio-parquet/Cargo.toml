@@ -6,18 +6,30 @@ name = "fusio-parquet"
 repository.workspace = true
 version = "0.2.2"
 
+[features]
+default = []
+opfs = ["fusio/opfs"]
+tokio = ["fusio/tokio"]
+
 [dependencies]
 bytes = { workspace = true }
-fusio = { version = "0.3.2", path = "../fusio", features = [
-    "bytes",
-    "dyn",
-    "tokio",
-] }
+cfg-if = "1.0.0"
+fusio = { version = "0.3.2", path = "../fusio", features = ["bytes", "dyn"] }
 futures = { version = "0.3" }
-parquet = { version = "53", features = ["arrow", "async"] }
-tokio = { version = "1.40" }
+parquet = { version = "53", default-features = false, features = [
+    "arrow",
+    "async",
+] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen-futures = { version = "0.4.45" }
 
 [dev-dependencies]
 arrow = "53"
 rand = "0.8"
 tempfile = "3.12.0"
+tokio = { version = "1.40" }
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen = "0.2.95"
+wasm-bindgen-test = "0.3.9"

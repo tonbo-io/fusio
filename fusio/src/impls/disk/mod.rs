@@ -2,6 +2,16 @@
 pub(crate) mod monoio;
 #[cfg(feature = "tokio")]
 pub(crate) mod tokio;
+
+#[cfg(all(feature = "opfs", target_arch = "wasm32"))]
+pub(crate) mod opfs;
+#[cfg(all(feature = "opfs", target_arch = "wasm32", feature = "fs"))]
+#[allow(unused)]
+pub use opfs::fs::*;
+#[cfg(all(feature = "opfs", target_arch = "wasm32"))]
+#[allow(unused)]
+pub use opfs::OPFSFile;
+
 #[cfg(all(feature = "tokio-uring", target_os = "linux"))]
 pub(crate) mod tokio_uring;
 
@@ -29,5 +39,7 @@ cfg_if::cfg_if! {
         pub type LocalFs = MonoIoFs;
     } else if #[cfg(feature = "tokio-uring")] {
         pub type LocalFs = TokioUringFs;
+    } else if #[cfg(all(feature = "opfs", target_arch = "wasm32"))] {
+        pub type LocalFs = OPFS;
     }
 }

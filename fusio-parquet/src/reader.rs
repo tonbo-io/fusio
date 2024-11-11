@@ -1,6 +1,7 @@
 use std::{cmp, ops::Range, sync::Arc};
 
 use bytes::{Bytes, BytesMut};
+#[allow(unused)]
 use fusio::{dynamic::DynFile, Read};
 use futures::{future::BoxFuture, FutureExt};
 use parquet::{
@@ -20,6 +21,8 @@ pub struct AsyncReader {
     // The prefetch size for fetching file footer.
     prefetch_footer_size: usize,
 }
+
+unsafe impl Send for AsyncReader {}
 
 fn set_prefetch_footer_size(footer_size: usize, content_size: u64) -> usize {
     let footer_size = cmp::max(footer_size, FOOTER_SIZE);
@@ -43,72 +46,166 @@ impl AsyncReader {
 
 impl AsyncFileReader for AsyncReader {
     fn get_bytes(&mut self, range: Range<usize>) -> BoxFuture<'_, parquet::errors::Result<Bytes>> {
-        async move {
-            let len = range.end - range.start;
-            let mut buf = BytesMut::with_capacity(len);
-            buf.resize(len, 0);
+        let len = range.end - range.start;
+        let mut buf = BytesMut::with_capacity(len);
+        buf.resize(len, 0);
 
-            let (result, buf) = self.inner.read_exact_at(buf, range.start as u64).await;
-            result.map_err(|err| ParquetError::External(Box::new(err)))?;
-            Ok(buf.freeze())
+        cfg_if::cfg_if! {
+            if #[cfg(all(feature = "opfs", target_arch = "wasm32"))] {
+                let (sender, receiver) =
+                futures::channel::oneshot::channel::<Result<Bytes, ParquetError>>();
+                let opfs = unsafe {
+                    std::mem::transmute::<&Box<dyn DynFile>, &Box<fusio::disk::OPFSFile>>(&self.inner)
+                };
+                let file_handle = opfs.file_handle().unwrap();
+
+                wasm_bindgen_futures::spawn_local(async move {
+
+                    let (result, buf) = file_handle.read_exact_at(buf, range.start as u64).await;
+
+                    let ret = match result {
+                        Ok(_) => Ok(buf.freeze()),
+                        Err(err) => Err(ParquetError::External(Box::new(err)))
+                    };
+                    let _ = sender.send(ret);
+                });
+
+                async move {
+                    receiver.await.unwrap()
+                }
+                .boxed()
+            } else {
+                async move {
+                    let (result, buf) = self.inner.read_exact_at(buf, range.start as u64).await;
+                    result.map_err(|err| ParquetError::External(Box::new(err)))?;
+                    Ok(buf.freeze())
+                }
+                .boxed()
+            }
         }
-        .boxed()
     }
 
     fn get_metadata(&mut self) -> BoxFuture<'_, parquet::errors::Result<Arc<ParquetMetaData>>> {
-        async move {
-            if self.content_length == 0 {
-                return Err(ParquetError::EOF("file empty".to_string()));
-            }
+        if self.content_length == 0 {
+            return async { Err(ParquetError::EOF("file empty".to_string())) }.boxed();
+        }
+        let footer_size = self.prefetch_footer_size;
+        let content_length = self.content_length;
 
-            let footer_size = self.prefetch_footer_size;
-            let mut buf = BytesMut::with_capacity(footer_size);
-            buf.resize(footer_size, 0);
+        cfg_if::cfg_if! {
+            if #[cfg(all(feature = "opfs", target_arch = "wasm32"))] {
+                let mut buf = BytesMut::with_capacity(footer_size);
+                buf.resize(footer_size, 0);
+                let (sender, receiver) =
+                futures::channel::oneshot::channel::<Result<Arc<ParquetMetaData>, ParquetError>>();
+                let opfs = unsafe {
+                    std::mem::transmute::<&Box<dyn DynFile>, &Box<fusio::disk::OPFSFile>>(&self.inner)
+                };
+                let file_handle = opfs.file_handle().unwrap();
 
-            let (result, prefetched_footer_content) = self
-                .inner
-                .read_exact_at(buf, self.content_length - footer_size as u64)
-                .await;
-            result.map_err(|err| ParquetError::External(Box::new(err)))?;
-            let prefetched_footer_slice = prefetched_footer_content.as_ref();
-            let prefetched_footer_length = prefetched_footer_slice.len();
+                wasm_bindgen_futures::spawn_local(async move {
+                    let (result, prefetched_footer_content) = file_handle
+                        .read_exact_at(buf, content_length - footer_size as u64)
+                        .await;
+                    if let Err(err) = result {
+                        let _ = sender.send(Err(ParquetError::External(Box::new(err))));
+                        return ;
+                    }
+                    let prefetched_footer_slice = prefetched_footer_content.as_ref();
+                    let prefetched_footer_length = prefetched_footer_slice.len();
 
-            // Decode the metadata length from the last 8 bytes of the file.
-            let metadata_length = {
-                let buf = &prefetched_footer_slice
-                    [(prefetched_footer_length - FOOTER_SIZE)..prefetched_footer_length];
-                debug_assert!(buf.len() == FOOTER_SIZE);
-                ParquetMetaDataReader::decode_footer(buf.try_into().unwrap())?
-            };
+                    // Decode the metadata length from the last 8 bytes of the file.
+                    let metadata_length = {
+                        let buf = &prefetched_footer_slice
+                            [(prefetched_footer_length - FOOTER_SIZE)..prefetched_footer_length];
+                        debug_assert!(buf.len() == FOOTER_SIZE);
+                        ParquetMetaDataReader::decode_footer(buf.try_into().unwrap()).unwrap()
+                    };
 
-            // Try to read the metadata from the `prefetched_footer_content`.
-            // Otherwise, fetch exact metadata from the remote.
-            if prefetched_footer_length >= metadata_length + FOOTER_SIZE {
-                let buf = &prefetched_footer_slice[(prefetched_footer_length
-                    - metadata_length
-                    - FOOTER_SIZE)
-                    ..(prefetched_footer_length - FOOTER_SIZE)];
-                Ok(Arc::new(ParquetMetaDataReader::decode_metadata(buf)?))
+                    // Try to read the metadata from the `prefetched_footer_content`.
+                    // Otherwise, fetch exact metadata from the remote.
+                    if prefetched_footer_length >= metadata_length + FOOTER_SIZE {
+                        let buf = &prefetched_footer_slice[(prefetched_footer_length
+                            - metadata_length
+                            - FOOTER_SIZE)
+                            ..(prefetched_footer_length - FOOTER_SIZE)];
+
+
+                        let _ = sender.send(ParquetMetaDataReader::decode_metadata(buf)
+                            .map(|meta| Arc::new(meta)));
+                    } else {
+                        let mut buf = BytesMut::with_capacity(metadata_length);
+                        buf.resize(metadata_length, 0);
+
+                        let (result, bytes) = file_handle
+                            .read_exact_at(
+                                buf,
+                                content_length - metadata_length as u64 - FOOTER_SIZE as u64,
+                            )
+                            .await;
+                        if let Err(err) = result {
+                            let _ = sender.send(Err(ParquetError::External(Box::new(err))));
+                            return ;
+                        }
+
+                        let _ = sender.send(ParquetMetaDataReader::decode_metadata(&bytes)
+                            .map(|meta| Arc::new(meta)));
+                    }
+                });
+                async move {
+                    receiver.await.unwrap()
+                }.boxed()
             } else {
-                let mut buf = BytesMut::with_capacity(metadata_length);
-                buf.resize(metadata_length, 0);
+                async move {
+                    let mut buf = BytesMut::with_capacity(footer_size);
+                    buf.resize(footer_size, 0);
+                    let (result, prefetched_footer_content) = self
+                        .inner
+                        .read_exact_at(buf, content_length - footer_size as u64)
+                        .await;
+                    result.map_err(|err| ParquetError::External(Box::new(err)))?;
+                    let prefetched_footer_slice = prefetched_footer_content.as_ref();
+                    let prefetched_footer_length = prefetched_footer_slice.len();
 
-                let (result, bytes) = self
-                    .inner
-                    .read_exact_at(
-                        buf,
-                        self.content_length - metadata_length as u64 - FOOTER_SIZE as u64,
-                    )
-                    .await;
-                result.map_err(|err| ParquetError::External(Box::new(err)))?;
+                    // Decode the metadata length from the last 8 bytes of the file.
+                    let metadata_length = {
+                        let buf = &prefetched_footer_slice
+                            [(prefetched_footer_length - FOOTER_SIZE)..prefetched_footer_length];
+                        debug_assert!(buf.len() == FOOTER_SIZE);
+                        ParquetMetaDataReader::decode_footer(buf.try_into().unwrap())?
+                    };
 
-                Ok(Arc::new(ParquetMetaDataReader::decode_metadata(&bytes)?))
+                    // Try to read the metadata from the `prefetched_footer_content`.
+                    // Otherwise, fetch exact metadata from the remote.
+                    if prefetched_footer_length >= metadata_length + FOOTER_SIZE {
+                        let buf = &prefetched_footer_slice[(prefetched_footer_length
+                            - metadata_length
+                            - FOOTER_SIZE)
+                            ..(prefetched_footer_length - FOOTER_SIZE)];
+                        Ok(Arc::new(ParquetMetaDataReader::decode_metadata(buf)?))
+                    } else {
+                        let mut buf = BytesMut::with_capacity(metadata_length);
+                        buf.resize(metadata_length, 0);
+
+                        let (result, bytes) = self
+                            .inner
+                            .read_exact_at(
+                                buf,
+                                content_length - metadata_length as u64 - FOOTER_SIZE as u64,
+                            )
+                            .await;
+                        result.map_err(|err| ParquetError::External(Box::new(err)))?;
+
+                        Ok(Arc::new(ParquetMetaDataReader::decode_metadata(&bytes)?))
+                    }
+                }
+                .boxed()
             }
         }
-        .boxed()
     }
 }
 
+#[cfg(feature = "tokio")]
 #[cfg(test)]
 mod tests {
     use std::{
