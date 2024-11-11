@@ -11,7 +11,7 @@ use url::Url;
 
 use super::{credential::AwsCredential, options::S3Options, S3Error, S3File};
 use crate::{
-    fs::{FileMeta, Fs, OpenOptions},
+    fs::{FileMeta, FileSystemTag, Fs, OpenOptions},
     path::Path,
     remotes::{
         aws::sign::Sign,
@@ -125,6 +125,10 @@ pub(super) struct AmazonS3Inner {
 impl Fs for AmazonS3 {
     type File = S3File;
 
+    fn file_system(&self) -> FileSystemTag {
+        FileSystemTag::S3
+    }
+
     async fn open_options(&self, path: &Path, _: OpenOptions) -> Result<Self::File, crate::Error> {
         Ok(S3File::new(self.clone(), path.clone()))
     }
@@ -233,6 +237,14 @@ impl Fs for AmazonS3 {
         }
 
         Ok(())
+    }
+
+    async fn copy<F: Fs>(&self, from: &Path, to_fs: &F, to: &Path) -> Result<(), Error> {
+        todo!()
+    }
+
+    async fn link<F: Fs>(&self, from: &Path, to_fs: &F, to: &Path) -> Result<(), Error> {
+        todo!()
     }
 }
 

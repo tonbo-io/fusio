@@ -1,10 +1,10 @@
-use std::sync::Arc;
+use std::{future::Future, sync::Arc};
 
 use async_stream::stream;
 use fusio::{
-    fs::{FileMeta, Fs, OpenOptions},
+    fs::{FileMeta, FileSystemTag, Fs, OpenOptions},
     path::Path,
-    Error,
+    Error, MaybeSend,
 };
 use futures_core::Stream;
 use futures_util::stream::StreamExt;
@@ -26,6 +26,10 @@ impl<O: ObjectStore> From<O> for S3Store<O> {
 
 impl<O: ObjectStore> Fs for S3Store<O> {
     type File = S3File<O>;
+
+    fn file_system(&self) -> FileSystemTag {
+        FileSystemTag::S3
+    }
 
     async fn open_options(&self, path: &Path, options: OpenOptions) -> Result<Self::File, Error> {
         if !options.truncate {
@@ -63,5 +67,23 @@ impl<O: ObjectStore> Fs for S3Store<O> {
         self.inner.delete(&path).await.map_err(BoxedError::from)?;
 
         Ok(())
+    }
+
+    fn copy<F: Fs>(
+        &self,
+        from: &Path,
+        to_fs: &F,
+        to: &Path,
+    ) -> impl Future<Output = Result<(), Error>> + MaybeSend {
+        todo!()
+    }
+
+    fn link<F: Fs>(
+        &self,
+        from: &Path,
+        to_fs: &F,
+        to: &Path,
+    ) -> impl Future<Output = Result<(), Error>> + MaybeSend {
+        todo!()
     }
 }

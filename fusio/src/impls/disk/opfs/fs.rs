@@ -1,3 +1,5 @@
+use std::future::Future;
+
 use async_stream::stream;
 use futures_core::Stream;
 use futures_util::StreamExt;
@@ -15,15 +17,19 @@ use super::OPFSFile;
 use crate::{
     disk::opfs::{promise, storage},
     error::wasm_err,
-    fs::{FileMeta, Fs, OpenOptions},
+    fs::{FileMeta, FileSystemTag, Fs, OpenOptions},
     path::Path,
-    Error,
+    Error, MaybeSend,
 };
 
 pub struct OPFS;
 
 impl Fs for OPFS {
     type File = OPFSFile;
+
+    fn file_system(&self) -> FileSystemTag {
+        FileSystemTag::Local
+    }
 
     async fn open_options(&self, path: &Path, options: OpenOptions) -> Result<Self::File, Error> {
         let segments: Vec<&str> = path.as_ref().trim_matches('/').split("/").collect();
@@ -96,6 +102,28 @@ impl Fs for OPFS {
             .await
             .map_err(wasm_err)?;
         Ok(())
+    }
+
+    fn copy<F: Fs>(
+        &self,
+        from: &Path,
+        to_fs: &F,
+        to: &Path,
+    ) -> impl Future<Output = Result<(), Error>> + MaybeSend {
+        Err(Error::Unsupported {
+            message: "opfs does not support copy file".to_string(),
+        })
+    }
+
+    fn link<F: Fs>(
+        &self,
+        from: &Path,
+        to_fs: &F,
+        to: &Path,
+    ) -> impl Future<Output = Result<(), Error>> + MaybeSend {
+        Err(Error::Unsupported {
+            message: "opfs does not support link file".to_string(),
+        })
     }
 }
 

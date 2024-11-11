@@ -1,7 +1,9 @@
+use std::future::Future;
+
 use fusio::{
-    fs::{FileMeta, Fs, OpenOptions},
+    fs::{FileMeta, FileSystemTag, Fs, OpenOptions},
     path::Path,
-    Error,
+    Error, MaybeSend,
 };
 use futures_core::Stream;
 use futures_util::TryStreamExt;
@@ -24,6 +26,10 @@ impl From<Operator> for OpendalFs {
 
 impl Fs for OpendalFs {
     type File = OpendalFile;
+
+    fn file_system(&self) -> FileSystemTag {
+        todo!()
+    }
 
     async fn open_options(&self, path: &Path, options: OpenOptions) -> Result<Self::File, Error> {
         OpendalFile::open(self.op.clone(), path.to_string(), options).await
@@ -56,5 +62,23 @@ impl Fs for OpendalFs {
             .delete(path.as_ref())
             .await
             .map_err(parse_opendal_error)
+    }
+
+    fn copy<F: Fs>(
+        &self,
+        from: &Path,
+        to_fs: &F,
+        to: &Path,
+    ) -> impl Future<Output = Result<(), Error>> + MaybeSend {
+        todo!()
+    }
+
+    fn link<F: Fs>(
+        &self,
+        from: &Path,
+        to_fs: &F,
+        to: &Path,
+    ) -> impl Future<Output = Result<(), Error>> + MaybeSend {
+        todo!()
     }
 }
