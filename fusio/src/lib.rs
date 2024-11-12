@@ -441,7 +441,6 @@ mod tests {
             src_fs
                 .copy(
                     &Path::from_absolute_path(&src_file_path)?,
-                    &dst_fs,
                     &Path::from_absolute_path(&dst_file_path)?,
                 )
                 .await?;

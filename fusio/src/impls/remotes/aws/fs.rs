@@ -14,10 +14,13 @@ use crate::{
     fs::{FileMeta, FileSystemTag, Fs, OpenOptions},
     path::Path,
     remotes::{
-        aws::sign::Sign,
+        aws::{
+            multipart_upload::{MultipartUpload, UploadType},
+            sign::Sign,
+        },
         http::{DynHttpClient, HttpClient, HttpError},
     },
-    Error,
+    Error, Read,
 };
 
 pub struct AmazonS3Builder {
@@ -239,12 +242,29 @@ impl Fs for AmazonS3 {
         Ok(())
     }
 
-    async fn copy<F: Fs>(&self, from: &Path, to_fs: &F, to: &Path) -> Result<(), Error> {
-        todo!()
+    async fn copy(&self, from: &Path, to: &Path) -> Result<(), Error> {
+        let from_file = S3File::new(self.clone(), from.clone());
+        let from_file_size = from_file.size().await?;
+
+        let upload = MultipartUpload::new(self.clone(), to.clone());
+        upload
+            .upload_once(
+                from_file_size as usize,
+                UploadType::Copy {
+                    endpoint: self.inner.options.endpoint.clone(),
+                    from: from.clone(),
+                    body: Empty::<Bytes>::new(),
+                },
+            )
+            .await?;
+
+        Ok(())
     }
 
-    async fn link<F: Fs>(&self, from: &Path, to_fs: &F, to: &Path) -> Result<(), Error> {
-        todo!()
+    async fn link<F: Fs>(&self, _: &Path, _: &F, _: &Path) -> Result<(), Error> {
+        Err(Error::Unsupported {
+            message: "s3 does not support link file".to_string(),
+        })
     }
 }
 

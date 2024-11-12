@@ -2,11 +2,14 @@ use std::{mem, pin::Pin, sync::Arc};
 
 use bytes::{BufMut, BytesMut};
 use futures_util::{stream::FuturesOrdered, StreamExt};
-use http_body_util::Full;
+use http_body_util::{Empty, Full};
 
 use crate::{
     dynamic::MaybeSendFuture,
-    remotes::{aws::multipart_upload::MultipartUpload, serde::MultipartPart},
+    remotes::{
+        aws::multipart_upload::{MultipartUpload, UploadType},
+        serde::MultipartPart,
+    },
     Error, IoBuf, Write,
 };
 
@@ -90,7 +93,7 @@ impl Write for S3Writer {
                 let bytes = mem::replace(&mut self.buf, BytesMut::new()).freeze();
 
                 self.inner
-                    .upload_once(bytes.len(), Full::new(bytes))
+                    .upload_once(bytes.len(), UploadType::Write(Full::new(bytes)))
                     .await?;
             }
             return Ok(());

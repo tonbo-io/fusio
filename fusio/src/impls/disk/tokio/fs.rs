@@ -72,15 +72,11 @@ impl Fs for TokioFs {
         Ok(())
     }
 
-    async fn copy<F: Fs>(&self, from: &Path, to_fs: &F, to: &Path) -> Result<(), Error> {
-        if self.file_system() == to_fs.file_system() {
-            let from = path_to_local(from)?;
-            let to = path_to_local(to)?;
+    async fn copy(&self, from: &Path, to: &Path) -> Result<(), Error> {
+        let from = path_to_local(from)?;
+        let to = path_to_local(to)?;
 
-            tokio::fs::copy(&from, &to).await?;
-        } else {
-            todo!()
-        }
+        tokio::fs::copy(&from, &to).await?;
 
         Ok(())
     }

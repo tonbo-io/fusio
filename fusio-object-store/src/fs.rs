@@ -69,21 +69,21 @@ impl<O: ObjectStore> Fs for S3Store<O> {
         Ok(())
     }
 
-    fn copy<F: Fs>(
-        &self,
-        from: &Path,
-        to_fs: &F,
-        to: &Path,
-    ) -> impl Future<Output = Result<(), Error>> + MaybeSend {
-        todo!()
+    async fn copy(&self, from: &Path, to: &Path) -> Result<(), Error> {
+        let from = from.clone().into();
+        let to = to.clone().into();
+
+        self.inner
+            .copy(&from, &to)
+            .await
+            .map_err(BoxedError::from)?;
+
+        Ok(())
     }
 
-    fn link<F: Fs>(
-        &self,
-        from: &Path,
-        to_fs: &F,
-        to: &Path,
-    ) -> impl Future<Output = Result<(), Error>> + MaybeSend {
-        todo!()
+    async fn link<F: Fs>(&self, _: &Path, _: &F, _: &Path) -> Result<(), Error> {
+        Err(Error::Unsupported {
+            message: "s3 does not support link file".to_string(),
+        })
     }
 }

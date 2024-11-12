@@ -61,15 +61,11 @@ impl Fs for MonoIoFs {
         Ok(fs::remove_file(path)?)
     }
 
-    async fn copy<F: Fs>(&self, from: &Path, to_fs: &F, to: &Path) -> Result<(), Error> {
-        if self.file_system() == to_fs.file_system() {
-            let from = path_to_local(from)?;
-            let to = path_to_local(to)?;
+    async fn copy(&self, from: &Path, to: &Path) -> Result<(), Error> {
+        let from = path_to_local(from)?;
+        let to = path_to_local(to)?;
 
-            fs::copy(&from, &to)?;
-        } else {
-            todo!()
-        }
+        fs::copy(&from, &to)?;
 
         Ok(())
     }

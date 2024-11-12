@@ -27,6 +27,16 @@ pub(crate) struct MultipartUpload {
     path: Path,
 }
 
+pub enum UploadType<B> {
+    Write(B),
+    Copy {
+        endpoint: String,
+        from: Path,
+        // FIXME: for Empty
+        body: B,
+    },
+}
+
 impl MultipartUpload {
     pub fn new(fs: AmazonS3, path: Path) -> Self {
         Self { fs, path }
@@ -67,22 +77,42 @@ impl MultipartUpload {
         Self::check_response(response).await
     }
 
-    pub(crate) async fn upload_once<B>(&self, size: usize, body: B) -> Result<(), Error>
+    pub(crate) async fn upload_once<B>(
+        &self,
+        size: usize,
+        upload_type: UploadType<B>,
+    ) -> Result<(), Error>
     where
         B: Body<Data = Bytes> + Clone + Unpin + Send + Sync + 'static,
         B::Error: std::error::Error + Send + Sync + 'static,
     {
+        let (body, copy_from) = match upload_type {
+            UploadType::Write(body) => (body, None),
+            UploadType::Copy {
+                endpoint,
+                from: file_path,
+                body,
+            } => {
+                let from_url = format!(
+                    "{endpoint}/{}",
+                    utf8_percent_encode(file_path.as_ref(), &STRICT_PATH_ENCODE_SET)
+                );
+                (body, Some(from_url))
+            }
+        };
         let url = format!(
             "{}/{}",
             self.fs.as_ref().options.endpoint,
             utf8_percent_encode(self.path.as_ref(), &STRICT_PATH_ENCODE_SET)
         );
-        let request = Request::builder()
+        let mut builder = Request::builder()
             .uri(url)
             .method(Method::PUT)
-            .header(CONTENT_LENGTH, size)
-            .body(body)
-            .map_err(|e| Error::Other(e.into()))?;
+            .header(CONTENT_LENGTH, size);
+        if let Some(from_url) = copy_from {
+            builder = builder.header("x-amz-copy-source", from_url);
+        }
+        let request = builder.body(body).map_err(|e| Error::Other(e.into()))?;
         let _ = self.send_request(request).await?;
 
         Ok(())
