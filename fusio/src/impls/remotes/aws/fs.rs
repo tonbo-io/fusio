@@ -98,6 +98,7 @@ impl AmazonS3Builder {
             inner: Arc::new(AmazonS3Inner {
                 options: S3Options {
                     endpoint,
+                    bucket: self.bucket,
                     region: self.region,
                     credential: self.credential,
                     sign_payload: self.sign_payload,
@@ -243,15 +244,11 @@ impl Fs for AmazonS3 {
     }
 
     async fn copy(&self, from: &Path, to: &Path) -> Result<(), Error> {
-        let from_file = S3File::new(self.clone(), from.clone());
-        let from_file_size = from_file.size().await?;
-
         let upload = MultipartUpload::new(self.clone(), to.clone());
         upload
             .upload_once(
-                from_file_size as usize,
                 UploadType::Copy {
-                    endpoint: self.inner.options.endpoint.clone(),
+                    bucket: self.inner.options.bucket.clone(),
                     from: from.clone(),
                     body: Empty::<Bytes>::new(),
                 },
@@ -297,6 +294,9 @@ pub struct ListResponse {
 
 #[cfg(test)]
 mod tests {
+    use crate::fs::Fs;
+    use crate::path::Path;
+
     #[cfg(feature = "tokio-http")]
     #[tokio::test]
     async fn list_and_remove() {
@@ -329,5 +329,71 @@ mod tests {
             let meta = meta.unwrap();
             s3.remove(&meta.path).await.unwrap();
         }
+    }
+
+    #[ignore]
+    #[cfg(all(feature = "tokio-http", not(feature = "completion-based")))]
+    #[tokio::test]
+    async fn copy() {
+        use std::sync::Arc;
+
+        use crate::{
+            remotes::{
+                aws::{
+                    credential::AwsCredential,
+                    fs::{AmazonS3, AmazonS3Inner},
+                    options::S3Options,
+                    s3::S3File,
+                },
+                http::{tokio::TokioClient, DynHttpClient, HttpClient},
+            },
+            Read, Write,
+        };
+
+        let key_id = "user".to_string();
+        let secret_key = "password".to_string();
+
+        let client = TokioClient::new();
+        let region = "ap-southeast-1";
+        let options = S3Options {
+            endpoint: "http://localhost:9000/data".into(),
+            bucket: "data".to_string(),
+            credential: Some(AwsCredential {
+                key_id,
+                secret_key,
+                token: None,
+            }),
+            region: region.into(),
+            sign_payload: true,
+            checksum: false,
+        };
+
+        let s3 = AmazonS3 {
+            inner: Arc::new(AmazonS3Inner {
+                options,
+                client: Box::new(client) as Box<dyn DynHttpClient>,
+            }),
+        };
+
+        let from_path: Path = "read-write.txt".into();
+        let to_path: Path = "read-write-copy.txt".into();
+        {
+            let mut s3 = S3File::new(s3.clone(), from_path.clone());
+
+            let (result, _) = s3
+                .write_all(&b"The answer of life, universe and everthing"[..])
+                .await;
+            result.unwrap();
+            s3.close().await.unwrap();
+        }
+        s3.copy(&from_path, &to_path).await.unwrap();
+        let mut s3 = S3File::new(s3, to_path.clone());
+
+        let size = s3.size().await.unwrap();
+        assert_eq!(size, 42);
+        let buf = Vec::new();
+        let (result, buf) = s3.read_to_end_at(buf, 0).await;
+        result.unwrap();
+        assert_eq!(buf, b"The answer of life, universe and everthing");
     }
 }
