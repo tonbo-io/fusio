@@ -542,18 +542,20 @@ mod tests {
     }
 
     #[cfg(all(feature = "tokio-uring", target_os = "linux"))]
-    #[tokio::test]
-    async fn test_tokio_uring_fs() {
+    #[test]
+    fn test_tokio_uring_fs() {
         use crate::disk::tokio_uring::fs::TokioUringFs;
 
-        test_local_fs_read_write(TokioUringFs).await.unwrap();
-        test_local_fs_copy_link(TokioUringFs, TokioUringFs)
-            .await
-            .unwrap();
+        tokio_uring::start(async {
+            test_local_fs_read_write(TokioUringFs).await.unwrap();
+            test_local_fs_copy_link(TokioUringFs, TokioUringFs)
+                .await
+                .unwrap();
+        })
     }
 
     #[cfg(all(feature = "monoio", not(target_arch = "wasm32")))]
-    #[tokio::test]
+    #[monoio::test]
     async fn test_monoio_fs() {
         use crate::disk::monoio::fs::MonoIoFs;
 
