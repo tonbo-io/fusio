@@ -78,18 +78,98 @@ where
         .open_options(to, OpenOptions::default().create(true).write(true))
         .await?;
     let buf_size = cmp::min(from_file_size, 4 * 1024);
-    let mut buf = vec![0u8; buf_size];
+    let mut buf = Some(vec![0u8; buf_size]);
     let mut read_pos = 0u64;
 
     while (read_pos as usize) < from_file_size - 1 {
-        let (result, _) = from_file.read_exact_at(buf.as_slice_mut(), read_pos).await;
+        let tmp = buf.take().unwrap();
+        let (result, tmp) = from_file.read_exact_at(tmp, read_pos).await;
         result?;
-        read_pos += buf.len() as u64;
+        read_pos += tmp.len() as u64;
 
-        let (result, _) = to_file.write_all(buf.as_slice()).await;
+        let (result, tmp) = to_file.write_all(tmp).await;
         result?;
-        buf.resize(buf_size, 0);
+        buf = Some(tmp);
     }
+    to_file.close().await?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+
+    #[ignore]
+    #[cfg(all(
+        feature = "tokio-http",
+        feature = "tokio",
+        feature = "aws",
+        not(feature = "completion-based")
+    ))]
+    #[tokio::test]
+    async fn test_diff_fs_copy() -> Result<(), crate::Error> {
+        use std::sync::Arc;
+
+        use tempfile::TempDir;
+
+        use crate::{
+            fs,
+            fs::{Fs, OpenOptions},
+            impls::disk::tokio::fs::TokioFs,
+            path::Path,
+            remotes::{
+                aws::{credential::AwsCredential, fs::AmazonS3, options::S3Options, s3::S3File},
+                http::{tokio::TokioClient, DynHttpClient, HttpClient},
+            },
+            Read, Write,
+        };
+
+        let tmp_dir = TempDir::new()?;
+        let local_path = Path::from_absolute_path(&tmp_dir.as_ref().join("test.file"))?;
+        let s3_path: Path = "s3_copy_test.file".into();
+
+        let key_id = "user".to_string();
+        let secret_key = "password".to_string();
+
+        let client = TokioClient::new();
+        let region = "ap-southeast-1";
+        let options = S3Options {
+            endpoint: "http://localhost:9000/data".into(),
+            bucket: "data".to_string(),
+            credential: Some(AwsCredential {
+                key_id,
+                secret_key,
+                token: None,
+            }),
+            region: region.into(),
+            sign_payload: true,
+            checksum: false,
+        };
+
+        let s3_fs = AmazonS3::new(Box::new(client), options);
+        let local_fs = TokioFs;
+
+        {
+            let mut local_file = local_fs
+                .open_options(&local_path, OpenOptions::default().create(true).write(true))
+                .await?;
+            local_file
+                .write_all("🎵never gonna give you up🎵".as_bytes())
+                .await
+                .0?;
+            local_file.close().await.unwrap();
+        }
+        fs::copy(&local_fs, &local_path, &s3_fs, &s3_path).await?;
+
+        let mut s3 = S3File::new(s3_fs, s3_path.clone());
+
+        let size = s3.size().await.unwrap();
+        assert_eq!(size, 31);
+        let buf = Vec::new();
+        let (result, buf) = s3.read_to_end_at(buf, 0).await;
+        result.unwrap();
+        assert_eq!(buf, "🎵never gonna give you up🎵".as_bytes());
+
+        Ok(())
+    }
 }

@@ -80,24 +80,14 @@ impl MultipartUpload {
         Self::check_response(response).await
     }
 
-    pub(crate) async fn upload_once<B>(
-        &self,
-        upload_type: UploadType<B>,
-    ) -> Result<(), Error>
+    pub(crate) async fn upload_once<B>(&self, upload_type: UploadType<B>) -> Result<(), Error>
     where
         B: Body<Data = Bytes> + Clone + Unpin + Send + Sync + 'static,
         B::Error: std::error::Error + Send + Sync + 'static,
     {
         let (size, body, copy_from) = match upload_type {
-            UploadType::Write {
-                size,
-                body
-            } => (Some(size), body, None),
-            UploadType::Copy {
-                bucket,
-                from,
-                body,
-            } => {
+            UploadType::Write { size, body } => (Some(size), body, None),
+            UploadType::Copy { bucket, from, body } => {
                 let from_url = format!(
                     "/{bucket}/{}",
                     utf8_percent_encode(from.as_ref(), &STRICT_PATH_ENCODE_SET)
@@ -110,9 +100,7 @@ impl MultipartUpload {
             self.fs.as_ref().options.endpoint,
             utf8_percent_encode(self.path.as_ref(), &STRICT_PATH_ENCODE_SET)
         );
-        let mut builder = Request::builder()
-            .uri(url)
-            .method(Method::PUT);
+        let mut builder = Request::builder().uri(url).method(Method::PUT);
         if let Some(from_url) = copy_from {
             builder = builder.header("x-amz-copy-source", from_url);
         }

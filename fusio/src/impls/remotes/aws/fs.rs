@@ -126,6 +126,14 @@ pub(super) struct AmazonS3Inner {
     pub(super) client: Box<dyn DynHttpClient>,
 }
 
+impl AmazonS3 {
+    pub fn new(client: Box<dyn DynHttpClient>, options: S3Options) -> Self {
+        AmazonS3 {
+            inner: Arc::new(AmazonS3Inner { options, client }),
+        }
+    }
+}
+
 impl Fs for AmazonS3 {
     type File = S3File;
 
@@ -246,13 +254,11 @@ impl Fs for AmazonS3 {
     async fn copy(&self, from: &Path, to: &Path) -> Result<(), Error> {
         let upload = MultipartUpload::new(self.clone(), to.clone());
         upload
-            .upload_once(
-                UploadType::Copy {
-                    bucket: self.inner.options.bucket.clone(),
-                    from: from.clone(),
-                    body: Empty::<Bytes>::new(),
-                },
-            )
+            .upload_once(UploadType::Copy {
+                bucket: self.inner.options.bucket.clone(),
+                from: from.clone(),
+                body: Empty::<Bytes>::new(),
+            })
             .await?;
 
         Ok(())
@@ -294,8 +300,7 @@ pub struct ListResponse {
 
 #[cfg(test)]
 mod tests {
-    use crate::fs::Fs;
-    use crate::path::Path;
+    use crate::{fs::Fs, path::Path};
 
     #[cfg(feature = "tokio-http")]
     #[tokio::test]
