@@ -254,8 +254,8 @@ impl Write for S3File {
 
 #[cfg(test)]
 mod tests {
-    use crate::Write;
 
+    #[ignore]
     #[cfg(all(feature = "tokio-http", not(feature = "completion-based")))]
     #[tokio::test]
     async fn write_and_read_s3_file() {

@@ -64,16 +64,14 @@ impl Fs for OpendalFs {
             .map_err(parse_opendal_error)
     }
 
-    fn copy(&self, from: &Path, to: &Path) -> impl Future<Output = Result<(), Error>> + MaybeSend {
-        self.op.copy(from.as_ref(), to.as_ref())
+    async fn copy(&self, from: &Path, to: &Path) -> Result<(), Error> {
+        self.op
+            .copy(from.as_ref(), to.as_ref())
+            .await
+            .map_err(parse_opendal_error)
     }
 
-    fn link<F: Fs>(
-        &self,
-        from: &Path,
-        to_fs: &F,
-        to: &Path,
-    ) -> impl Future<Output = Result<(), Error>> + MaybeSend {
+    async fn link<F: Fs>(&self, from: &Path, to_fs: &F, to: &Path) -> Result<(), Error> {
         todo!()
     }
 }
