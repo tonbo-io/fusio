@@ -8,7 +8,7 @@ use std::{cmp, future::Future};
 use futures_core::Stream;
 pub use options::*;
 
-use crate::{path::Path, Error, IoBufMut, MaybeSend, MaybeSync, Read, Write};
+use crate::{path::Path, Error, MaybeSend, MaybeSync, Read, Write};
 
 #[derive(Debug)]
 pub struct FileMeta {

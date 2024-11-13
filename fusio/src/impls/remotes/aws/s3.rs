@@ -269,7 +269,7 @@ mod tests {
                     options::S3Options,
                     s3::S3File,
                 },
-                http::{tokio::TokioClient, DynHttpClient, HttpClient},
+                http::{tokio::TokioClient, DynHttpClient},
             },
             Read, Write,
         };

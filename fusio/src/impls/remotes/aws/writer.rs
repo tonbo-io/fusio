@@ -2,7 +2,7 @@ use std::{mem, pin::Pin, sync::Arc};
 
 use bytes::{BufMut, BytesMut};
 use futures_util::{stream::FuturesOrdered, StreamExt};
-use http_body_util::{Empty, Full};
+use http_body_util::Full;
 
 use crate::{
     dynamic::MaybeSendFuture,

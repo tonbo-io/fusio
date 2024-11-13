@@ -20,7 +20,7 @@ use crate::{
         },
         http::{DynHttpClient, HttpClient, HttpError},
     },
-    Error, Read,
+    Error,
 };
 
 pub struct AmazonS3Builder {
@@ -350,7 +350,7 @@ mod tests {
                     options::S3Options,
                     s3::S3File,
                 },
-                http::{tokio::TokioClient, DynHttpClient, HttpClient},
+                http::{tokio::TokioClient, DynHttpClient},
             },
             Read, Write,
         };
