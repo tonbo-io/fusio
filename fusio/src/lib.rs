@@ -396,11 +396,7 @@ mod tests {
     }
 
     #[allow(unused)]
-    async fn test_local_fs_copy_link<S, D>(src_fs: S, dst_fs: D) -> Result<(), Error>
-    where
-        S: crate::fs::Fs,
-        D: crate::fs::Fs,
-    {
+    async fn test_local_fs_copy_link<F: crate::fs::Fs>(src_fs: F) -> Result<(), Error> {
         use std::collections::HashSet;
 
         use futures_util::StreamExt;
@@ -417,9 +413,6 @@ mod tests {
         src_fs
             .create_dir_all(&Path::from_absolute_path(&work_dir_path)?)
             .await?;
-        dst_fs
-            .create_dir_all(&Path::from_absolute_path(&work_dir_path)?)
-            .await?;
 
         // create files
         let _ = src_fs
@@ -428,7 +421,7 @@ mod tests {
                 OpenOptions::default().create(true),
             )
             .await?;
-        let _ = dst_fs
+        let _ = src_fs
             .open_options(
                 &Path::from_absolute_path(&dst_file_path)?,
                 OpenOptions::default().create(true),
@@ -473,7 +466,7 @@ mod tests {
             result.unwrap();
             assert_eq!(buf.as_slice(), b"Hello! world");
 
-            let mut dst_file = dst_fs
+            let mut dst_file = src_fs
                 .open_options(
                     &Path::from_absolute_path(&dst_file_path)?,
                     OpenOptions::default().read(true),
@@ -485,7 +478,7 @@ mod tests {
             assert_eq!(buf.as_slice(), b"Hello! fusio");
         }
 
-        dst_fs
+        src_fs
             .remove(&Path::from_absolute_path(&dst_file_path)?)
             .await?;
         // link
@@ -502,7 +495,6 @@ mod tests {
             src_fs
                 .link(
                     &Path::from_absolute_path(&src_file_path)?,
-                    &dst_fs,
                     &Path::from_absolute_path(&dst_file_path)?,
                 )
                 .await?;
@@ -527,7 +519,7 @@ mod tests {
             result.unwrap();
             assert_eq!(buf.as_slice(), b"Hello! world");
 
-            let mut dst_file = dst_fs
+            let mut dst_file = src_fs
                 .open_options(
                     &Path::from_absolute_path(&dst_file_path)?,
                     OpenOptions::default().read(true),
@@ -560,7 +552,7 @@ mod tests {
         use crate::disk::TokioFs;
 
         test_local_fs_read_write(TokioFs).await.unwrap();
-        test_local_fs_copy_link(TokioFs, TokioFs).await.unwrap();
+        test_local_fs_copy_link(TokioFs).await.unwrap();
     }
 
     #[cfg(all(feature = "tokio-uring", target_os = "linux"))]
@@ -570,9 +562,7 @@ mod tests {
 
         tokio_uring::start(async {
             test_local_fs_read_write(TokioUringFs).await.unwrap();
-            test_local_fs_copy_link(TokioUringFs, TokioUringFs)
-                .await
-                .unwrap();
+            test_local_fs_copy_link(TokioUringFs).await.unwrap();
         })
     }
 
@@ -582,7 +572,7 @@ mod tests {
         use crate::disk::monoio::fs::MonoIoFs;
 
         test_local_fs_read_write(MonoIoFs).await.unwrap();
-        test_local_fs_copy_link(MonoIoFs, MonoIoFs).await.unwrap();
+        test_local_fs_copy_link(MonoIoFs).await.unwrap();
     }
 
     #[cfg(all(feature = "tokio", not(target_arch = "wasm32")))]

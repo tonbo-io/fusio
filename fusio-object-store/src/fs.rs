@@ -81,7 +81,7 @@ impl<O: ObjectStore> Fs for S3Store<O> {
         Ok(())
     }
 
-    async fn link<F: Fs>(&self, _: &Path, _: &F, _: &Path) -> Result<(), Error> {
+    async fn link(&self, _: &Path, _: &Path) -> Result<(), Error> {
         Err(Error::Unsupported {
             message: "s3 does not support link file".to_string(),
         })

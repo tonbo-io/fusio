@@ -74,12 +74,7 @@ impl Fs for TokioUringFs {
         Ok(())
     }
 
-    async fn link<F: Fs>(&self, from: &Path, to_fs: &F, to: &Path) -> Result<(), Error> {
-        if self.file_system() != to_fs.file_system() {
-            return Err(Error::Unsupported {
-                message: "file system is inconsistent".to_string(),
-            });
-        }
+    async fn link(&self, from: &Path, to: &Path) -> Result<(), Error> {
         let from = path_to_local(from)?;
         let to = path_to_local(to)?;
 

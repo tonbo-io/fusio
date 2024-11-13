@@ -71,7 +71,7 @@ impl Fs for OpendalFs {
             .map_err(parse_opendal_error)
     }
 
-    async fn link<F: Fs>(&self, from: &Path, to_fs: &F, to: &Path) -> Result<(), Error> {
+    async fn link(&self, from: &Path, to: &Path) -> Result<(), Error> {
         todo!()
     }
 }

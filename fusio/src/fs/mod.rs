@@ -52,12 +52,7 @@ pub trait Fs: MaybeSend + MaybeSync {
 
     fn copy(&self, from: &Path, to: &Path) -> impl Future<Output = Result<(), Error>> + MaybeSend;
 
-    fn link<F: Fs>(
-        &self,
-        from: &Path,
-        to_fs: &F,
-        to: &Path,
-    ) -> impl Future<Output = Result<(), Error>> + MaybeSend;
+    fn link(&self, from: &Path, to: &Path) -> impl Future<Output = Result<(), Error>> + MaybeSend;
 }
 
 pub async fn copy<F, T>(from_fs: &F, from: &Path, to_fs: &T, to: &Path) -> Result<(), Error>

@@ -104,13 +104,13 @@ impl Fs for OPFS {
         Ok(())
     }
 
-    async fn copy(&self, from: &Path, to: &Path) -> Result<(), Error> {
+    async fn copy(&self, _: &Path, _: &Path) -> Result<(), Error> {
         Err(Error::Unsupported {
             message: "opfs does not support copy file".to_string(),
         })
     }
 
-    async fn link<F: Fs>(&self, from: &Path, to_fs: &F, to: &Path) -> Result<(), Error> {
+    async fn link(&self, _: &Path, _: &Path) -> Result<(), Error> {
         Err(Error::Unsupported {
             message: "opfs does not support link file".to_string(),
         })

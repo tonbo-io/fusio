@@ -94,7 +94,6 @@ pub trait DynFs: MaybeSend + MaybeSync {
     fn link<'s, 'path: 's>(
         &'s self,
         from: &'path Path,
-        to_fs: &'s Self,
         to: &'path Path,
     ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<(), Error>> + 's>>;
 }
@@ -155,14 +154,9 @@ impl<F: Fs> DynFs for F {
     fn link<'s, 'path: 's>(
         &'s self,
         from: &'path Path,
-        to_fs: &'s Self,
         to: &'path Path,
     ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<(), Error>> + 's>> {
-        Box::pin(async move {
-            self.link(from, to_fs, to).await?;
-
-            Ok(())
-        })
+        Box::pin(F::link(self, from, to))
     }
 }
 
