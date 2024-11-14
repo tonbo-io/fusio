@@ -88,6 +88,7 @@ pub async fn async_reader() {
     assert_eq!(expected, read);
     web_sys::console::log_1(&format!("read data: {:?} from parquet", read).into());
 }
+
 #[wasm_bindgen]
 pub async fn remove_all_dir() {
     let fs_options = FsOptions::Local;

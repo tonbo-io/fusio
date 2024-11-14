@@ -95,7 +95,12 @@ pub unsafe trait MaybeSync: Sync {
 }
 
 #[cfg(feature = "no-send")]
-pub unsafe trait MaybeSync {}
+pub unsafe trait MaybeSync {
+    //! Same as [`MaybeSend`], but for [`std::marker::Sync`].
+    //!
+    //! # Safety
+    //! Do not implement it directly.
+}
 
 #[cfg(not(feature = "no-send"))]
 unsafe impl<T: Sync> MaybeSync for T {}
@@ -208,7 +213,6 @@ impl<W: Write> Write for &mut W {
 }
 
 #[cfg(test)]
-#[cfg(not(target_arch = "wasm32"))]
 mod tests {
     use super::{Read, Write};
     use crate::{buf::IoBufMut, Error, IoBuf};
@@ -322,6 +326,7 @@ mod tests {
     }
 
     #[allow(unused)]
+    #[cfg(not(target_arch = "wasm32"))]
     async fn test_local_fs<S>(fs: S) -> Result<(), Error>
     where
         S: crate::fs::Fs,
@@ -395,7 +400,7 @@ mod tests {
         write_and_read(File::from_std(write), File::from_std(read)).await;
     }
 
-    #[cfg(feature = "tokio")]
+    #[cfg(all(feature = "tokio", not(target_arch = "wasm32")))]
     #[tokio::test]
     async fn test_tokio_fs() {
         use crate::disk::TokioFs;
@@ -422,7 +427,7 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "monoio")]
+    #[cfg(all(feature = "monoio", not(target_arch = "wasm32")))]
     #[monoio::test]
     async fn test_monoio() {
         use monoio::fs::File;

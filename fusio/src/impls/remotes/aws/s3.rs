@@ -227,6 +227,7 @@ impl Write for S3File {
     async fn write_all<B: IoBuf>(&mut self, buf: B) -> (Result<(), Error>, B) {
         self.writer
             .get_or_insert_with(|| {
+                #[allow(clippy::arc_with_non_send_sync)]
                 S3Writer::new(Arc::new(MultipartUpload::new(
                     self.fs.clone(),
                     self.path.clone(),
