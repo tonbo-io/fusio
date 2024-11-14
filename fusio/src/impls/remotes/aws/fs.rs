@@ -91,6 +91,7 @@ impl AmazonS3Builder {
         };
 
         AmazonS3 {
+            #[allow(clippy::arc_with_non_send_sync)]
             inner: Arc::new(AmazonS3Inner {
                 options: S3Options {
                     endpoint,
