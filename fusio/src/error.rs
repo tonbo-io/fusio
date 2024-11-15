@@ -22,6 +22,9 @@ pub enum Error {
     Wasm {
         message: String,
     },
+    #[cfg(feature = "monoio")]
+    #[error("monoio JoinHandle was canceled")]
+    MonoIOJoinCancel,
     #[error(transparent)]
     Other(#[from] BoxedError),
 }
@@ -33,4 +36,9 @@ pub(crate) fn wasm_err(js_val: js_sys::wasm_bindgen::JsValue) -> Error {
     Error::Wasm {
         message: format!("{js_val:?}"),
     }
+}
+
+#[cfg(feature = "monoio")]
+pub(crate) fn monoio_join_err(_: monoio::blocking::JoinError) -> Error {
+    Error::MonoIOJoinCancel
 }

@@ -27,7 +27,7 @@ impl Fs for TokioFs {
 
         let file = tokio::fs::OpenOptions::new()
             .read(options.read)
-            .append(options.write)
+            .write(options.write)
             .create(options.create)
             .open(&local_path)
             .await?;
