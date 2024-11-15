@@ -2,11 +2,9 @@ use std::{fs, fs::create_dir_all};
 
 use async_stream::stream;
 use futures_core::Stream;
-use monoio::blocking::spawn_blocking;
 
 use super::MonoioFile;
 use crate::{
-    error::monoio_join_err,
     fs::{FileMeta, FileSystemTag, Fs, OpenOptions},
     path::{path_to_local, Path},
     Error,
@@ -67,9 +65,7 @@ impl Fs for MonoIoFs {
         let from = path_to_local(from)?;
         let to = path_to_local(to)?;
 
-        spawn_blocking(move || fs::copy(&from, &to))
-            .await
-            .map_err(monoio_join_err)??;
+        let _ = monoio::spawn(async move { fs::copy(&from, &to) }).await?;
 
         Ok(())
     }
@@ -78,9 +74,7 @@ impl Fs for MonoIoFs {
         let from = path_to_local(from)?;
         let to = path_to_local(to)?;
 
-        spawn_blocking(move || fs::hard_link(&from, &to))
-            .await
-            .map_err(monoio_join_err)??;
+        let _ = monoio::spawn(async move { fs::hard_link(&from, &to) }).await?;
 
         Ok(())
     }

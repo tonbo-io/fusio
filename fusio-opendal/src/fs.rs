@@ -72,6 +72,8 @@ impl Fs for OpendalFs {
     }
 
     async fn link(&self, from: &Path, to: &Path) -> Result<(), Error> {
-        todo!()
+        Err(Error::Unsupported {
+            message: "opendal does not support link file".to_string(),
+        })
     }
 }
