@@ -65,7 +65,7 @@ impl Fs for MonoIoFs {
         let from = path_to_local(from)?;
         let to = path_to_local(to)?;
 
-        let _ = monoio::spawn(async move { fs::copy(&from, &to) }).await?;
+        monoio::spawn(async move { fs::copy(&from, &to) }).await?;
 
         Ok(())
     }
@@ -74,7 +74,7 @@ impl Fs for MonoIoFs {
         let from = path_to_local(from)?;
         let to = path_to_local(to)?;
 
-        let _ = monoio::spawn(async move { fs::hard_link(&from, &to) }).await?;
+        monoio::spawn(async move { fs::hard_link(&from, &to) }).await?;
 
         Ok(())
     }
