@@ -395,6 +395,7 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     #[allow(unused)]
     async fn test_local_fs_copy_link<F: crate::fs::Fs>(src_fs: F) -> Result<(), Error> {
         use std::collections::HashSet;
