@@ -52,6 +52,7 @@ opfs = [
 tokio = ["async-stream", "dep:tokio"]
 tokio-http = ["dep:reqwest", "http"]
 tokio-uring = ["async-stream", "completion-based", "dep:tokio-uring", "no-send"]
+wasm-http = ["dep:reqwest", "http"]
 
 [[bench]]
 harness = false
