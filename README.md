@@ -10,7 +10,7 @@
   </a>
 </p>
 
-`fusio` provides [Read](https://docs.rs/fusio/latest/fusio/trait.Read.html) and [Write](https://docs.rs/fusio/latest/fusio/trait.Write.html) traits to operate on multiple storage backends (e.g., local disk, Amazon S3) across various asynchronous runtimes—both poll-based ([tokio](https://github.com/tokio-rs/tokio)) and completion-based ([tokio-uring](https://github.com/tokio-rs/tokio-uring), [monoio](https://github.com/bytedance/monoio))—with:
+`fusio` provides [random read](https://docs.rs/fusio/latest/fusio/trait.Read.html) and [sequential write](https://docs.rs/fusio/latest/fusio/trait.Write.html) traits to operate on multiple storage backends (e.g., local disk, Amazon S3) across various asynchronous runtimes—both poll-based ([tokio](https://github.com/tokio-rs/tokio)) and completion-based ([tokio-uring](https://github.com/tokio-rs/tokio-uring), [monoio](https://github.com/bytedance/monoio))—with:
 - lean: binary size is at least 14× smaller than others.
 - minimal-cost abstraction: compared to bare storage backends, trait definitions allow dispatching file operations without extra overhead.
 - extensible: exposes traits to support implementing storage backends as third-party crates.
@@ -67,7 +67,7 @@ You can freely transmute between them.
 
 ### compare with `opendal`
 
-`fusio` does not aim to be a full data access layer like `opendal`. `fusio` keeps features lean, and you are able to enable features and their dependencies one by one. The default binary size of `fusio` is 245KB, which is smaller than `opendal` (439KB). If you need a full ecosystem of DAL (tracing, logging, metrics, retry, etc.), try opendal.
+`fusio` does not aim to be a full data access layer like `opendal`. `fusio` keeps features lean, and you are able to enable features and their dependencies one by one. The default binary size of `fusio` is 16KB, which is smaller than `opendal` (439KB). If you need a full ecosystem of DAL (tracing, logging, metrics, retry, etc.), try opendal.
 
 Also, compared with `opendal::Operator`, fusio exposes core traits and allows them to be implemented in third-party crates.
 
@@ -81,7 +81,7 @@ Also, compared with `opendal::Operator`, fusio exposes core traits and allows th
     - [x] tokio-uring
     - [x] monoio
   - [x] network
-    - [x] HTTP client trait wi
+    - [x] HTTP client trait
     - [x] network storage runtime support
       - [x] tokio (over reqwest)
       - [ ] monoio (over hyper-tls)
