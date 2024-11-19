@@ -127,8 +127,10 @@ pub(super) struct AmazonS3Inner {
 }
 
 impl AmazonS3 {
-    pub fn new(client: Box<dyn DynHttpClient>, options: S3Options) -> Self {
+    #[allow(dead_code)]
+    pub(crate) fn new(client: Box<dyn DynHttpClient>, options: S3Options) -> Self {
         AmazonS3 {
+            #[allow(clippy::arc_with_non_send_sync)]
             inner: Arc::new(AmazonS3Inner { options, client }),
         }
     }
@@ -300,6 +302,7 @@ pub struct ListResponse {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "tokio-http")]
     use crate::{fs::Fs, path::Path};
 
     #[cfg(feature = "tokio-http")]

@@ -1,9 +1,7 @@
-use std::future::Future;
-
 use fusio::{
     fs::{FileMeta, FileSystemTag, Fs, OpenOptions},
     path::Path,
-    Error, MaybeSend,
+    Error,
 };
 use futures_core::Stream;
 use futures_util::TryStreamExt;
@@ -71,7 +69,7 @@ impl Fs for OpendalFs {
             .map_err(parse_opendal_error)
     }
 
-    async fn link(&self, from: &Path, to: &Path) -> Result<(), Error> {
+    async fn link(&self, _from: &Path, _to: &Path) -> Result<(), Error> {
         Err(Error::Unsupported {
             message: "opendal does not support link file".to_string(),
         })

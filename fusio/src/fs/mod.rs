@@ -57,8 +57,6 @@ pub trait Fs: MaybeSend + MaybeSync {
 
 #[cfg(test)]
 mod tests {
-    use crate::DynFs;
-
     #[ignore]
     #[cfg(all(
         feature = "tokio-http",
@@ -80,7 +78,7 @@ mod tests {
                 aws::{credential::AwsCredential, fs::AmazonS3, options::S3Options, s3::S3File},
                 http::tokio::TokioClient,
             },
-            Read, Write,
+            DynFs, Read, Write,
         };
 
         let tmp_dir = TempDir::new()?;

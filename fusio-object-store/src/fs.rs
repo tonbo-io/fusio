@@ -1,10 +1,10 @@
-use std::{future::Future, sync::Arc};
+use std::sync::Arc;
 
 use async_stream::stream;
 use fusio::{
     fs::{FileMeta, FileSystemTag, Fs, OpenOptions},
     path::Path,
-    Error, MaybeSend,
+    Error,
 };
 use futures_core::Stream;
 use futures_util::stream::StreamExt;
