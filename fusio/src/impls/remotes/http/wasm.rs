@@ -92,12 +92,12 @@ mod tests {
             remotes::aws::{fs::AmazonS3Builder, AwsCredential},
         };
 
-        if env::var("AWS_ACCESS_KEY_ID").is_err() {
+        if option_env!("AWS_ACCESS_KEY_ID").is_none() {
             eprintln!("skipping AWS s3 test");
             return;
         }
-        let key_id = env::var("AWS_ACCESS_KEY_ID").unwrap();
-        let secret_key = env::var("AWS_SECRET_ACCESS_KEY").unwrap();
+        let key_id = env!("AWS_ACCESS_KEY_ID").to_string();
+        let secret_key = env!("AWS_SECRET_ACCESS_KEY").to_string();
 
         let s3 = AmazonS3Builder::new("fusio-test".into())
             .credential(AwsCredential {
