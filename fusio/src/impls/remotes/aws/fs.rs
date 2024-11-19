@@ -36,7 +36,7 @@ pub struct AmazonS3Builder {
 impl AmazonS3Builder {
     #[allow(unused_variables)]
     pub fn new(bucket: String) -> Self {
-        let mut client: Box<dyn DynHttpClient>;
+        let client: Box<dyn DynHttpClient>;
         cfg_if::cfg_if! {
             if #[cfg(all(feature = "tokio-http", not(feature = "completion-based")))] {
                 client = Box::new(crate::remotes::http::tokio::TokioClient::new());

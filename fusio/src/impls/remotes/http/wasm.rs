@@ -8,17 +8,12 @@ use http_body_util::BodyExt;
 use super::{HttpClient, HttpError};
 use crate::{error::BoxedError, MaybeSync};
 
-pub struct WasmClient();
-
-impl Default for WasmClient {
-    fn default() -> Self {
-        Self()
-    }
-}
+#[derive(Default)]
+pub struct WasmClient;
 
 impl WasmClient {
     pub fn new() -> Self {
-        Self()
+        Default::default()
     }
 }
 
@@ -82,7 +77,7 @@ mod tests {
     #[cfg(all(feature = "wasm-http", feature = "aws"))]
     #[wasm_bindgen_test]
     async fn list_and_remove_wasm() {
-        use std::{env, pin::pin};
+        use std::pin::pin;
 
         use futures_util::StreamExt;
 
