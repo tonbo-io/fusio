@@ -36,21 +36,25 @@ pub struct AmazonS3Builder {
 impl AmazonS3Builder {
     #[allow(unused_variables)]
     pub fn new(bucket: String) -> Self {
+        let mut client: Box<dyn DynHttpClient>;
         cfg_if::cfg_if! {
             if #[cfg(all(feature = "tokio-http", not(feature = "completion-based")))] {
-                let client = Box::new(crate::remotes::http::tokio::TokioClient::new());
-                Self {
-                    endpoint: None,
-                    region: "us-east-1".into(),
-                    bucket,
-                    credential: None,
-                    sign_payload: false,
-                    checksum: false,
-                    client,
-                }
+                client = Box::new(crate::remotes::http::tokio::TokioClient::new());
+            } else if #[cfg(all(feature = "wasm-http", not(feature = "completion-based")))]{
+                client = Box::new(crate::remotes::http::wasm::WasmClient::new());
             } else {
                 unreachable!()
             }
+        }
+
+        Self {
+            endpoint: None,
+            region: "us-east-1".into(),
+            bucket,
+            credential: None,
+            sign_payload: false,
+            checksum: false,
+            client,
         }
     }
 }
