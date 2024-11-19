@@ -11,10 +11,13 @@ use url::Url;
 
 use super::{credential::AwsCredential, options::S3Options, S3Error, S3File};
 use crate::{
-    fs::{FileMeta, Fs, OpenOptions},
+    fs::{FileMeta, FileSystemTag, Fs, OpenOptions},
     path::Path,
     remotes::{
-        aws::sign::Sign,
+        aws::{
+            multipart_upload::{MultipartUpload, UploadType},
+            sign::Sign,
+        },
         http::{DynHttpClient, HttpClient, HttpError},
     },
     Error,
@@ -95,6 +98,7 @@ impl AmazonS3Builder {
             inner: Arc::new(AmazonS3Inner {
                 options: S3Options {
                     endpoint,
+                    bucket: self.bucket,
                     region: self.region,
                     credential: self.credential,
                     sign_payload: self.sign_payload,
@@ -122,8 +126,22 @@ pub(super) struct AmazonS3Inner {
     pub(super) client: Box<dyn DynHttpClient>,
 }
 
+impl AmazonS3 {
+    #[allow(dead_code)]
+    pub(crate) fn new(client: Box<dyn DynHttpClient>, options: S3Options) -> Self {
+        AmazonS3 {
+            #[allow(clippy::arc_with_non_send_sync)]
+            inner: Arc::new(AmazonS3Inner { options, client }),
+        }
+    }
+}
+
 impl Fs for AmazonS3 {
     type File = S3File;
+
+    fn file_system(&self) -> FileSystemTag {
+        FileSystemTag::S3
+    }
 
     async fn open_options(&self, path: &Path, _: OpenOptions) -> Result<Self::File, crate::Error> {
         Ok(S3File::new(self.clone(), path.clone()))
@@ -234,6 +252,25 @@ impl Fs for AmazonS3 {
 
         Ok(())
     }
+
+    async fn copy(&self, from: &Path, to: &Path) -> Result<(), Error> {
+        let upload = MultipartUpload::new(self.clone(), to.clone());
+        upload
+            .upload_once(UploadType::Copy {
+                bucket: self.inner.options.bucket.clone(),
+                from: from.clone(),
+                body: Empty::<Bytes>::new(),
+            })
+            .await?;
+
+        Ok(())
+    }
+
+    async fn link(&self, _: &Path, _: &Path) -> Result<(), Error> {
+        Err(Error::Unsupported {
+            message: "s3 does not support link file".to_string(),
+        })
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -266,6 +303,9 @@ pub struct ListResponse {
 #[cfg(test)]
 mod tests {
     #[cfg(feature = "tokio-http")]
+    use crate::{fs::Fs, path::Path};
+
+    #[cfg(feature = "tokio-http")]
     #[tokio::test]
     async fn list_and_remove() {
         use std::{env, pin::pin};
@@ -297,5 +337,71 @@ mod tests {
             let meta = meta.unwrap();
             s3.remove(&meta.path).await.unwrap();
         }
+    }
+
+    #[ignore]
+    #[cfg(all(feature = "tokio-http", not(feature = "completion-based")))]
+    #[tokio::test]
+    async fn copy() {
+        use std::sync::Arc;
+
+        use crate::{
+            remotes::{
+                aws::{
+                    credential::AwsCredential,
+                    fs::{AmazonS3, AmazonS3Inner},
+                    options::S3Options,
+                    s3::S3File,
+                },
+                http::{tokio::TokioClient, DynHttpClient},
+            },
+            Read, Write,
+        };
+
+        let key_id = "user".to_string();
+        let secret_key = "password".to_string();
+
+        let client = TokioClient::new();
+        let region = "ap-southeast-1";
+        let options = S3Options {
+            endpoint: "http://localhost:9000/data".into(),
+            bucket: "data".to_string(),
+            credential: Some(AwsCredential {
+                key_id,
+                secret_key,
+                token: None,
+            }),
+            region: region.into(),
+            sign_payload: true,
+            checksum: false,
+        };
+
+        let s3 = AmazonS3 {
+            inner: Arc::new(AmazonS3Inner {
+                options,
+                client: Box::new(client) as Box<dyn DynHttpClient>,
+            }),
+        };
+
+        let from_path: Path = "read-write.txt".into();
+        let to_path: Path = "read-write-copy.txt".into();
+        {
+            let mut s3 = S3File::new(s3.clone(), from_path.clone());
+
+            let (result, _) = s3
+                .write_all(&b"The answer of life, universe and everthing"[..])
+                .await;
+            result.unwrap();
+            s3.close().await.unwrap();
+        }
+        s3.copy(&from_path, &to_path).await.unwrap();
+        let mut s3 = S3File::new(s3, to_path.clone());
+
+        let size = s3.size().await.unwrap();
+        assert_eq!(size, 42);
+        let buf = Vec::new();
+        let (result, buf) = s3.read_to_end_at(buf, 0).await;
+        result.unwrap();
+        assert_eq!(buf, b"The answer of life, universe and everthing");
     }
 }

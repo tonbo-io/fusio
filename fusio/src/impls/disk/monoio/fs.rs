@@ -1,11 +1,11 @@
-use std::fs::create_dir_all;
+use std::{fs, fs::create_dir_all};
 
 use async_stream::stream;
 use futures_core::Stream;
 
 use super::MonoioFile;
 use crate::{
-    fs::{FileMeta, Fs, OpenOptions},
+    fs::{FileMeta, FileSystemTag, Fs, OpenOptions},
     path::{path_to_local, Path},
     Error,
 };
@@ -14,6 +14,10 @@ pub struct MonoIoFs;
 
 impl Fs for MonoIoFs {
     type File = MonoioFile;
+
+    fn file_system(&self) -> FileSystemTag {
+        FileSystemTag::Local
+    }
 
     async fn open_options(&self, path: &Path, options: OpenOptions) -> Result<Self::File, Error> {
         let local_path = path_to_local(path)?;
@@ -54,6 +58,24 @@ impl Fs for MonoIoFs {
     async fn remove(&self, path: &Path) -> Result<(), Error> {
         let path = path_to_local(path)?;
 
-        Ok(std::fs::remove_file(path)?)
+        Ok(fs::remove_file(path)?)
+    }
+
+    async fn copy(&self, from: &Path, to: &Path) -> Result<(), Error> {
+        let from = path_to_local(from)?;
+        let to = path_to_local(to)?;
+
+        monoio::spawn(async move { fs::copy(&from, &to) }).await?;
+
+        Ok(())
+    }
+
+    async fn link(&self, from: &Path, to: &Path) -> Result<(), Error> {
+        let from = path_to_local(from)?;
+        let to = path_to_local(to)?;
+
+        monoio::spawn(async move { fs::hard_link(&from, &to) }).await?;
+
+        Ok(())
     }
 }

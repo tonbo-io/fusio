@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use async_stream::stream;
 use fusio::{
-    fs::{FileMeta, Fs, OpenOptions},
+    fs::{FileMeta, FileSystemTag, Fs, OpenOptions},
     path::Path,
     Error,
 };
@@ -26,6 +26,10 @@ impl<O: ObjectStore> From<O> for S3Store<O> {
 
 impl<O: ObjectStore> Fs for S3Store<O> {
     type File = S3File<O>;
+
+    fn file_system(&self) -> FileSystemTag {
+        FileSystemTag::S3
+    }
 
     async fn open_options(&self, path: &Path, options: OpenOptions) -> Result<Self::File, Error> {
         if !options.truncate {
@@ -63,5 +67,23 @@ impl<O: ObjectStore> Fs for S3Store<O> {
         self.inner.delete(&path).await.map_err(BoxedError::from)?;
 
         Ok(())
+    }
+
+    async fn copy(&self, from: &Path, to: &Path) -> Result<(), Error> {
+        let from = from.clone().into();
+        let to = to.clone().into();
+
+        self.inner
+            .copy(&from, &to)
+            .await
+            .map_err(BoxedError::from)?;
+
+        Ok(())
+    }
+
+    async fn link(&self, _: &Path, _: &Path) -> Result<(), Error> {
+        Err(Error::Unsupported {
+            message: "s3 does not support link file".to_string(),
+        })
     }
 }

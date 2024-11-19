@@ -1,18 +1,24 @@
+use std::{fs, future::Future};
+
 use async_stream::stream;
 use futures_core::Stream;
 use tokio_uring::fs::{create_dir_all, remove_file};
 
 use crate::{
     disk::tokio_uring::TokioUringFile,
-    fs::{FileMeta, Fs, OpenOptions},
+    fs::{FileMeta, FileSystemTag, Fs, OpenOptions},
     path::{path_to_local, Path},
-    Error,
+    Error, MaybeSend,
 };
 
 pub struct TokioUringFs;
 
 impl Fs for TokioUringFs {
     type File = TokioUringFile;
+
+    fn file_system(&self) -> FileSystemTag {
+        FileSystemTag::Local
+    }
 
     async fn open_options(&self, path: &Path, options: OpenOptions) -> Result<Self::File, Error> {
         let local_path = path_to_local(path)?;
@@ -57,5 +63,23 @@ impl Fs for TokioUringFs {
         let path = path_to_local(path)?;
 
         Ok(remove_file(path).await?)
+    }
+
+    async fn copy(&self, from: &Path, to: &Path) -> Result<(), Error> {
+        let from = path_to_local(from)?;
+        let to = path_to_local(to)?;
+
+        fs::copy(&from, &to)?;
+
+        Ok(())
+    }
+
+    async fn link(&self, from: &Path, to: &Path) -> Result<(), Error> {
+        let from = path_to_local(from)?;
+        let to = path_to_local(to)?;
+
+        fs::hard_link(&from, &to)?;
+
+        Ok(())
     }
 }

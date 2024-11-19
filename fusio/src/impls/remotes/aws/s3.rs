@@ -254,6 +254,7 @@ impl Write for S3File {
 
 #[cfg(test)]
 mod tests {
+
     #[ignore]
     #[cfg(all(feature = "tokio-http", not(feature = "completion-based")))]
     #[tokio::test]
@@ -268,7 +269,7 @@ mod tests {
                     options::S3Options,
                     s3::S3File,
                 },
-                http::{tokio::TokioClient, DynHttpClient, HttpClient},
+                http::{tokio::TokioClient, DynHttpClient},
             },
             Read, Write,
         };
@@ -280,6 +281,7 @@ mod tests {
         let region = "ap-southeast-1";
         let options = S3Options {
             endpoint: "http://localhost:9000/data".into(),
+            bucket: "data".to_string(),
             credential: Some(AwsCredential {
                 key_id,
                 secret_key,
@@ -297,12 +299,16 @@ mod tests {
             }),
         };
 
-        let mut s3 = S3File::new(s3, "read-write.txt".into());
+        {
+            let mut s3 = S3File::new(s3.clone(), "read-write.txt".into());
 
-        let (result, _) = s3
-            .write_all(&b"The answer of life, universe and everthing"[..])
-            .await;
-        result.unwrap();
+            let (result, _) = s3
+                .write_all(&b"The answer of life, universe and everthing"[..])
+                .await;
+            result.unwrap();
+            s3.close().await.unwrap();
+        }
+        let mut s3 = S3File::new(s3, "read-write.txt".into());
 
         let size = s3.size().await.unwrap();
         assert_eq!(size, 42);

@@ -1,5 +1,5 @@
 use fusio::{
-    fs::{FileMeta, Fs, OpenOptions},
+    fs::{FileMeta, FileSystemTag, Fs, OpenOptions},
     path::Path,
     Error,
 };
@@ -24,6 +24,10 @@ impl From<Operator> for OpendalFs {
 
 impl Fs for OpendalFs {
     type File = OpendalFile;
+
+    fn file_system(&self) -> FileSystemTag {
+        todo!()
+    }
 
     async fn open_options(&self, path: &Path, options: OpenOptions) -> Result<Self::File, Error> {
         OpendalFile::open(self.op.clone(), path.to_string(), options).await
@@ -56,5 +60,18 @@ impl Fs for OpendalFs {
             .delete(path.as_ref())
             .await
             .map_err(parse_opendal_error)
+    }
+
+    async fn copy(&self, from: &Path, to: &Path) -> Result<(), Error> {
+        self.op
+            .copy(from.as_ref(), to.as_ref())
+            .await
+            .map_err(parse_opendal_error)
+    }
+
+    async fn link(&self, _from: &Path, _to: &Path) -> Result<(), Error> {
+        Err(Error::Unsupported {
+            message: "opendal does not support link file".to_string(),
+        })
     }
 }

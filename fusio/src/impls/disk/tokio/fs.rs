@@ -8,7 +8,7 @@ use tokio::{
 };
 
 use crate::{
-    fs::{FileMeta, Fs, OpenOptions},
+    fs::{FileMeta, FileSystemTag, Fs, OpenOptions},
     path::{path_to_local, Path},
     Error,
 };
@@ -18,12 +18,16 @@ pub struct TokioFs;
 impl Fs for TokioFs {
     type File = File;
 
+    fn file_system(&self) -> FileSystemTag {
+        FileSystemTag::Local
+    }
+
     async fn open_options(&self, path: &Path, options: OpenOptions) -> Result<Self::File, Error> {
         let local_path = path_to_local(path)?;
 
         let file = tokio::fs::OpenOptions::new()
             .read(options.read)
-            .append(options.write)
+            .write(options.write)
             .create(options.create)
             .open(&local_path)
             .await?;
@@ -65,6 +69,24 @@ impl Fs for TokioFs {
         let path = path_to_local(path)?;
 
         remove_file(&path).await?;
+        Ok(())
+    }
+
+    async fn copy(&self, from: &Path, to: &Path) -> Result<(), Error> {
+        let from = path_to_local(from)?;
+        let to = path_to_local(to)?;
+
+        tokio::fs::copy(&from, &to).await?;
+
+        Ok(())
+    }
+
+    async fn link(&self, from: &Path, to: &Path) -> Result<(), Error> {
+        let from = path_to_local(from)?;
+        let to = path_to_local(to)?;
+
+        tokio::fs::hard_link(&from, &to).await?;
+
         Ok(())
     }
 }
