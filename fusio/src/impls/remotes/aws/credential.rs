@@ -558,15 +558,19 @@ pub(crate) struct TemporaryToken<T> {
 mod tests {
     use std::time::Duration;
 
+    #[allow(unused)]
     use bytes::Bytes;
     use chrono::{DateTime, Utc};
+    #[allow(unused)]
     use http::{header::AUTHORIZATION, Method, Request};
+    #[allow(unused)]
     use http_body_util::Empty;
     use url::Url;
 
     use crate::remotes::aws::credential::{AwsAuthorizer, AwsCredential};
 
     // Test generated using https://docs.aws.amazon.com/general/latest/gr/sigv4-signed-request-examples.html
+    #[cfg(feature = "tokio")]
     #[tokio::test]
     async fn test_sign_with_signed_payload() {
         // Test credentials from https://docs.aws.amazon.com/AmazonS3/latest/userguide/RESTAuthentication.html
@@ -610,6 +614,7 @@ mod tests {
         )
     }
 
+    #[cfg(feature = "tokio")]
     #[tokio::test]
     async fn test_sign_with_unsigned_payload() {
         // Test credentials from https://docs.aws.amazon.com/AmazonS3/latest/userguide/RESTAuthentication.html
@@ -693,6 +698,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "tokio")]
     #[tokio::test]
     async fn test_sign_port() {
         let credential = AwsCredential {

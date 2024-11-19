@@ -1,6 +1,8 @@
 mod error;
 #[cfg(all(feature = "tokio-http", not(feature = "completion-based")))]
 pub mod tokio;
+#[cfg(all(feature = "wasm-http", not(feature = "completion-based")))]
+pub mod wasm;
 
 use std::{future::Future, pin::Pin};
 
