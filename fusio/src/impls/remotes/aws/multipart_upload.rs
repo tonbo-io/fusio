@@ -27,6 +27,19 @@ pub(crate) struct MultipartUpload {
     path: Path,
 }
 
+pub enum UploadType<B> {
+    Write {
+        size: usize,
+        body: B,
+    },
+    Copy {
+        bucket: String,
+        from: Path,
+        // FIXME: for Empty
+        body: B,
+    },
+}
+
 impl MultipartUpload {
     pub fn new(fs: AmazonS3, path: Path) -> Self {
         Self { fs, path }
@@ -67,22 +80,35 @@ impl MultipartUpload {
         Self::check_response(response).await
     }
 
-    pub(crate) async fn upload_once<B>(&self, size: usize, body: B) -> Result<(), Error>
+    pub(crate) async fn upload_once<B>(&self, upload_type: UploadType<B>) -> Result<(), Error>
     where
         B: Body<Data = Bytes> + Clone + Unpin + Send + Sync + 'static,
         B::Error: std::error::Error + Send + Sync + 'static,
     {
+        let (size, body, copy_from) = match upload_type {
+            UploadType::Write { size, body } => (Some(size), body, None),
+            UploadType::Copy { bucket, from, body } => {
+                let from_url = format!(
+                    "/{bucket}/{}",
+                    utf8_percent_encode(from.as_ref(), &STRICT_PATH_ENCODE_SET)
+                );
+                (None, body, Some(from_url))
+            }
+        };
         let url = format!(
             "{}/{}",
             self.fs.as_ref().options.endpoint,
             utf8_percent_encode(self.path.as_ref(), &STRICT_PATH_ENCODE_SET)
         );
-        let request = Request::builder()
-            .uri(url)
-            .method(Method::PUT)
-            .header(CONTENT_LENGTH, size)
-            .body(body)
-            .map_err(|e| Error::Other(e.into()))?;
+        let mut builder = Request::builder().uri(url).method(Method::PUT);
+        if let Some(from_url) = copy_from {
+            builder = builder.header("x-amz-copy-source", from_url);
+        }
+        // Tips: When the body is empty or the length is less than CONTENT_LENGTH, it may block
+        if let Some(size) = size {
+            builder = builder.header(CONTENT_LENGTH, size)
+        }
+        let request = builder.body(body).map_err(|e| Error::Other(e.into()))?;
         let _ = self.send_request(request).await?;
 
         Ok(())

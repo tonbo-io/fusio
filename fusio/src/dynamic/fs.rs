@@ -1,11 +1,11 @@
-use std::pin::Pin;
+use std::{cmp, pin::Pin, sync::Arc};
 
 use futures_core::Stream;
 
 use super::MaybeSendFuture;
 use crate::{
     buf::IoBufMut,
-    fs::{FileMeta, Fs, OpenOptions},
+    fs::{FileMeta, FileSystemTag, Fs, OpenOptions},
     path::Path,
     DynRead, DynWrite, Error, IoBuf, MaybeSend, MaybeSync, Read, Write,
 };
@@ -48,6 +48,8 @@ impl<'write> Write for Box<dyn DynFile + 'write> {
 }
 
 pub trait DynFs: MaybeSend + MaybeSync {
+    fn file_system(&self) -> FileSystemTag;
+
     fn open<'s, 'path: 's>(
         &'s self,
         path: &'path Path,
@@ -84,9 +86,25 @@ pub trait DynFs: MaybeSend + MaybeSync {
         &'s self,
         path: &'path Path,
     ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<(), Error>> + 's>>;
+
+    fn copy<'s, 'path: 's>(
+        &'s self,
+        from: &'path Path,
+        to: &'path Path,
+    ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<(), Error>> + 's>>;
+
+    fn link<'s, 'path: 's>(
+        &'s self,
+        from: &'path Path,
+        to: &'path Path,
+    ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<(), Error>> + 's>>;
 }
 
 impl<F: Fs> DynFs for F {
+    fn file_system(&self) -> FileSystemTag {
+        Fs::file_system(self)
+    }
+
     fn open_options<'s, 'path: 's>(
         &'s self,
         path: &'path Path,
@@ -130,6 +148,59 @@ impl<F: Fs> DynFs for F {
     ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<(), Error>> + 's>> {
         Box::pin(F::remove(self, path))
     }
+
+    fn copy<'s, 'path: 's>(
+        &'s self,
+        from: &'path Path,
+        to: &'path Path,
+    ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<(), Error>> + 's>> {
+        Box::pin(F::copy(self, from, to))
+    }
+
+    fn link<'s, 'path: 's>(
+        &'s self,
+        from: &'path Path,
+        to: &'path Path,
+    ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<(), Error>> + 's>> {
+        Box::pin(F::link(self, from, to))
+    }
+}
+
+pub async fn copy(
+    from_fs: &Arc<dyn DynFs>,
+    from: &Path,
+    to_fs: &Arc<dyn DynFs>,
+    to: &Path,
+) -> Result<(), Error> {
+    if from_fs.file_system() == to_fs.file_system() {
+        from_fs.copy(from, to).await?;
+        return Ok(());
+    }
+    let mut from_file = from_fs
+        .open_options(from, OpenOptions::default().read(true))
+        .await?;
+    let from_file_size = DynRead::size(&from_file).await? as usize;
+
+    let mut to_file = to_fs
+        .open_options(to, OpenOptions::default().create(true).write(true))
+        .await?;
+    let buf_size = cmp::min(from_file_size, 4 * 1024);
+    let mut buf = Some(vec![0u8; buf_size]);
+    let mut read_pos = 0u64;
+
+    while (read_pos as usize) < from_file_size - 1 {
+        let tmp = buf.take().unwrap();
+        let (result, tmp) = Read::read_exact_at(&mut from_file, tmp, read_pos).await;
+        result?;
+        read_pos += tmp.bytes_init() as u64;
+
+        let (result, tmp) = Write::write_all(&mut to_file, tmp).await;
+        result?;
+        buf = Some(tmp);
+    }
+    DynWrite::close(&mut to_file).await?;
+
+    Ok(())
 }
 
 #[cfg(test)]

@@ -4,7 +4,7 @@ mod error;
 pub mod fs;
 pub(crate) mod multipart_upload;
 pub(crate) mod options;
-mod s3;
+pub(crate) mod s3;
 pub(crate) mod sign;
 pub(crate) mod writer;
 

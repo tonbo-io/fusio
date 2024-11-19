@@ -96,8 +96,8 @@ mod tests {
             eprintln!("skipping AWS s3 test");
             return;
         }
-        let key_id = env!("AWS_ACCESS_KEY_ID").to_string();
-        let secret_key = env!("AWS_SECRET_ACCESS_KEY").to_string();
+        let key_id = option_env!("AWS_ACCESS_KEY_ID").unwrap().to_string();
+        let secret_key = option_env!("AWS_SECRET_ACCESS_KEY").unwrap().to_string();
 
         let s3 = AmazonS3Builder::new("fusio-test".into())
             .credential(AwsCredential {

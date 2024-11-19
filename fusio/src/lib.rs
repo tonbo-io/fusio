@@ -327,7 +327,7 @@ mod tests {
 
     #[allow(unused)]
     #[cfg(not(target_arch = "wasm32"))]
-    async fn test_local_fs<S>(fs: S) -> Result<(), Error>
+    async fn test_local_fs_read_write<S>(fs: S) -> Result<(), Error>
     where
         S: crate::fs::Fs,
     {
@@ -377,10 +377,17 @@ mod tests {
                 )
                 .await?;
             file.write_all("Hello! world".as_bytes()).await.0?;
-
+            file.flush().await.unwrap();
             file.close().await.unwrap();
 
-            let (result, buf) = file.read_exact_at(vec![0u8; 12], 12).await;
+            let mut file = fs
+                .open_options(
+                    &Path::from_absolute_path(&work_file_path)?,
+                    OpenOptions::default().read(true),
+                )
+                .await?;
+
+            let (result, buf) = file.read_exact_at(vec![0u8; 12], 0).await;
             result.unwrap();
             assert_eq!(buf.as_slice(), b"Hello! world");
         }
@@ -388,7 +395,147 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(feature = "tokio")]
+    #[cfg(not(target_arch = "wasm32"))]
+    #[allow(unused)]
+    async fn test_local_fs_copy_link<F: crate::fs::Fs>(src_fs: F) -> Result<(), Error> {
+        use std::collections::HashSet;
+
+        use futures_util::StreamExt;
+        use tempfile::TempDir;
+
+        use crate::{fs::OpenOptions, path::Path, DynFs};
+
+        let tmp_dir = TempDir::new()?;
+
+        let work_dir_path = tmp_dir.path().join("work_dir");
+        let src_file_path = work_dir_path.join("src_test.file");
+        let dst_file_path = work_dir_path.join("dst_test.file");
+
+        src_fs
+            .create_dir_all(&Path::from_absolute_path(&work_dir_path)?)
+            .await?;
+
+        // create files
+        let _ = src_fs
+            .open_options(
+                &Path::from_absolute_path(&src_file_path)?,
+                OpenOptions::default().create(true),
+            )
+            .await?;
+        let _ = src_fs
+            .open_options(
+                &Path::from_absolute_path(&dst_file_path)?,
+                OpenOptions::default().create(true),
+            )
+            .await?;
+        // copy
+        {
+            let mut src_file = src_fs
+                .open_options(
+                    &Path::from_absolute_path(&src_file_path)?,
+                    OpenOptions::default().write(true),
+                )
+                .await?;
+            src_file.write_all("Hello! fusio".as_bytes()).await.0?;
+            src_file.close().await?;
+
+            src_fs
+                .copy(
+                    &Path::from_absolute_path(&src_file_path)?,
+                    &Path::from_absolute_path(&dst_file_path)?,
+                )
+                .await?;
+
+            let mut src_file = src_fs
+                .open_options(
+                    &Path::from_absolute_path(&src_file_path)?,
+                    OpenOptions::default().write(true).read(true),
+                )
+                .await?;
+            src_file.write_all("Hello! world".as_bytes()).await.0?;
+            src_file.flush().await?;
+            src_file.close().await?;
+
+            let mut src_file = src_fs
+                .open_options(
+                    &Path::from_absolute_path(&src_file_path)?,
+                    OpenOptions::default().write(true).read(true),
+                )
+                .await?;
+
+            let (result, buf) = src_file.read_exact_at(vec![0u8; 12], 0).await;
+            result.unwrap();
+            assert_eq!(buf.as_slice(), b"Hello! world");
+
+            let mut dst_file = src_fs
+                .open_options(
+                    &Path::from_absolute_path(&dst_file_path)?,
+                    OpenOptions::default().read(true),
+                )
+                .await?;
+
+            let (result, buf) = dst_file.read_exact_at(vec![0u8; 12], 0).await;
+            result.unwrap();
+            assert_eq!(buf.as_slice(), b"Hello! fusio");
+        }
+
+        src_fs
+            .remove(&Path::from_absolute_path(&dst_file_path)?)
+            .await?;
+        // link
+        {
+            let mut src_file = src_fs
+                .open_options(
+                    &Path::from_absolute_path(&src_file_path)?,
+                    OpenOptions::default().write(true),
+                )
+                .await?;
+            src_file.write_all("Hello! fusio".as_bytes()).await.0?;
+            src_file.close().await?;
+
+            src_fs
+                .link(
+                    &Path::from_absolute_path(&src_file_path)?,
+                    &Path::from_absolute_path(&dst_file_path)?,
+                )
+                .await?;
+
+            let mut src_file = src_fs
+                .open_options(
+                    &Path::from_absolute_path(&src_file_path)?,
+                    OpenOptions::default().write(true).read(true),
+                )
+                .await?;
+            src_file.write_all("Hello! world".as_bytes()).await.0?;
+            src_file.flush().await?;
+            src_file.close().await?;
+
+            let mut src_file = src_fs
+                .open_options(
+                    &Path::from_absolute_path(&src_file_path)?,
+                    OpenOptions::default().write(true).read(true),
+                )
+                .await?;
+            let (result, buf) = src_file.read_exact_at(vec![0u8; 12], 0).await;
+            result.unwrap();
+            assert_eq!(buf.as_slice(), b"Hello! world");
+
+            let mut dst_file = src_fs
+                .open_options(
+                    &Path::from_absolute_path(&dst_file_path)?,
+                    OpenOptions::default().read(true),
+                )
+                .await?;
+
+            let (result, buf) = dst_file.read_exact_at(vec![0u8; 12], 0).await;
+            result.unwrap();
+            assert_eq!(buf.as_slice(), b"Hello! world");
+        }
+
+        Ok(())
+    }
+
+    #[cfg(all(feature = "tokio", not(target_arch = "wasm32")))]
     #[tokio::test]
     async fn test_tokio() {
         use tempfile::tempfile;
@@ -405,10 +552,31 @@ mod tests {
     async fn test_tokio_fs() {
         use crate::disk::TokioFs;
 
-        test_local_fs(TokioFs).await.unwrap();
+        test_local_fs_read_write(TokioFs).await.unwrap();
+        test_local_fs_copy_link(TokioFs).await.unwrap();
     }
 
-    #[cfg(feature = "tokio")]
+    #[cfg(all(feature = "tokio-uring", target_os = "linux"))]
+    #[test]
+    fn test_tokio_uring_fs() {
+        use crate::disk::tokio_uring::fs::TokioUringFs;
+
+        tokio_uring::start(async {
+            test_local_fs_read_write(TokioUringFs).await.unwrap();
+            test_local_fs_copy_link(TokioUringFs).await.unwrap();
+        })
+    }
+
+    #[cfg(all(feature = "monoio", not(target_arch = "wasm32")))]
+    #[monoio::test]
+    async fn test_monoio_fs() {
+        use crate::disk::monoio::fs::MonoIoFs;
+
+        test_local_fs_read_write(MonoIoFs).await.unwrap();
+        test_local_fs_copy_link(MonoIoFs).await.unwrap();
+    }
+
+    #[cfg(all(feature = "tokio", not(target_arch = "wasm32")))]
     #[tokio::test]
     async fn test_read_exact() {
         use tempfile::tempfile;

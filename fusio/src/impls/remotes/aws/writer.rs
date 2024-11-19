@@ -6,7 +6,10 @@ use http_body_util::Full;
 
 use crate::{
     dynamic::MaybeSendFuture,
-    remotes::{aws::multipart_upload::MultipartUpload, serde::MultipartPart},
+    remotes::{
+        aws::multipart_upload::{MultipartUpload, UploadType},
+        serde::MultipartPart,
+    },
     Error, IoBuf, Write,
 };
 
@@ -90,7 +93,10 @@ impl Write for S3Writer {
                 let bytes = mem::replace(&mut self.buf, BytesMut::new()).freeze();
 
                 self.inner
-                    .upload_once(bytes.len(), Full::new(bytes))
+                    .upload_once(UploadType::Write {
+                        size: bytes.len(),
+                        body: Full::new(bytes),
+                    })
                     .await?;
             }
             return Ok(());
@@ -140,6 +146,7 @@ mod tests {
         let region = "ap-southeast-2";
         let options = S3Options {
             endpoint: "http://localhost:9000/data".into(),
+            bucket: "data".to_string(),
             credential: Some(AwsCredential {
                 key_id: "user".to_string(),
                 secret_key: "password".to_string(),
