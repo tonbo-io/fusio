@@ -19,7 +19,7 @@ use crate::{
     error::wasm_err,
     fs::{FileMeta, FileSystemTag, Fs, OpenOptions},
     path::Path,
-    Error, MaybeSend,
+    Error,
 };
 
 pub struct OPFS;
@@ -122,7 +122,7 @@ impl OPFS {
         path: &Path,
         options: &FileSystemGetDirectoryOptions,
     ) -> Result<FileSystemDirectoryHandle, Error> {
-        let mut parent = storage().await;
+        let mut parent = storage().await?;
         let segments: Vec<&str> = path.as_ref().trim_matches('/').split("/").collect();
 
         if segments.len() == 1 && segments[0].is_empty() {
@@ -148,7 +148,7 @@ impl OPFS {
         path: &Path,
         options: &FileSystemGetDirectoryOptions,
     ) -> Result<FileSystemDirectoryHandle, Error> {
-        let mut parent = storage().await;
+        let mut parent = storage().await?;
         let segments: Vec<&str> = path.as_ref().trim_matches('/').split("/").collect();
         let part_len = segments.len();
 
