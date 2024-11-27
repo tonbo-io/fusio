@@ -8,7 +8,7 @@ use wasm_bindgen_futures::JsFuture;
 use web_sys::{
     wasm_bindgen::JsCast, window, File, FileSystemCreateWritableOptions, FileSystemDirectoryHandle,
     FileSystemFileHandle, FileSystemWritableFileStream, ReadableStreamDefaultReader,
-    ReadableStreamReadResult,
+    ReadableStreamReadResult, WorkerGlobalScope,
 };
 
 use crate::{error::wasm_err, Error, IoBuf, IoBufMut, Read, Write};
@@ -257,11 +257,18 @@ impl Read for OPFSFile {
     }
 }
 
-pub(crate) async fn storage() -> FileSystemDirectoryHandle {
-    let storage_promise = window().unwrap().navigator().storage().get_directory();
-    JsFuture::from(storage_promise)
-        .await
-        .unwrap()
-        .dyn_into::<FileSystemDirectoryHandle>()
-        .unwrap()
+pub(crate) async fn storage() -> Result<FileSystemDirectoryHandle, Error> {
+    let storage_promise = match window() {
+        Some(window) => window.navigator().storage(),
+        None => match js_sys::eval("self")
+            .unwrap()
+            .dyn_into::<WorkerGlobalScope>()
+        {
+            Ok(worker) => worker.navigator().storage(),
+            Err(err) => return Err(wasm_err(err)),
+        },
+    }
+    .get_directory();
+
+    promise::<FileSystemDirectoryHandle>(storage_promise).await
 }
