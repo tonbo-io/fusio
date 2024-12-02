@@ -22,6 +22,7 @@ where
     js_val.dyn_into::<T>().map_err(|_obj| Error::CastError)
 }
 
+/// File handle of OPFS file
 pub struct FileHandle {
     file_handle: FileSystemFileHandle,
 }
@@ -33,6 +34,9 @@ impl FileHandle {
 }
 
 impl FileHandle {
+    /// Attempts to write an entire buffer into the file.
+    ///
+    /// Unlike [`OPFSFile::write_all`], changes will be written to the actual file.
     pub async fn write_at<B: IoBuf>(&self, buf: B, pos: u64) -> (Result<(), Error>, B) {
         let options = FileSystemCreateWritableOptions::new();
         options.set_keep_existing_data(true);
@@ -58,8 +62,10 @@ impl FileHandle {
 
         (result, buf)
     }
-
-    pub async fn write_with_stream<B: IoBuf>(
+    /// Attempts to write an entire buffer into the stream.
+    ///
+    /// No changes are written to the actual file on disk until the stream is closed.
+    async fn write_with_stream<B: IoBuf>(
         &self,
         buf: B,
         stream: &FileSystemWritableFileStream,
@@ -70,6 +76,7 @@ impl FileHandle {
         }
     }
 
+    /// Create a `FileSystemWritableFileStream` and return a JavaScript Promise
     fn create_writable_with_options(
         &self,
         options: &FileSystemCreateWritableOptions,
@@ -79,6 +86,12 @@ impl FileHandle {
 }
 
 impl FileHandle {
+    /// Reads all bytes until EOF in this source, placing them into `buf`.
+    ///
+    /// # Errors
+    ///
+    /// If an error is encountered then the `read_to_end_at` operation
+    /// immediately completes.
     async fn read_to_end_at(&self, mut buf: Vec<u8>, pos: u64) -> (Result<(), Error>, Vec<u8>) {
         let file_promise = self.file_handle.get_file();
         let file = match promise::<File>(file_promise).await {
@@ -119,6 +132,12 @@ impl FileHandle {
         (Ok(()), buf)
     }
 
+    /// Reads the exact number of bytes required to fill `buf` at `pos`.
+    ///
+    /// # Errors
+    ///
+    /// If the operation encounters an "end of file" before completely
+    /// filling the buffer, it returns an error of  [`Error::Io`].
     pub async fn read_exact_at<B: IoBufMut>(&self, mut buf: B, pos: u64) -> (Result<(), Error>, B) {
         let buf_len = buf.bytes_init() as i32;
         let buf_slice = buf.as_slice_mut();
@@ -172,6 +191,7 @@ impl FileHandle {
     }
 }
 
+/// OPFS based on [FileSystemWritableFileStream](https://developer.mozilla.org/en-US/docs/Web/API/FileSystemWritableFileStream)
 pub struct OPFSFile {
     file_handle: Option<Arc<FileHandle>>,
     write_stream: Option<FileSystemWritableFileStream>,
@@ -179,7 +199,7 @@ pub struct OPFSFile {
 }
 
 impl OPFSFile {
-    pub fn new(file_handle: FileSystemFileHandle) -> Self {
+    pub(crate) fn new(file_handle: FileSystemFileHandle) -> Self {
         Self {
             file_handle: Some(Arc::new(FileHandle::new(file_handle))),
             write_stream: None,
@@ -196,6 +216,10 @@ impl OPFSFile {
 }
 
 impl Write for OPFSFile {
+    /// Attempts to write an entire buffer into the file.
+    ///
+    /// No changes are written to the actual file on disk until [`OPFSFile::close`] has been called.
+    /// See more detail in [write](https://developer.mozilla.org/en-US/docs/Web/API/FileSystemWritableFileStream/write)
     async fn write_all<B: IoBuf>(&mut self, buf: B) -> (Result<(), Error>, B) {
         let file_handle = self.file_handle.as_ref().expect("write file after closed");
         if self.write_stream.is_none() {
@@ -228,6 +252,7 @@ impl Write for OPFSFile {
         Ok(())
     }
 
+    /// Close the associated OPFS file.
     async fn close(&mut self) -> Result<(), Error> {
         let writer = self.write_stream.take();
         if let Some(writer) = writer {
@@ -239,18 +264,31 @@ impl Write for OPFSFile {
 }
 
 impl Read for OPFSFile {
+    /// Reads the exact number of bytes required to fill `buf` at `pos`.
+    ///
+    /// # Errors
+    ///
+    /// If the operation encounters an "end of file" before completely
+    /// filling the buffer, it returns an error of  [`Error::Io`].
     async fn read_exact_at<B: IoBufMut>(&mut self, buf: B, pos: u64) -> (Result<(), Error>, B) {
         let file_handle = self.file_handle.as_ref().expect("read file after closed");
 
         file_handle.read_exact_at(buf, pos).await
     }
 
+    /// Reads all bytes until EOF in this source, placing them into `buf`.
+    ///
+    /// # Errors
+    ///
+    /// If an error is encountered then the `read_to_end_at` operation
+    /// immediately completes.
     async fn read_to_end_at(&mut self, buf: Vec<u8>, pos: u64) -> (Result<(), Error>, Vec<u8>) {
         let file_handle = self.file_handle.as_ref().expect("read file after closed");
 
         file_handle.read_to_end_at(buf, pos).await
     }
 
+    /// Return the size of file in bytes.
     async fn size(&self) -> Result<u64, Error> {
         let file_handle = self.file_handle.as_ref().expect("read file after closed");
         file_handle.size().await

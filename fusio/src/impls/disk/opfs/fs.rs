@@ -22,6 +22,7 @@ use crate::{
     Error,
 };
 
+/// [OPFS](https://developer.mozilla.org/en-US/docs/Web/API/File_System_API/Origin_private_file_system) backend
 pub struct OPFS;
 
 impl Fs for OPFS {
@@ -31,6 +32,11 @@ impl Fs for OPFS {
         FileSystemTag::Local
     }
 
+    /// Open a [`OPFSFile`] with options.
+    ///
+    /// It is not permitted to use paths that temporarily step outside the sandbox with something
+    /// like `../foo` or `./bar`. It is recommended to call [`Path::from_opfs_path`] or
+    /// [`Path::parse`]
     async fn open_options(&self, path: &Path, options: OpenOptions) -> Result<Self::File, Error> {
         let segments: Vec<&str> = path.as_ref().trim_matches('/').split("/").collect();
 
@@ -56,6 +62,7 @@ impl Fs for OPFS {
         Ok(OPFSFile::new(file_handle))
     }
 
+    /// Recursively creates a directory and all of its parent components if they are missing.
     async fn create_dir_all(path: &Path) -> Result<(), Error> {
         let options = FileSystemGetDirectoryOptions::new();
         options.set_create(true);
@@ -65,6 +72,7 @@ impl Fs for OPFS {
         Ok(())
     }
 
+    /// Returns an iterator over the entries within a directory.
     async fn list(
         &self,
         path: &Path,
@@ -90,6 +98,7 @@ impl Fs for OPFS {
         })
     }
 
+    /// Recursively removes an entry from OPFS. See more detail in [removeEntry](https://developer.mozilla.org/en-US/docs/Web/API/FileSystemDirectoryHandle/removeEntry)
     async fn remove(&self, path: &Path) -> Result<(), Error> {
         let dir_options = FileSystemGetDirectoryOptions::new();
         dir_options.set_create(false);
