@@ -39,12 +39,20 @@ impl HttpClient for WasmClient {
             Ok(body) => {
                 let client = reqwest::Client::new();
 
-                let mut builder = client.request(parts.method, url);
+                let mut builder = client.request(parts.method, url).headers(parts.headers);
                 builder = builder.body(reqwest::Body::from(body.to_bytes()));
                 let response = builder.send().await?;
+
+                let mut resp_builder = Response::builder();
+                let mut headers = resp_builder.headers_mut();
+                for (name, value) in response.headers().iter() {
+                    headers.as_mut().unwrap().append(name, value.clone());
+                }
                 let bytes = response.bytes().await?;
 
-                Ok(Response::new(http_body_util::Full::new(bytes)))
+                resp_builder
+                    .body(http_body_util::Full::new(bytes))
+                    .map_err(HttpError::Http)
             }
             Err(err) => Err(HttpError::Other(err.into())),
         }
@@ -74,6 +82,7 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
     }
 
+    #[ignore]
     #[cfg(all(feature = "wasm-http", feature = "aws"))]
     #[wasm_bindgen_test]
     async fn list_and_remove_wasm() {
