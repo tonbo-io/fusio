@@ -15,12 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{
-    collections::BTreeMap,
-    io,
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::{collections::BTreeMap, io, sync::Arc};
 
 use bytes::{Buf, Bytes};
 use chrono::{DateTime, Utc};
@@ -228,7 +223,7 @@ impl<'a> AwsAuthorizer<'a> {
     }
 
     #[allow(unused)]
-    pub(crate) fn sign(&self, method: Method, url: &mut Url, expires_in: Duration) {
+    pub(crate) fn sign(&self, method: Method, url: &mut Url, expires_in: u32) {
         let date = self.date.unwrap_or_else(Utc::now);
         let scope = self.scope(date);
 
@@ -240,7 +235,7 @@ impl<'a> AwsAuthorizer<'a> {
                 &format!("{}/{}", self.credential.key_id, scope),
             )
             .append_pair("X-Amz-Date", &date.format("%Y%m%dT%H%M%SZ").to_string())
-            .append_pair("X-Amz-Expires", &expires_in.as_secs().to_string())
+            .append_pair("X-Amz-Expires", &expires_in.to_string())
             .append_pair("X-Amz-SignedHeaders", "host");
 
         // For S3, you must include the X-Amz-Security-Token query parameter in the URL if
@@ -521,7 +516,6 @@ async fn instance_creds<'c, C: HttpClient>(
     let ttl = (creds.expiration - now).to_std().unwrap_or_default();
     Ok(TemporaryToken {
         token: Arc::new(creds.into()),
-        expiry: Some(Instant::now() + ttl),
     })
 }
 
@@ -548,15 +542,10 @@ impl From<InstanceCredentials> for AwsCredential {
 pub(crate) struct TemporaryToken<T> {
     /// The temporary credential
     pub(crate) token: T,
-    /// The instant at which this credential is no longer valid
-    /// None means the credential does not expire
-    #[allow(unused)]
-    pub(crate) expiry: Option<Instant>,
 }
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
 
     #[allow(unused)]
     use bytes::Bytes;
@@ -681,7 +670,7 @@ mod tests {
         };
 
         let mut url = Url::parse("https://examplebucket.s3.amazonaws.com/test.txt").unwrap();
-        authorizer.sign(Method::GET, &mut url, Duration::from_secs(86400));
+        authorizer.sign(Method::GET, &mut url, 86400);
 
         assert_eq!(
             url,
