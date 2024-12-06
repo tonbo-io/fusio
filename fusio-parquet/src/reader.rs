@@ -16,6 +16,9 @@ use parquet::{
 const PREFETCH_FOOTER_SIZE: usize = 512 * 1024;
 
 pub struct AsyncReader {
+    #[cfg(feature = "opfs")]
+    inner: Arc<futures::lock::Mutex<Box<dyn DynFile>>>,
+    #[cfg(not(feature = "opfs"))]
     inner: Box<dyn DynFile>,
     content_length: u64,
     // The prefetch size for fetching file footer.
@@ -31,6 +34,9 @@ fn set_prefetch_footer_size(footer_size: usize, content_size: u64) -> usize {
 
 impl AsyncReader {
     pub async fn new(reader: Box<dyn DynFile>, content_length: u64) -> Result<Self, fusio::Error> {
+        #[cfg(feature = "opfs")]
+        #[allow(clippy::arc_with_non_send_sync)]
+        let reader = Arc::new(futures::lock::Mutex::new(reader));
         Ok(Self {
             inner: reader,
             content_length,
@@ -52,22 +58,20 @@ impl AsyncFileReader for AsyncReader {
 
         cfg_if::cfg_if! {
             if #[cfg(all(feature = "opfs", target_arch = "wasm32"))] {
-                let (sender, receiver) =
-                futures::channel::oneshot::channel::<Result<Bytes, ParquetError>>();
-                let opfs = unsafe {
-                    std::mem::transmute::<&Box<dyn DynFile>, &Box<fusio::disk::OPFSFile>>(&self.inner)
-                };
-                let file_handle = opfs.file_handle().unwrap();
+                let (sender, receiver) = futures::channel::oneshot::channel::<Result<Bytes, ParquetError>>();
 
+                let reader = self.inner.clone();
                 wasm_bindgen_futures::spawn_local(async move {
-
-                    let (result, buf) = file_handle.read_exact_at(buf, range.start as u64).await;
-
-                    let ret = match result {
-                        Ok(_) => Ok(buf.freeze()),
-                        Err(err) => Err(ParquetError::External(Box::new(err)))
+                    let result = {
+                        let mut guard = reader.lock().await;
+                        let (result, buf) = guard.read_exact_at(buf, range.start as u64).await;
+                        match result {
+                            Ok(_) => Ok(buf.freeze()),
+                            Err(err) => Err(ParquetError::External(Box::new(err)))
+                        }
                     };
-                    let _ = sender.send(ret);
+
+                    let _ = sender.send(result);
                 });
 
                 async move {
@@ -96,15 +100,12 @@ impl AsyncFileReader for AsyncReader {
             if #[cfg(all(feature = "opfs", target_arch = "wasm32"))] {
                 let mut buf = BytesMut::with_capacity(footer_size);
                 buf.resize(footer_size, 0);
-                let (sender, receiver) =
-                futures::channel::oneshot::channel::<Result<Arc<ParquetMetaData>, ParquetError>>();
-                let opfs = unsafe {
-                    std::mem::transmute::<&Box<dyn DynFile>, &Box<fusio::disk::OPFSFile>>(&self.inner)
-                };
-                let file_handle = opfs.file_handle().unwrap();
+                let (sender, receiver) = futures::channel::oneshot::channel::<Result<Arc<ParquetMetaData>, ParquetError>>();
 
+                let reader = self.inner.clone();
                 wasm_bindgen_futures::spawn_local(async move {
-                    let (result, prefetched_footer_content) = file_handle
+                    let mut guard = reader.lock().await;
+                    let (result, prefetched_footer_content) = guard
                         .read_exact_at(buf, content_length - footer_size as u64)
                         .await;
                     if let Err(err) = result {
@@ -130,6 +131,7 @@ impl AsyncFileReader for AsyncReader {
                             - FOOTER_SIZE)
                             ..(prefetched_footer_length - FOOTER_SIZE)];
 
+                        drop(guard);
 
                         let _ = sender.send(ParquetMetaDataReader::decode_metadata(buf)
                             .map(|meta| Arc::new(meta)));
@@ -137,12 +139,15 @@ impl AsyncFileReader for AsyncReader {
                         let mut buf = BytesMut::with_capacity(metadata_length);
                         buf.resize(metadata_length, 0);
 
-                        let (result, bytes) = file_handle
+                        let (result, bytes) = guard
                             .read_exact_at(
                                 buf,
                                 content_length - metadata_length as u64 - FOOTER_SIZE as u64,
                             )
                             .await;
+
+                        drop(guard);
+
                         if let Err(err) = result {
                             let _ = sender.send(Err(ParquetError::External(Box::new(err))));
                             return ;

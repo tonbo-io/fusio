@@ -5,18 +5,23 @@ use futures::future::BoxFuture;
 use parquet::{arrow::async_writer::AsyncFileWriter, errors::ParquetError};
 
 pub struct AsyncWriter {
-    inner: Option<Box<dyn DynFile>>,
     #[cfg(feature = "opfs")]
-    pos: u64,
+    #[allow(clippy::arc_with_non_send_sync)]
+    inner: Option<std::sync::Arc<futures::lock::Mutex<Box<dyn DynFile>>>>,
+    #[cfg(not(feature = "opfs"))]
+    inner: Option<Box<dyn DynFile>>,
 }
 
 unsafe impl Send for AsyncWriter {}
 impl AsyncWriter {
     pub fn new(writer: Box<dyn DynFile>) -> Self {
-        Self {
-            inner: Some(writer),
-            #[cfg(feature = "opfs")]
-            pos: 0,
+        #[cfg(feature = "opfs")]
+        #[allow(clippy::arc_with_non_send_sync)]
+        let writer = std::sync::Arc::new(futures::lock::Mutex::new(writer));
+        {
+            Self {
+                inner: Some(writer),
+            }
         }
     }
 }
@@ -27,17 +32,15 @@ impl AsyncFileWriter for AsyncWriter {
             if #[cfg(all(feature = "opfs", target_arch = "wasm32"))] {
                 match self.inner.as_mut() {
                     Some(writer) => {
-                        let pos = self.pos;
-                        self.pos += bs.len() as u64;
-                        let (sender, receiver) =
-                            futures::channel::oneshot::channel::<Result<(), ParquetError>>();
-                        let opfs = unsafe {
-                            std::mem::transmute::<&Box<dyn DynFile>, &Box<fusio::disk::OPFSFile>>(writer)
-                        };
-                        let handle = opfs.file_handle().unwrap();
-
+                        let (sender, receiver) = futures::channel::oneshot::channel::<Result<(), ParquetError>>();
+                        let writer = writer.clone();
                         wasm_bindgen_futures::spawn_local(async move {
-                            let (result, _) = handle.write_at(bs, pos).await;
+                            let result = {
+                                let mut guard = writer.lock().await;
+                                let (result, _) = guard.write_all(bs).await;
+                                result
+                            };
+
                             let _ = sender.send(result
                                 .map_err(|err| ParquetError::External(Box::new(err))));
                         });
@@ -68,9 +71,25 @@ impl AsyncFileWriter for AsyncWriter {
     fn complete(&mut self) -> BoxFuture<'_, parquet::errors::Result<()>> {
         cfg_if::cfg_if! {
             if #[cfg(all(feature = "opfs", target_arch = "wasm32"))] {
-                Box::pin(async move {
-                    Ok(())
-                })
+                 match self.inner.take() {
+                    Some(writer) => {
+                        let (sender, receiver) = futures::channel::oneshot::channel::<Result<(), ParquetError>>();
+                        wasm_bindgen_futures::spawn_local(async move {
+                            let result = {
+                                let mut guard = writer.lock().await;
+                                guard.close().await
+                            };
+                            let _ = sender.send(result
+                                .map_err(|err| ParquetError::External(Box::new(err))));
+                        });
+                        Box::pin(async move {
+                            receiver.await.unwrap()
+                        })
+                    }
+                    None => Box::pin(async move {
+                        Ok(())
+                    })
+                }
             } else {
                 Box::pin(async move {
                     if let Some(mut writer) = self.inner.take() {
