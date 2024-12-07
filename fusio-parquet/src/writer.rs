@@ -5,17 +5,17 @@ use futures::future::BoxFuture;
 use parquet::{arrow::async_writer::AsyncFileWriter, errors::ParquetError};
 
 pub struct AsyncWriter {
-    #[cfg(feature = "opfs")]
+    #[cfg(feature = "wasm")]
     #[allow(clippy::arc_with_non_send_sync)]
     inner: Option<std::sync::Arc<futures::lock::Mutex<Box<dyn DynFile>>>>,
-    #[cfg(not(feature = "opfs"))]
+    #[cfg(not(feature = "wasm"))]
     inner: Option<Box<dyn DynFile>>,
 }
 
 unsafe impl Send for AsyncWriter {}
 impl AsyncWriter {
     pub fn new(writer: Box<dyn DynFile>) -> Self {
-        #[cfg(feature = "opfs")]
+        #[cfg(feature = "wasm")]
         #[allow(clippy::arc_with_non_send_sync)]
         let writer = std::sync::Arc::new(futures::lock::Mutex::new(writer));
         {
@@ -29,7 +29,7 @@ impl AsyncWriter {
 impl AsyncFileWriter for AsyncWriter {
     fn write(&mut self, bs: Bytes) -> BoxFuture<'_, parquet::errors::Result<()>> {
         cfg_if::cfg_if! {
-            if #[cfg(all(feature = "opfs", target_arch = "wasm32"))] {
+            if #[cfg(all(feature = "wasm", target_arch = "wasm32"))] {
                 match self.inner.as_mut() {
                     Some(writer) => {
                         let (sender, receiver) = futures::channel::oneshot::channel::<Result<(), ParquetError>>();
@@ -70,7 +70,7 @@ impl AsyncFileWriter for AsyncWriter {
 
     fn complete(&mut self) -> BoxFuture<'_, parquet::errors::Result<()>> {
         cfg_if::cfg_if! {
-            if #[cfg(all(feature = "opfs", target_arch = "wasm32"))] {
+            if #[cfg(all(feature = "wasm", target_arch = "wasm32"))] {
                  match self.inner.take() {
                     Some(writer) => {
                         let (sender, receiver) = futures::channel::oneshot::channel::<Result<(), ParquetError>>();

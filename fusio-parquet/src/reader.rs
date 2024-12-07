@@ -16,9 +16,9 @@ use parquet::{
 const PREFETCH_FOOTER_SIZE: usize = 512 * 1024;
 
 pub struct AsyncReader {
-    #[cfg(feature = "opfs")]
+    #[cfg(feature = "wasm")]
     inner: Arc<futures::lock::Mutex<Box<dyn DynFile>>>,
-    #[cfg(not(feature = "opfs"))]
+    #[cfg(not(feature = "wasm"))]
     inner: Box<dyn DynFile>,
     content_length: u64,
     // The prefetch size for fetching file footer.
@@ -34,7 +34,7 @@ fn set_prefetch_footer_size(footer_size: usize, content_size: u64) -> usize {
 
 impl AsyncReader {
     pub async fn new(reader: Box<dyn DynFile>, content_length: u64) -> Result<Self, fusio::Error> {
-        #[cfg(feature = "opfs")]
+        #[cfg(feature = "wasm")]
         #[allow(clippy::arc_with_non_send_sync)]
         let reader = Arc::new(futures::lock::Mutex::new(reader));
         Ok(Self {
@@ -57,7 +57,7 @@ impl AsyncFileReader for AsyncReader {
         buf.resize(len, 0);
 
         cfg_if::cfg_if! {
-            if #[cfg(all(feature = "opfs", target_arch = "wasm32"))] {
+            if #[cfg(all(feature = "wasm", target_arch = "wasm32"))] {
                 let (sender, receiver) = futures::channel::oneshot::channel::<Result<Bytes, ParquetError>>();
 
                 let reader = self.inner.clone();
@@ -97,7 +97,7 @@ impl AsyncFileReader for AsyncReader {
         let content_length = self.content_length;
 
         cfg_if::cfg_if! {
-            if #[cfg(all(feature = "opfs", target_arch = "wasm32"))] {
+            if #[cfg(all(feature = "wasm", target_arch = "wasm32"))] {
                 let mut buf = BytesMut::with_capacity(footer_size);
                 buf.resize(footer_size, 0);
                 let (sender, receiver) = futures::channel::oneshot::channel::<Result<Arc<ParquetMetaData>, ParquetError>>();
