@@ -1,5 +1,5 @@
 #[cfg(test)]
-#[cfg(all(feature = "opfs", target_arch = "wasm32"))]
+#[cfg(all(feature = "wasm", target_arch = "wasm32"))]
 pub(crate) mod tests {
 
     wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
