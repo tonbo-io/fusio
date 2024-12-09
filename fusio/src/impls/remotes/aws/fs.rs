@@ -89,7 +89,7 @@ impl AmazonS3Builder {
         let trimmed_bucket = self.bucket.trim_start_matches('/');
         let endpoint = if let Some(endpoint) = self.endpoint {
             let trimmed_endpoint = endpoint.trim_end_matches('/');
-            format!("{}/{}", trimmed_endpoint, trimmed_bucket)
+            format!("{}/{}/", trimmed_endpoint, trimmed_bucket)
         } else {
             format!(
                 "https://{}.s3.{}.amazonaws.com",
@@ -221,7 +221,7 @@ impl Fs for AmazonS3 {
     async fn remove(&self, path: &Path) -> Result<(), Error> {
         let mut url = Url::from_str(self.as_ref().options.endpoint.as_str())
             .map_err(|e| S3Error::from(HttpError::from(e)))?;
-        url.set_path(path.as_ref());
+        url = url.join(path.as_ref()).map_err(|e| S3Error::from(HttpError::from(e)))?;
 
         let mut request = Request::builder()
             .method(Method::DELETE)
