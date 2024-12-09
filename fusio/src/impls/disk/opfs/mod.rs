@@ -258,7 +258,6 @@ impl Write for OPFSFile {
         if let Some(writer) = writer {
             JsFuture::from(writer.close()).await.map_err(wasm_err)?;
         }
-        self.file_handle.take();
         Ok(())
     }
 }
