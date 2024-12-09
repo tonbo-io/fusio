@@ -11,7 +11,7 @@ crate-type = ["cdylib", "rlib"]
 arrow = "53"
 fusio = { path = "../../fusio", features = ["opfs"] }
 fusio-dispatch = { path = "../../fusio-dispatch", features = ["opfs"] }
-fusio-parquet = { path = "../../fusio-parquet", features = ["wasm"] }
+fusio-parquet = { path = "../../fusio-parquet", features = ["web"] }
 futures = { version = "0.3" }
 parquet = { version = "53", default-features = false, features = [
     "arrow",

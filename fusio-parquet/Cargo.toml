@@ -8,7 +8,7 @@ version = "0.2.2"
 
 [features]
 default = []
-wasm = ["fusio/opfs"]
+web = ["fusio/opfs"]
 tokio = ["fusio/tokio"]
 
 [dependencies]

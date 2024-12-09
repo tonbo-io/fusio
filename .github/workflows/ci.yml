@@ -135,7 +135,7 @@ jobs:
         uses: actions-rs/cargo@v1
         with:
           command: build
-          args: --target wasm32-unknown-unknown --package fusio-parquet --features=wasm
+          args: --target wasm32-unknown-unknown --package fusio-parquet --features=web
 
       - name: Run cargo build on fusio-dispatch
         uses: actions-rs/cargo@v1
@@ -165,4 +165,4 @@ jobs:
       - name: Run wasm-pack test on fusion-parquet
         run: |
           export PATH=$PATH:/tmp/chrome/chrome-linux64/:/tmp/chrome/chromedriver-linux64/
-          wasm-pack test --chrome --headless fusio-parquet --features wasm
+          wasm-pack test --chrome --headless fusio-parquet --features web
