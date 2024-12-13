@@ -49,6 +49,7 @@ opfs = [
     "dep:web-sys",
     "no-send",
 ]
+sync = ["opfs"]
 tokio = ["async-stream", "dep:tokio"]
 tokio-http = ["dep:reqwest", "http"]
 tokio-uring = ["async-stream", "completion-based", "dep:tokio-uring", "no-send"]
@@ -116,7 +117,9 @@ web-sys = { version = "0.3", optional = true, features = [
     "FileSystemFileHandle",
     "FileSystemGetDirectoryOptions",
     "FileSystemGetFileOptions",
+    "FileSystemReadWriteOptions",
     "FileSystemRemoveOptions",
+    "FileSystemSyncAccessHandle",
     "FileSystemWritableFileStream",
     "Navigator",
     "ReadableStream",

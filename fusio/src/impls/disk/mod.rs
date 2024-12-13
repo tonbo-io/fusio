@@ -8,6 +8,9 @@ pub(crate) mod opfs;
 #[cfg(all(feature = "opfs", target_arch = "wasm32", feature = "fs"))]
 #[allow(unused)]
 pub use opfs::fs::*;
+#[cfg(all(feature = "opfs", feature = "sync", target_arch = "wasm32"))]
+#[allow(unused)]
+pub use opfs::sync::OPFSSyncFile;
 #[cfg(all(feature = "opfs", target_arch = "wasm32"))]
 #[allow(unused)]
 pub use opfs::OPFSFile;

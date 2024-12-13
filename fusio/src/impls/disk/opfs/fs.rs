@@ -1,5 +1,3 @@
-use std::future::Future;
-
 use async_stream::stream;
 use futures_core::Stream;
 use futures_util::StreamExt;
@@ -13,7 +11,10 @@ use web_sys::{
     FileSystemGetFileOptions, FileSystemRemoveOptions,
 };
 
+#[cfg(not(feature = "sync"))]
 use super::OPFSFile;
+#[cfg(feature = "sync")]
+use crate::disk::OPFSSyncFile;
 use crate::{
     disk::opfs::{promise, storage},
     error::wasm_err,
@@ -26,6 +27,9 @@ use crate::{
 pub struct OPFS;
 
 impl Fs for OPFS {
+    #[cfg(feature = "sync")]
+    type File = OPFSSyncFile;
+    #[cfg(not(feature = "sync"))]
     type File = OPFSFile;
 
     fn file_system(&self) -> FileSystemTag {
@@ -59,7 +63,13 @@ impl Fs for OPFS {
         )
         .await?;
 
-        Ok(OPFSFile::new(file_handle))
+        cfg_if::cfg_if! {
+            if #[cfg(feature = "sync")] {
+                Ok(Self::File::new(file_handle).await?)
+            } else {
+                Ok(OPFSFile::new(file_handle))
+            }
+        }
     }
 
     /// Recursively creates a directory and all of its parent components if they are missing.
