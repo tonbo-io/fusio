@@ -1,6 +1,9 @@
 #[cfg(feature = "fs")]
 pub mod fs;
 
+#[cfg(feature = "sync")]
+pub mod sync;
+
 use std::{io, sync::Arc};
 
 use js_sys::Uint8Array;
@@ -62,6 +65,7 @@ impl FileHandle {
 
         (result, buf)
     }
+
     /// Attempts to write an entire buffer into the stream.
     ///
     /// No changes are written to the actual file on disk until the stream is closed.
@@ -199,6 +203,7 @@ pub struct OPFSFile {
 }
 
 impl OPFSFile {
+    #[allow(unused)]
     pub(crate) fn new(file_handle: FileSystemFileHandle) -> Self {
         Self {
             file_handle: Some(Arc::new(FileHandle::new(file_handle))),
