@@ -1,8 +1,6 @@
 use std::{cmp, pin::Pin, sync::Arc};
 
-use futures_core::Stream;
-
-use super::MaybeSendFuture;
+use super::{MaybeSendFuture, MaybeSendStream};
 use crate::{
     buf::IoBufMut,
     fs::{FileMeta, FileSystemTag, Fs, OpenOptions},
@@ -75,7 +73,7 @@ pub trait DynFs: MaybeSend + MaybeSync {
         Box<
             dyn MaybeSendFuture<
                     Output = Result<
-                        Pin<Box<dyn Stream<Item = Result<FileMeta, Error>> + 's>>,
+                        Pin<Box<dyn MaybeSendStream<Item = Result<FileMeta, Error>> + 's>>,
                         Error,
                     >,
                 > + 's,
@@ -130,7 +128,7 @@ impl<F: Fs> DynFs for F {
         Box<
             dyn MaybeSendFuture<
                     Output = Result<
-                        Pin<Box<dyn Stream<Item = Result<FileMeta, Error>> + 's>>,
+                        Pin<Box<dyn MaybeSendStream<Item = Result<FileMeta, Error>> + 's>>,
                         Error,
                     >,
                 > + 's,
@@ -138,7 +136,10 @@ impl<F: Fs> DynFs for F {
     > {
         Box::pin(async move {
             let stream = F::list(self, path).await?;
-            Ok(Box::pin(stream) as Pin<Box<dyn Stream<Item = Result<FileMeta, Error>>>>)
+            Ok(Box::pin(stream)
+                as Pin<
+                    Box<dyn MaybeSendStream<Item = Result<FileMeta, Error>>>,
+                >)
         })
     }
 

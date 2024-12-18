@@ -7,6 +7,7 @@ use std::{future::Future, pin::Pin};
 
 #[cfg(feature = "fs")]
 pub use fs::{DynFile, DynFs};
+use futures_core::Stream;
 
 use crate::{
     buf::{Slice, SliceMut},
@@ -16,6 +17,10 @@ use crate::{
 pub trait MaybeSendFuture: Future + MaybeSend {}
 
 impl<F> MaybeSendFuture for F where F: Future + MaybeSend {}
+
+pub trait MaybeSendStream: Stream + MaybeSend {}
+
+impl<S> MaybeSendStream for S where S: Stream + MaybeSend {}
 
 pub trait DynWrite: MaybeSend {
     //! Dyn compatible(object safety) version of [`Write`].

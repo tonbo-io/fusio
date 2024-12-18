@@ -169,13 +169,14 @@ impl Fs for AmazonS3 {
                 }
 
                 let mut url = Url::from_str(self.as_ref().options.endpoint.as_str()).map_err(|e| S3Error::from(HttpError::from(e)))?;
-                {
+                let result = {
                     let mut pairs = url.query_pairs_mut();
                     let serializer = serde_urlencoded::Serializer::new(&mut pairs);
                     query
                         .serialize(serializer)
-                        .map_err(|e| S3Error::from(HttpError::from(e)))?;
-                }
+                        .map(|_| ())
+                };
+                result.map_err(|e| S3Error::from(HttpError::from(e)))?;
 
                 let mut request = Request::builder()
                     .method(Method::GET)
