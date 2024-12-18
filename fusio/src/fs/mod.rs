@@ -46,7 +46,8 @@ pub trait Fs: MaybeSend + MaybeSync {
     fn list(
         &self,
         path: &Path,
-    ) -> impl Future<Output = Result<impl Stream<Item = Result<FileMeta, Error>>, Error>> + MaybeSend;
+    ) -> impl Future<Output = Result<impl Stream<Item = Result<FileMeta, Error>> + MaybeSend, Error>>
+           + MaybeSend;
 
     fn remove(&self, path: &Path) -> impl Future<Output = Result<(), Error>> + MaybeSend;
 
