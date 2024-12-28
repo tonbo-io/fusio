@@ -5,7 +5,7 @@ license.workspace = true
 name = "fusio"
 readme = "../README.md"
 repository.workspace = true
-version = "0.3.3"
+version.workspace = true
 
 [package.metadata.docs.rs]
 all-features = true
@@ -69,7 +69,7 @@ cfg-if = "1.0.0"
 chrono = { version = "0.4", optional = true, default-features = false, features = [
     "now",
     "std",
-    "wasmbind"
+    "wasmbind",
 ] }
 futures-core = { version = "0.3" }
 futures-util = { version = "0.3" }

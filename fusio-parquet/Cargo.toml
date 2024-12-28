@@ -4,17 +4,17 @@ edition.workspace = true
 license.workspace = true
 name = "fusio-parquet"
 repository.workspace = true
-version = "0.2.2"
+version.workspace = true
 
 [features]
 default = []
-web = ["fusio/opfs"]
 tokio = ["fusio/tokio"]
+web = ["fusio/opfs"]
 
 [dependencies]
 bytes = { workspace = true }
 cfg-if = "1.0.0"
-fusio = { version = "0.3.2", path = "../fusio", features = ["bytes", "dyn"] }
+fusio = { version = "0.3.4", path = "../fusio", features = ["bytes", "dyn"] }
 futures = { version = "0.3" }
 parquet = { version = "53", default-features = false, features = [
     "arrow",

@@ -4,11 +4,11 @@ edition.workspace = true
 license.workspace = true
 name = "fusio-object-store"
 repository.workspace = true
-version = "0.2.2"
+version.workspace = true
 
 [dependencies]
 async-stream = { version = "0.3" }
-fusio = { version = "0.3.2", path = "../fusio", features = [
+fusio = { version = "0.3.4", path = "../fusio", features = [
     "bytes",
     "dyn",
     "object_store",
