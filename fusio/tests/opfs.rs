@@ -62,7 +62,7 @@ pub(crate) mod tests {
 
         let base_path = Path::from_opfs_path("test_opfs_dir".to_string()).unwrap();
         let mut stream = fs.list(&base_path).await.unwrap();
-        let expected = ["sub_dir", "file"];
+        let expected = ["test_opfs_dir/sub_dir", "test_opfs_dir/file"];
         let mut result_len = 0;
         while let Some(Ok(meta)) = stream.next().await {
             assert!(expected.contains(&meta.path.as_ref()));
@@ -74,7 +74,7 @@ pub(crate) mod tests {
             .await
             .unwrap();
 
-        let expected = ["sub_dir"];
+        let expected = ["test_opfs_dir/sub_dir"];
         let mut result_len = 0;
         let mut stream = fs.list(&base_path).await.unwrap();
         while let Some(Ok(meta)) = stream.next().await {
