@@ -102,8 +102,8 @@ impl Fs for OPFS {
             .await;
 
         Ok(stream! {
-            for path in entries {
-                yield Ok(FileMeta{ path: path.into(), size: 0 })
+            for entry in entries {
+                yield Ok(FileMeta{ path: path.child(entry), size: 0 })
             }
         })
     }
