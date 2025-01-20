@@ -4,6 +4,7 @@ members = [
     "examples/opfs",
     "fusio",
     "fusio-dispatch",
+    "fusio-log",
     "fusio-object-store",
     "fusio-opendal",
     "fusio-parquet",
