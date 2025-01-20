@@ -1,4 +1,8 @@
-# Fusio
+<p align="center">
+  <a href="https://crates.io/crates/fusio">
+    <image alt="fusio" src="https://github.com/user-attachments/assets/52e680dc-9c03-4dca-ae07-5d57ba452af8">
+  </a>
+</p>
 
 <p align="center">
   <a href="https://crates.io/crates/fusio">
