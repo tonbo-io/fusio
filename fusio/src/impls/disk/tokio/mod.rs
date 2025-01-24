@@ -10,10 +10,21 @@ use tokio::{
 
 use crate::{buf::IoBufMut, Error, IoBuf, Read, Write};
 
-impl Write for File {
+pub struct TokioFile {
+    file: Option<File>,
+}
+impl TokioFile {
+    pub(crate) fn new(file: File) -> Self {
+        Self { file: Some(file) }
+    }
+}
+
+impl Write for TokioFile {
     async fn write_all<B: IoBuf>(&mut self, buf: B) -> (Result<(), Error>, B) {
+        debug_assert!(self.file.is_some(), "file is already closed");
+
         (
-            AsyncWriteExt::write_all(self, unsafe {
+            AsyncWriteExt::write_all(self.file.as_mut().unwrap(), unsafe {
                 &*slice_from_raw_parts(buf.as_ptr(), buf.bytes_init())
             })
             .await
@@ -23,40 +34,56 @@ impl Write for File {
     }
 
     async fn flush(&mut self) -> Result<(), Error> {
-        AsyncWriteExt::flush(self).await.map_err(Error::from)
+        debug_assert!(self.file.is_some(), "file is already closed");
+
+        AsyncWriteExt::flush(self.file.as_mut().unwrap())
+            .await
+            .map_err(Error::from)
     }
 
     async fn close(&mut self) -> Result<(), Error> {
-        AsyncWriteExt::flush(self).await.map_err(Error::from)?;
-        File::shutdown(self).await?;
+        debug_assert!(self.file.is_some(), "file is already closed");
+
+        let file = self.file.as_mut().unwrap();
+        AsyncWriteExt::flush(file).await.map_err(Error::from)?;
+        File::shutdown(file).await?;
+        self.file.take();
         Ok(())
     }
 }
 
-impl Read for File {
+impl Read for TokioFile {
     async fn read_exact_at<B: IoBufMut>(&mut self, mut buf: B, pos: u64) -> (Result<(), Error>, B) {
+        debug_assert!(self.file.is_some(), "file is already closed");
+
+        let file = self.file.as_mut().unwrap();
         // TODO: Use pread instead of seek + read_exact
-        if let Err(e) = AsyncSeekExt::seek(self, SeekFrom::Start(pos)).await {
+        if let Err(e) = AsyncSeekExt::seek(file, SeekFrom::Start(pos)).await {
             return (Err(Error::Io(e)), buf);
         }
-        match AsyncReadExt::read_exact(self, buf.as_slice_mut()).await {
+        match AsyncReadExt::read_exact(file, buf.as_slice_mut()).await {
             Ok(_) => (Ok(()), buf),
             Err(e) => (Err(Error::Io(e)), buf),
         }
     }
 
     async fn read_to_end_at(&mut self, mut buf: Vec<u8>, pos: u64) -> (Result<(), Error>, Vec<u8>) {
+        debug_assert!(self.file.is_some(), "file is already closed");
+
+        let file = self.file.as_mut().unwrap();
         // TODO: Use pread instead of seek + read_exact
-        if let Err(e) = AsyncSeekExt::seek(self, SeekFrom::Start(pos)).await {
+        if let Err(e) = AsyncSeekExt::seek(file, SeekFrom::Start(pos)).await {
             return (Err(Error::Io(e)), buf);
         }
-        match AsyncReadExt::read_to_end(self, &mut buf).await {
+        match AsyncReadExt::read_to_end(file, &mut buf).await {
             Ok(_) => (Ok(()), buf),
             Err(e) => (Err(Error::Io(e)), buf),
         }
     }
 
     async fn size(&self) -> Result<u64, Error> {
-        Ok(self.metadata().await?.len())
+        debug_assert!(self.file.is_some(), "file is already closed");
+
+        Ok(self.file.as_ref().unwrap().metadata().await?.len())
     }
 }

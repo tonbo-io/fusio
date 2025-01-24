@@ -7,7 +7,6 @@ use crate::{disk::opfs::promise, error::wasm_err, Error, IoBuf, IoBufMut, Read, 
 /// OPFS based on [FileSystemWritableFileStream](https://developer.mozilla.org/en-US/docs/Web/API/FileSystemSyncAccessHandle)
 /// This file is only accessible inside dedicated Web Workers.
 pub struct OPFSSyncFile {
-    file_handle: FileSystemFileHandle,
     access_handle: Option<FileSystemSyncAccessHandle>,
 }
 
@@ -15,22 +14,7 @@ impl OPFSSyncFile {
     pub(crate) async fn new(file_handle: FileSystemFileHandle) -> Result<Self, Error> {
         let js_promise = file_handle.create_sync_access_handle();
         let access_handle = Some(promise::<FileSystemSyncAccessHandle>(js_promise).await?);
-        Ok(Self {
-            file_handle,
-            access_handle,
-        })
-    }
-
-    pub(crate) async fn access_handle(&mut self) -> &FileSystemSyncAccessHandle {
-        if self.access_handle.is_none() {
-            let js_promise = self.file_handle.create_sync_access_handle();
-            self.access_handle = Some(
-                promise::<FileSystemSyncAccessHandle>(js_promise)
-                    .await
-                    .unwrap(),
-            );
-        }
-        self.access_handle.as_ref().unwrap()
+        Ok(Self { access_handle })
     }
 }
 
@@ -40,9 +24,12 @@ impl Write for OPFSSyncFile {
     /// No changes are written to the actual file on disk until [`OPFSFile::close`] has been called.
     /// See more detail in [write](https://developer.mozilla.org/en-US/docs/Web/API/FileSystemSyncAccessHandle/write)
     async fn write_all<B: IoBuf>(&mut self, buf: B) -> (Result<(), Error>, B) {
+        debug_assert!(self.access_handle.is_some(), "file is already closed");
+
         match self
-            .access_handle()
-            .await
+            .access_handle
+            .as_ref()
+            .unwrap()
             .write_with_u8_array(buf.as_slice())
         {
             Ok(_) => (Ok(()), buf),
@@ -53,10 +40,18 @@ impl Write for OPFSSyncFile {
     /// Persists any changes made to the file.
     /// See more detail in [write](https://developer.mozilla.org/en-US/docs/Web/API/FileSystemSyncAccessHandle/flush)
     async fn flush(&mut self) -> Result<(), Error> {
-        self.access_handle().await.flush().map_err(wasm_err)
+        debug_assert!(self.access_handle.is_some(), "file is already closed");
+
+        self.access_handle
+            .as_ref()
+            .unwrap()
+            .flush()
+            .map_err(wasm_err)
     }
 
     async fn close(&mut self) -> Result<(), Error> {
+        debug_assert!(self.access_handle.is_some(), "file is already closed");
+
         if let Some(access_handle) = self.access_handle.take() {
             access_handle.close();
         }
@@ -72,11 +67,13 @@ impl Read for OPFSSyncFile {
     /// If the operation encounters an "end of file" before completely
     /// filling the buffer, it returns an error of  [`crate::Error`].
     async fn read_exact_at<B: IoBufMut>(&mut self, mut buf: B, pos: u64) -> (Result<(), Error>, B) {
+        debug_assert!(self.access_handle.is_some(), "file is already closed");
+
         let buf_len = buf.bytes_init() as i32;
         let options = FileSystemReadWriteOptions::new();
         options.set_at(pos as f64);
 
-        let access_handle = self.access_handle().await;
+        let access_handle = self.access_handle.as_ref().unwrap();
         let size = access_handle
             .get_size()
             .expect("InvalidStateError: file is already closed.");
@@ -102,10 +99,12 @@ impl Read for OPFSSyncFile {
     /// If an error is encountered then the `read_to_end_at` operation
     /// immediately completes.
     async fn read_to_end_at(&mut self, mut buf: Vec<u8>, pos: u64) -> (Result<(), Error>, Vec<u8>) {
+        debug_assert!(self.access_handle.is_some(), "file is already closed");
+
         let options = FileSystemReadWriteOptions::new();
         options.set_at(pos as f64);
 
-        let access_handle = self.access_handle().await;
+        let access_handle = self.access_handle.as_ref().unwrap();
         let size = access_handle
             .get_size()
             .expect("InvalidStateError: file is already closed.");
@@ -129,27 +128,13 @@ impl Read for OPFSSyncFile {
 
     /// Return the size of file in bytes.
     async fn size(&self) -> Result<u64, Error> {
-        match self.access_handle.as_ref() {
-            Some(access_handle) => access_handle
-                .get_size()
-                .map(|sz| sz.round() as u64)
-                .map_err(wasm_err),
-            None => {
-                // FIXME: here should throw an error
-                let js_promise = self.file_handle.create_sync_access_handle();
-                let access_handle = promise::<FileSystemSyncAccessHandle>(js_promise)
-                    .await
-                    .unwrap();
-                let result = access_handle
-                    .get_size()
-                    .map(|sz| sz.round() as u64)
-                    .map_err(wasm_err);
-
-                access_handle.close();
-
-                result
-            }
-        }
+        debug_assert!(self.access_handle.is_some(), "file is already closed");
+        self.access_handle
+            .as_ref()
+            .unwrap()
+            .get_size()
+            .map(|sz| sz.round() as u64)
+            .map_err(wasm_err)
     }
 }
 
