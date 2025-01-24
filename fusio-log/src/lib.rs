@@ -174,7 +174,7 @@ mod tests {
     use tokio::pin;
 
     use crate::{
-        fs::{SeqRead, Write},
+        fs::{AwsCredential, SeqRead, Write},
         Decode, Encode, FsOptions, Options, Path,
     };
 
@@ -323,7 +323,7 @@ mod tests {
         let path = Path::from_url_path("log").unwrap();
         let option = Options::new(path).fs(FsOptions::S3 {
             bucket: "data".to_string(),
-            credential: Some(fusio::remotes::aws::AwsCredential {
+            credential: Some(AwsCredential {
                 key_id: "key_id".to_string(),
                 secret_key: "secret_key".to_string(),
                 token: None,
