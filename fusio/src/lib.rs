@@ -541,10 +541,13 @@ mod tests {
         use tempfile::tempfile;
         use tokio::fs::File;
 
+        use crate::disk::tokio::TokioFile;
+
         let read = tempfile().unwrap();
         let write = read.try_clone().unwrap();
-
-        write_and_read(File::from_std(write), File::from_std(read)).await;
+        let read_file = TokioFile::new(File::from_std(read));
+        let write_file = TokioFile::new(File::from_std(write));
+        write_and_read(write_file, read_file).await;
     }
 
     #[cfg(all(feature = "tokio", not(target_arch = "wasm32")))]
@@ -582,7 +585,9 @@ mod tests {
         use tempfile::tempfile;
         use tokio::fs::File;
 
-        let mut file = File::from_std(tempfile().unwrap());
+        use crate::disk::tokio::TokioFile;
+
+        let mut file = TokioFile::new(File::from_std(tempfile().unwrap()));
         let (result, _) = file.write_all(&b"hello, world"[..]).await;
         result.unwrap();
         let (result, buf) = file.read_exact_at(vec![0u8; 5], 0).await;
