@@ -32,9 +32,11 @@
 //! async fn main() {
 //!     #[cfg(feature = "tokio")]
 //!     {
+//!         use fusio::{disk::LocalFs, DynFs};
 //!         use tokio::fs::File;
 //!
-//!         let mut file = File::open("foo.txt").await.unwrap();
+//!         let fs = LocalFs {};
+//!         let mut file = fs.open(&"foo.txt".into()).await.unwrap();
 //!         let write_buf = "hello, world".as_bytes();
 //!         let mut read_buf = [0; 12];
 //!         let (result, _, read_buf) =
