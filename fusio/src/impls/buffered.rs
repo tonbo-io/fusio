@@ -155,10 +155,9 @@ impl<F: Write> Write for BufWriter<F> {
 #[cfg(feature = "tokio")]
 #[cfg(test)]
 pub(crate) mod tests {
-    use tokio::io::AsyncWriteExt;
 
     use super::BufWriter;
-    use crate::{buffered::BufReader, Error, IoBufMut, Read};
+    use crate::{buffered::BufReader, Error, IoBufMut, Read, Write};
 
     impl<F: Read> Read for BufWriter<F> {
         async fn read_exact_at<B: IoBufMut>(&mut self, buf: B, pos: u64) -> (Result<(), Error>, B) {
@@ -180,10 +179,12 @@ pub(crate) mod tests {
     async fn test_buf_read() {
         use tempfile::tempfile;
 
-        let mut file = tokio::fs::File::from_std(tempfile().unwrap());
-        file.write_all(&[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15])
-            .await
-            .unwrap();
+        use crate::disk::tokio::TokioFile;
+
+        let mut file = TokioFile::new(tokio::fs::File::from_std(tempfile().unwrap()));
+        let _ = file
+            .write_all([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15].as_slice())
+            .await;
 
         let mut reader = BufReader::new(file, 8).await.unwrap();
         {
@@ -229,9 +230,12 @@ pub(crate) mod tests {
     async fn test_buf_read_write() {
         use tempfile::tempfile;
 
-        use crate::{impls::buffered::BufWriter, Read, Write};
+        use crate::{
+            impls::{buffered::BufWriter, disk::tokio::TokioFile},
+            Read, Write,
+        };
 
-        let file = tokio::fs::File::from_std(tempfile().unwrap());
+        let file = TokioFile::new(tokio::fs::File::from_std(tempfile().unwrap()));
         let mut writer = BufWriter::new(file, 4);
         {
             let _ = writer.write_all("Hello".as_bytes()).await;

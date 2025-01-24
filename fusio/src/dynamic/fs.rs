@@ -212,9 +212,9 @@ mod tests {
     async fn test_dyn_fs() {
         use tempfile::tempfile;
 
-        use crate::Write;
+        use crate::{disk::tokio::TokioFile, Write};
 
-        let file = tokio::fs::File::from_std(tempfile().unwrap());
+        let file = TokioFile::new(tokio::fs::File::from_std(tempfile().unwrap()));
         let mut dyn_file: Box<dyn super::DynFile> = Box::new(file);
         let buf = [24, 9, 24, 0];
         let (result, _) = dyn_file.write_all(&buf[..]).await;
