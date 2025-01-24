@@ -3,11 +3,12 @@ use std::io;
 use async_stream::stream;
 use futures_core::Stream;
 use tokio::{
-    fs::{create_dir_all, remove_file, File},
+    fs::{create_dir_all, remove_file},
     task::spawn_blocking,
 };
 
 use crate::{
+    disk::tokio::TokioFile,
     fs::{FileMeta, FileSystemTag, Fs, OpenOptions},
     path::{path_to_local, Path},
     Error,
@@ -16,7 +17,7 @@ use crate::{
 pub struct TokioFs;
 
 impl Fs for TokioFs {
-    type File = File;
+    type File = TokioFile;
 
     fn file_system(&self) -> FileSystemTag {
         FileSystemTag::Local
@@ -36,7 +37,7 @@ impl Fs for TokioFs {
             file.set_len(0).await?;
         }
 
-        Ok(file)
+        Ok(TokioFile::new(file))
     }
 
     async fn create_dir_all(path: &Path) -> Result<(), Error> {
