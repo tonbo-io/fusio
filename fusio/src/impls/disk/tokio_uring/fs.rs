@@ -30,10 +30,10 @@ impl Fs for TokioUringFs {
             .truncate(options.truncate)
             .open(&local_path)
             .await?;
-
+        let stat = file.statx().await?;
         Ok(TokioUringFile {
             file: Some(file),
-            pos: 0,
+            pos: stat.stx_size,
         })
     }
 
