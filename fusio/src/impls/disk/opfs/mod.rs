@@ -27,7 +27,7 @@ where
 
 /// OPFS based on [FileSystemWritableFileStream](https://developer.mozilla.org/en-US/docs/Web/API/FileSystemWritableFileStream)
 pub struct OPFSFile {
-    file_handle: FileSystemFileHandle,
+    file_handle: Option<FileSystemFileHandle>,
     write_stream: Option<FileSystemWritableFileStream>,
     pos: u64,
 }
@@ -60,14 +60,16 @@ impl OPFSFile {
         };
 
         Ok(Self {
-            file_handle,
+            file_handle: Some(file_handle),
             write_stream,
             pos: size.round() as u64,
         })
     }
 
     async fn reader(&self, pos: u64, buf_len: u64) -> Result<ReadableStreamDefaultReader, Error> {
-        let file = promise::<File>(self.file_handle.get_file()).await?;
+        debug_assert!(self.file_handle.is_some());
+        let file_handle = self.file_handle.as_ref().expect("read file after closed.");
+        let file = promise::<File>(file_handle.get_file()).await?;
 
         if (file.size().round() as u64) < pos + buf_len as u64 {
             return Err(Error::Io(io::Error::new(
@@ -76,7 +78,12 @@ impl OPFSFile {
             )));
         }
 
-        let blob = file.slice_with_i32(pos as i32).unwrap();
+        let blob = if buf_len == 0 {
+            file.slice_with_i32(pos as i32).unwrap()
+        } else {
+            file.slice_with_i32_and_i32(pos as i32, (pos + buf_len) as i32)
+                .unwrap()
+        };
         blob.stream()
             .get_reader()
             .dyn_into::<ReadableStreamDefaultReader>()
@@ -97,7 +104,7 @@ impl Write for OPFSFile {
         match JsFuture::from(
             self.write_stream
                 .as_ref()
-                .unwrap()
+                .expect("write file after closed.")
                 .write_with_u8_array(buf.as_slice())
                 .unwrap(),
         )
@@ -114,10 +121,11 @@ impl Write for OPFSFile {
 
     /// Close the associated OPFS file.
     async fn close(&mut self) -> Result<(), Error> {
-        let writer = self.write_stream.take();
-        if let Some(writer) = writer {
+        if let Some(writer) = self.write_stream.take() {
             JsFuture::from(writer.close()).await.map_err(wasm_err)?;
         }
+        let _ = self.file_handle.take();
+
         Ok(())
     }
 }
@@ -180,7 +188,15 @@ impl Read for OPFSFile {
 
     /// Return the size of file in bytes.
     async fn size(&self) -> Result<u64, Error> {
-        let file = promise::<File>(self.file_handle.get_file()).await?;
+        debug_assert!(self.file_handle.is_some());
+
+        let file = promise::<File>(
+            self.file_handle
+                .as_ref()
+                .expect("read file after closed.")
+                .get_file(),
+        )
+        .await?;
 
         Ok(file.size() as u64)
     }
