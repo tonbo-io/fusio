@@ -21,16 +21,15 @@ impl Fs for MonoIoFs {
 
     async fn open_options(&self, path: &Path, options: OpenOptions) -> Result<Self::File, Error> {
         let local_path = path_to_local(path)?;
-
-        Ok(MonoioFile::from(
-            monoio::fs::OpenOptions::new()
-                .read(options.read)
-                .write(options.write)
-                .create(options.create)
-                .truncate(options.truncate)
-                .open(&local_path)
-                .await?,
-        ))
+        let file = monoio::fs::OpenOptions::new()
+            .read(options.read)
+            .write(options.write)
+            .create(options.create)
+            .truncate(options.truncate)
+            .open(&local_path)
+            .await?;
+        let metadata = file.metadata().await.expect("monoio: get metadat failed");
+        Ok(MonoioFile::new(file, metadata.len()))
     }
 
     async fn create_dir_all(path: &Path) -> Result<(), Error> {

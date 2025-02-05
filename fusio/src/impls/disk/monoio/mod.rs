@@ -52,6 +52,15 @@ impl From<File> for MonoioFile {
     }
 }
 
+impl MonoioFile {
+    pub(crate) fn new(file: File, pos: u64) -> Self {
+        Self {
+            file: Some(file),
+            pos,
+        }
+    }
+}
+
 impl Write for MonoioFile {
     async fn write_all<B: IoBuf>(&mut self, buf: B) -> (Result<(), Error>, B) {
         let (result, buf) = self

@@ -2,19 +2,32 @@ use std::io;
 
 use web_sys::{FileSystemFileHandle, FileSystemReadWriteOptions, FileSystemSyncAccessHandle};
 
-use crate::{disk::opfs::promise, error::wasm_err, Error, IoBuf, IoBufMut, Read, Write};
+use crate::{
+    disk::opfs::promise, error::wasm_err, fs::OpenOptions, Error, IoBuf, IoBufMut, Read, Write,
+};
 
 /// OPFS based on [FileSystemWritableFileStream](https://developer.mozilla.org/en-US/docs/Web/API/FileSystemSyncAccessHandle)
 /// This file is only accessible inside dedicated Web Workers.
 pub struct OPFSSyncFile {
     access_handle: Option<FileSystemSyncAccessHandle>,
+    pos: u64,
 }
 
 impl OPFSSyncFile {
-    pub(crate) async fn new(file_handle: FileSystemFileHandle) -> Result<Self, Error> {
+    pub(crate) async fn new(
+        file_handle: FileSystemFileHandle,
+        open_options: OpenOptions,
+    ) -> Result<Self, Error> {
         let js_promise = file_handle.create_sync_access_handle();
-        let access_handle = Some(promise::<FileSystemSyncAccessHandle>(js_promise).await?);
-        Ok(Self { access_handle })
+        let access_handle = promise::<FileSystemSyncAccessHandle>(js_promise).await?;
+        if open_options.truncate {
+            access_handle.truncate_with_u32(0).map_err(wasm_err)?;
+        }
+
+        Ok(Self {
+            access_handle: Some(access_handle),
+            pos: 0,
+        })
     }
 }
 
@@ -26,11 +39,17 @@ impl Write for OPFSSyncFile {
     async fn write_all<B: IoBuf>(&mut self, buf: B) -> (Result<(), Error>, B) {
         debug_assert!(self.access_handle.is_some(), "file is already closed");
 
+        let options = FileSystemReadWriteOptions::new();
+        options.set_at(self.pos as f64);
+
+        let len = buf.bytes_init();
+        self.pos += len as u64;
+
         match self
             .access_handle
             .as_ref()
             .unwrap()
-            .write_with_u8_array(buf.as_slice())
+            .write_with_u8_array_and_options(buf.as_slice(), &options)
         {
             Ok(_) => (Ok(()), buf),
             Err(err) => (Err(wasm_err(err)), buf),
