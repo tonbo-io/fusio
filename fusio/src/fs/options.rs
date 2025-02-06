@@ -35,6 +35,7 @@ impl OpenOptions {
     }
 
     pub fn truncate(mut self, truncate: bool) -> Self {
+        self = self.write(true);
         self.truncate = truncate;
         self
     }
