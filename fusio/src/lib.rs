@@ -391,6 +391,9 @@ mod tests {
 
             let (result, buf) = file.read_exact_at(vec![0u8; 12], 0).await;
             result.unwrap();
+            assert_eq!(buf.as_slice(), b"Hello! fusio");
+            let (result, buf) = file.read_exact_at(vec![0u8; 12], 12).await;
+            result.unwrap();
             assert_eq!(buf.as_slice(), b"Hello! world");
         }
 
@@ -467,6 +470,9 @@ mod tests {
 
             let (result, buf) = src_file.read_exact_at(vec![0u8; 12], 0).await;
             result.unwrap();
+            assert_eq!(buf.as_slice(), b"Hello! fusio");
+            let (result, buf) = src_file.read_exact_at(vec![0u8; 12], 12).await;
+            result.unwrap();
             assert_eq!(buf.as_slice(), b"Hello! world");
 
             let mut dst_file = src_fs
@@ -476,7 +482,7 @@ mod tests {
                 )
                 .await?;
 
-            let (result, buf) = dst_file.read_exact_at(vec![0u8; 12], 0).await;
+            let (result, buf) = dst_file.read_to_end_at(vec![], 0).await;
             result.unwrap();
             assert_eq!(buf.as_slice(), b"Hello! fusio");
         }
@@ -520,6 +526,9 @@ mod tests {
                 .await?;
             let (result, buf) = src_file.read_exact_at(vec![0u8; 12], 0).await;
             result.unwrap();
+            assert_eq!(buf.as_slice(), b"Hello! fusio");
+            let (result, buf) = src_file.read_exact_at(vec![0u8; 12], 12).await;
+            result.unwrap();
             assert_eq!(buf.as_slice(), b"Hello! world");
 
             let mut dst_file = src_fs
@@ -530,6 +539,9 @@ mod tests {
                 .await?;
 
             let (result, buf) = dst_file.read_exact_at(vec![0u8; 12], 0).await;
+            result.unwrap();
+            assert_eq!(buf.as_slice(), b"Hello! fusio");
+            let (result, buf) = src_file.read_exact_at(vec![0u8; 12], 12).await;
             result.unwrap();
             assert_eq!(buf.as_slice(), b"Hello! world");
         }
