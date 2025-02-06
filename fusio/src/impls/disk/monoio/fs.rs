@@ -28,7 +28,7 @@ impl Fs for MonoIoFs {
             .truncate(options.truncate)
             .open(&local_path)
             .await?;
-        let metadata = file.metadata().await.expect("monoio: get metadat failed");
+        let metadata = file.metadata().await?;
         Ok(MonoioFile::new(file, metadata.len()))
     }
 
