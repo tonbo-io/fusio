@@ -20,13 +20,17 @@ impl OPFSSyncFile {
     ) -> Result<Self, Error> {
         let js_promise = file_handle.create_sync_access_handle();
         let access_handle = promise::<FileSystemSyncAccessHandle>(js_promise).await?;
+        let mut pos = 0;
+
         if open_options.truncate {
             access_handle.truncate_with_u32(0).map_err(wasm_err)?;
+        } else if open_options.write {
+            pos = access_handle.get_size().map_err(wasm_err)?.round() as u64;
         }
 
         Ok(Self {
             access_handle: Some(access_handle),
-            pos: 0,
+            pos,
         })
     }
 }
