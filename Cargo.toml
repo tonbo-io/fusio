@@ -19,6 +19,7 @@ version = "0.3.4"
 
 [workspace.dependencies]
 bytes = { version = "1.7" }
+thiserror = "2.0.11"
 
 [profile.bench]
 codegen-units = 1

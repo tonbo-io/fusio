@@ -8,6 +8,8 @@ pub enum S3Error {
     HttpError(#[from] HttpError),
     #[error("authorize error: {0}")]
     AuthorizeError(#[from] AuthorizeError),
-    #[error("xml parse error: {0}")]
-    XmlParseError(#[from] quick_xml::DeError),
+    #[error("xml serialze error: {0}")]
+    XmlSerializeError(#[from] quick_xml::SeError),
+    #[error("xml deserialize error: {0}")]
+    XmlDeserializeError(#[from] quick_xml::DeError),
 }

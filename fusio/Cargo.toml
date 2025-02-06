@@ -82,11 +82,11 @@ hyper = { version = "1", optional = true, default-features = false, features = [
     "http1",
     "http2",
 ] }
-itertools = { version = "0.13" }
+itertools = { version = "0.14" }
 monoio = { version = "0.2", optional = true, features = ["sync"] }
 object_store = { version = "0.11", optional = true, features = ["aws"] }
 percent-encoding = { version = "2", default-features = false }
-quick-xml = { version = "0.36", features = [
+quick-xml = { version = "0.37", features = [
     "overlapped-lists",
     "serialize",
 ], optional = true }
@@ -97,7 +97,7 @@ ring = { version = "0.17", optional = true, default-features = false, features =
 serde = { version = "1", optional = true, features = ["derive"] }
 serde_json = { version = "1", optional = true }
 serde_urlencoded = { version = "0.7", optional = true }
-thiserror = "1"
+thiserror = { workspace = true }
 tokio = { version = "1", optional = true, default-features = false, features = [
     "io-util",
 ] }
@@ -137,7 +137,7 @@ web-sys = { version = "0.3", optional = true, features = [
 tokio-uring = { version = "0.5", default-features = false, optional = true }
 
 [dev-dependencies]
-rand = "0.8"
+rand = "0.9"
 tempfile = "3"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
