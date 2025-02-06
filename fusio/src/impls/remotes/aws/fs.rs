@@ -147,7 +147,12 @@ impl Fs for AmazonS3 {
         FileSystemTag::S3
     }
 
-    async fn open_options(&self, path: &Path, _: OpenOptions) -> Result<Self::File, crate::Error> {
+    async fn open_options(&self, path: &Path, options: OpenOptions) -> Result<Self::File, Error> {
+        if options.write && !options.truncate {
+            return Err(Error::Unsupported {
+                message: "Only truncate is supported in S3".to_string(),
+            });
+        }
         Ok(S3File::new(self.clone(), path.clone()))
     }
 
