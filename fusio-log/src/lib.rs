@@ -30,7 +30,11 @@ where
         let file = fs
             .open_options(
                 &option.path,
-                OpenOptions::default().read(true).write(true).create(true),
+                OpenOptions::default()
+                    .read(true)
+                    .write(true)
+                    .create(true)
+                    .truncate(option.truncate),
             )
             .await?;
 
