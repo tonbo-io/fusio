@@ -13,6 +13,7 @@ pub struct Options {
     pub(crate) path: fusio::path::Path,
     pub(crate) buf_size: usize,
     pub(crate) fs_option: FsOptions,
+    pub(crate) truncate: bool,
 }
 
 impl Options {
@@ -21,6 +22,7 @@ impl Options {
             path,
             buf_size: DEFAULT_BUF_SIZE,
             fs_option: FsOptions::Local,
+            truncate: false,
         }
     }
 
@@ -37,6 +39,10 @@ impl Options {
 
     pub fn fs(self, fs_option: FsOptions) -> Self {
         Self { fs_option, ..self }
+    }
+
+    pub fn truncate(self, truncate: bool) -> Self {
+        Self { truncate, ..self }
     }
 
     pub async fn build<T>(self) -> Result<Logger<T>, LogError>
