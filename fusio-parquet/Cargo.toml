@@ -16,7 +16,7 @@ bytes = { workspace = true }
 cfg-if = "1.0.0"
 fusio = { version = "0.3.4", path = "../fusio", features = ["bytes", "dyn"] }
 futures = { version = "0.3" }
-parquet = { version = "53", default-features = false, features = [
+parquet = { version = "54", default-features = false, features = [
     "arrow",
     "async",
 ] }
@@ -25,7 +25,7 @@ parquet = { version = "53", default-features = false, features = [
 wasm-bindgen-futures = { version = "0.4.45" }
 
 [dev-dependencies]
-arrow = "53"
+arrow = "54"
 rand = "0.8"
 tempfile = "3.12.0"
 tokio = { version = "1.40" }
