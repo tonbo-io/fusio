@@ -19,7 +19,6 @@ web = ["fusio-dispatch/opfs", "fusio/opfs"]
 web-http = ["fusio/wasm-http"]
 
 [dependencies]
-async-stream = "0.3"
 bytes = { version = "1.7", optional = true }
 crc32fast = "1"
 fusio = { version = "0.3.4", path = "../fusio", features = [
