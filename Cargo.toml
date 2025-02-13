@@ -15,7 +15,7 @@ resolver = "2"
 edition = "2021"
 license = "Apache-2.0"
 repository = "https://github.com/tonbo-io/fusio"
-version = "0.3.5"
+version = "0.3.6"
 
 [workspace.dependencies]
 bytes = { version = "1.7" }
