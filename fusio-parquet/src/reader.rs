@@ -16,9 +16,9 @@ use parquet::{
 const PREFETCH_FOOTER_SIZE: usize = 512 * 1024;
 
 pub struct AsyncReader {
-    #[cfg(feature = "web")]
+    #[cfg(any(feature = "web", feature = "monoio"))]
     inner: Arc<futures::lock::Mutex<Box<dyn DynFile>>>,
-    #[cfg(not(feature = "web"))]
+    #[cfg(feature = "tokio")]
     inner: Box<dyn DynFile>,
     content_length: u64,
     // The prefetch size for fetching file footer.
@@ -34,7 +34,7 @@ fn set_prefetch_footer_size(footer_size: usize, content_size: u64) -> usize {
 
 impl AsyncReader {
     pub async fn new(reader: Box<dyn DynFile>, content_length: u64) -> Result<Self, fusio::Error> {
-        #[cfg(feature = "web")]
+        #[cfg(any(feature = "web", feature = "monoio"))]
         #[allow(clippy::arc_with_non_send_sync)]
         let reader = Arc::new(futures::lock::Mutex::new(reader));
         Ok(Self {
@@ -78,6 +78,16 @@ impl AsyncFileReader for AsyncReader {
                     receiver.await.unwrap()
                 }
                 .boxed()
+            } else if #[cfg(feature = "monoio")] {
+                let reader = self.inner.clone();
+                monoio::spawn(async move {
+                    let mut guard = reader.lock().await;
+                    let (result, buf) = guard.read_exact_at(buf, range.start as u64).await;
+                    match result {
+                        Ok(_) => Ok(buf.freeze()),
+                        Err(err) => Err(ParquetError::External(Box::new(err)))
+                    }
+                }).boxed()
             } else {
                 async move {
                     let (result, buf) = self.inner.read_exact_at(buf, range.start as u64).await;
@@ -160,6 +170,51 @@ impl AsyncFileReader for AsyncReader {
                 async move {
                     receiver.await.unwrap()
                 }.boxed()
+            } else if #[cfg(feature = "monoio")] {
+                let mut buf = BytesMut::with_capacity(footer_size);
+                buf.resize(footer_size, 0);
+
+                let reader = self.inner.clone();
+                monoio::spawn(async move {
+                    let mut guard = reader.lock().await;
+                    let (result, prefetched_footer_content) = guard
+                        .read_exact_at(buf, content_length - footer_size as u64)
+                        .await;
+                    result.map_err(|err| ParquetError::External(Box::new(err)))?;
+                    let prefetched_footer_slice = prefetched_footer_content.as_ref();
+                    let prefetched_footer_length = prefetched_footer_slice.len();
+
+                    // Decode the metadata length from the last 8 bytes of the file.
+                    let metadata_length = {
+                        let buf = &prefetched_footer_slice
+                            [(prefetched_footer_length - FOOTER_SIZE)..prefetched_footer_length];
+                        debug_assert!(buf.len() == FOOTER_SIZE);
+                        ParquetMetaDataReader::decode_footer(buf.try_into().unwrap()).unwrap()
+                    };
+
+                    // Try to read the metadata from the `prefetched_footer_content`.
+                    // Otherwise, fetch exact metadata from the remote.
+                    if prefetched_footer_length >= metadata_length + FOOTER_SIZE {
+                        let buf = &prefetched_footer_slice[(prefetched_footer_length
+                            - metadata_length
+                            - FOOTER_SIZE)
+                            ..(prefetched_footer_length - FOOTER_SIZE)];
+                        Ok(Arc::new(ParquetMetaDataReader::decode_metadata(buf)?))
+                    } else {
+                        let mut buf = BytesMut::with_capacity(metadata_length);
+                        buf.resize(metadata_length, 0);
+
+                        let (result, bytes) = guard
+                            .read_exact_at(
+                                buf,
+                                content_length - metadata_length as u64 - FOOTER_SIZE as u64,
+                            )
+                            .await;
+                        result.map_err(|err| ParquetError::External(Box::new(err)))?;
+
+                        Ok(Arc::new(ParquetMetaDataReader::decode_metadata(&bytes)?))
+                    }
+                }).boxed()
             } else {
                 async move {
                     let mut buf = BytesMut::with_capacity(footer_size);
@@ -210,15 +265,13 @@ impl AsyncFileReader for AsyncReader {
     }
 }
 
-#[cfg(feature = "tokio")]
 #[cfg(test)]
+#[cfg(any(feature = "monoio", feature = "tokio"))]
 mod tests {
-    use std::{
-        io::{Seek, SeekFrom},
-        sync::Arc,
-    };
+    use std::sync::Arc;
 
     use arrow::array::{ArrayRef, Int64Array, RecordBatch};
+    use fusio::{disk::LocalFs, fs::OpenOptions, path::Path, DynFs};
     use futures::StreamExt;
     use parquet::{
         arrow::{AsyncArrowWriter, ParquetRecordBatchStreamBuilder},
@@ -226,41 +279,69 @@ mod tests {
         format::KeyValue,
     };
     use rand::{distributions::Alphanumeric, Rng};
-    use tempfile::tempfile;
-    use tokio::fs::File;
+    use tempfile::tempdir;
 
     use crate::{
         reader::{AsyncReader, PREFETCH_FOOTER_SIZE},
         writer::AsyncWriter,
     };
 
-    #[tokio::test]
-    async fn test_async_reader_with_prefetch_footer_size() {
-        let reader = AsyncReader::new(Box::new(File::from_std(tempfile().unwrap())), 1024)
-            .await
-            .unwrap();
-        assert_eq!(reader.prefetch_footer_size, 1024);
-        assert_eq!(reader.content_length, 1024);
-
-        let reader = AsyncReader::new(Box::new(File::from_std(tempfile().unwrap())), 1024 * 1024)
-            .await
-            .unwrap();
-        assert_eq!(reader.prefetch_footer_size, PREFETCH_FOOTER_SIZE);
-        assert_eq!(reader.content_length, 1024 * 1024);
-
-        let reader = AsyncReader::new(Box::new(File::from_std(tempfile().unwrap())), 1024 * 1024)
-            .await
+    async fn async_reader_with_prefetch_footer_size() {
+        let tmp_dir = tempdir().unwrap();
+        let fs = LocalFs {};
+        let path = Path::from_filesystem_path(tmp_dir.path())
             .unwrap()
-            .with_prefetch_footer_size(2048 * 1024);
-        assert_eq!(reader.prefetch_footer_size, 1024 * 1024);
-        assert_eq!(reader.content_length, 1024 * 1024);
+            .child("reader");
+        // let options = OpenOptions::default().create(true).write(true);
+        {
+            let file = fs
+                .open_options(&path, OpenOptions::default().create(true))
+                .await
+                .unwrap();
 
-        let reader = AsyncReader::new(Box::new(File::from_std(tempfile().unwrap())), 1024 * 1024)
-            .await
-            .unwrap()
-            .with_prefetch_footer_size(1);
-        assert_eq!(reader.prefetch_footer_size, 8);
-        assert_eq!(reader.content_length, 1024 * 1024);
+            let reader = AsyncReader::new(Box::new(file), 1024).await.unwrap();
+            assert_eq!(reader.prefetch_footer_size, 1024);
+            assert_eq!(reader.content_length, 1024);
+        }
+
+        {
+            let file = fs
+                .open_options(&path, OpenOptions::default())
+                .await
+                .unwrap();
+
+            let reader = AsyncReader::new(Box::new(file), 1024 * 1024).await.unwrap();
+            assert_eq!(reader.prefetch_footer_size, PREFETCH_FOOTER_SIZE);
+            assert_eq!(reader.content_length, 1024 * 1024);
+        }
+
+        {
+            let file = fs
+                .open_options(&path, OpenOptions::default())
+                .await
+                .unwrap();
+
+            let reader = AsyncReader::new(Box::new(file), 1024 * 1024)
+                .await
+                .unwrap()
+                .with_prefetch_footer_size(2048 * 1024);
+            assert_eq!(reader.prefetch_footer_size, 1024 * 1024);
+            assert_eq!(reader.content_length, 1024 * 1024);
+        }
+
+        {
+            let file = fs
+                .open_options(&path, OpenOptions::default())
+                .await
+                .unwrap();
+
+            let reader = AsyncReader::new(Box::new(file), 1024 * 1024)
+                .await
+                .unwrap()
+                .with_prefetch_footer_size(1);
+            assert_eq!(reader.prefetch_footer_size, 8);
+            assert_eq!(reader.content_length, 1024 * 1024);
+        }
     }
 
     struct TestCase {
@@ -276,8 +357,7 @@ mod tests {
             .collect()
     }
 
-    #[tokio::test]
-    async fn test_async_reader_with_large_metadata() {
+    async fn async_reader_with_large_metadata() {
         for case in [
             TestCase {
                 metadata_size: 256 * 1024,
@@ -296,14 +376,17 @@ mod tests {
                 prefetch: Some(4),
             },
         ] {
-            let temp_file = tempfile().unwrap();
-            let mut temp_file_clone = temp_file.try_clone().unwrap();
+            let tmp_dir = tempdir().unwrap();
+            let fs = LocalFs {};
+            let path = Path::from_filesystem_path(tmp_dir.path())
+                .unwrap()
+                .child("reader");
+            let options = OpenOptions::default().create(true).write(true);
 
-            let writer = AsyncWriter::new(Box::new(File::from_std(temp_file)));
+            let writer = AsyncWriter::new(Box::new(fs.open_options(&path, options).await.unwrap()));
 
             let col = Arc::new(Int64Array::from_iter_values([1, 2, 3])) as ArrayRef;
             let to_write = RecordBatch::try_from_iter([("col", col)]).unwrap();
-
             let mut writer = AsyncArrowWriter::try_new(
                 writer,
                 to_write.schema(),
@@ -317,19 +400,21 @@ mod tests {
                 ),
             )
             .unwrap();
+
             writer.write(&to_write).await.unwrap();
             writer.close().await.unwrap();
 
-            temp_file_clone.seek(SeekFrom::Start(0)).unwrap();
-            let metadata = temp_file_clone.metadata().unwrap();
-            let content_len = metadata.len();
-            let mut reader =
-                AsyncReader::new(Box::new(File::from_std(temp_file_clone)), content_len)
-                    .await
-                    .unwrap();
+            let file = fs
+                .open_options(&path, OpenOptions::default())
+                .await
+                .unwrap();
+            let size = file.size().await.unwrap();
+
+            let mut reader = AsyncReader::new(Box::new(file), size).await.unwrap();
             if let Some(footer_size) = case.prefetch {
                 reader = reader.with_prefetch_footer_size(footer_size);
             }
+
             let mut stream = ParquetRecordBatchStreamBuilder::new(reader)
                 .await
                 .unwrap()
@@ -338,5 +423,29 @@ mod tests {
             let read = stream.next().await.unwrap().unwrap();
             assert_eq!(to_write, read);
         }
+    }
+
+    #[cfg(feature = "monoio")]
+    #[monoio::test]
+    async fn test_monoio_async_reader_with_prefetch_footer_size() {
+        async_reader_with_prefetch_footer_size().await;
+    }
+
+    #[cfg(feature = "tokio")]
+    #[tokio::test]
+    async fn test_tokio_async_reader_with_prefetch_footer_size() {
+        async_reader_with_prefetch_footer_size().await;
+    }
+
+    #[cfg(feature = "monoio")]
+    #[monoio::test]
+    async fn test_monoio_async_reader_with_large_metadata() {
+        async_reader_with_large_metadata().await;
+    }
+
+    #[cfg(feature = "tokio")]
+    #[tokio::test]
+    async fn test_tokio_async_reader_with_large_metadata() {
+        async_reader_with_large_metadata().await;
     }
 }

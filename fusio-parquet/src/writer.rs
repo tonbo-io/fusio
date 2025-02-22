@@ -1,21 +1,22 @@
 use bytes::Bytes;
 #[allow(unused)]
 use fusio::{dynamic::DynFile, Write};
-use futures::future::BoxFuture;
+#[allow(unused_imports)]
+use futures::{future::BoxFuture, FutureExt};
 use parquet::{arrow::async_writer::AsyncFileWriter, errors::ParquetError};
 
 pub struct AsyncWriter {
-    #[cfg(feature = "web")]
+    #[cfg(any(feature = "web", feature = "monoio"))]
     #[allow(clippy::arc_with_non_send_sync)]
     inner: Option<std::sync::Arc<futures::lock::Mutex<Box<dyn DynFile>>>>,
-    #[cfg(not(feature = "web"))]
+    #[cfg(feature = "tokio")]
     inner: Option<Box<dyn DynFile>>,
 }
 
 unsafe impl Send for AsyncWriter {}
 impl AsyncWriter {
     pub fn new(writer: Box<dyn DynFile>) -> Self {
-        #[cfg(feature = "web")]
+        #[cfg(any(feature = "web", feature = "monoio"))]
         #[allow(clippy::arc_with_non_send_sync)]
         let writer = std::sync::Arc::new(futures::lock::Mutex::new(writer));
         {
@@ -49,12 +50,25 @@ impl AsyncFileWriter for AsyncWriter {
                             receiver.await.unwrap()?;
                             Ok(())
                         })
-
                     },
                     None => Box::pin(async move {
                         Ok(())
                     })
-
+                }
+            } else if #[cfg(feature = "monoio")] {
+                match self.inner.as_mut() {
+                    Some(writer) => {
+                        let writer = writer.clone();
+                        monoio::spawn(async move  {
+                            let mut guard = writer.lock().await;
+                            let (result, _) = guard.write_all(bs).await;
+                            result
+                                .map_err(|err| ParquetError::External(Box::new(err)))
+                        }).boxed()
+                    },
+                    None => Box::pin(async move {
+                        Ok(())
+                    })
                 }
             } else {
                 Box::pin(async move {
@@ -90,6 +104,19 @@ impl AsyncFileWriter for AsyncWriter {
                         Ok(())
                     })
                 }
+            } else if #[cfg(feature = "monoio")] {
+                match self.inner.take() {
+                    Some(writer) => {
+                        monoio::spawn(async move {
+                            let mut guard = writer.lock().await;
+                            guard.close().await
+                            .map_err(|err| ParquetError::External(Box::new(err)))
+                        }).boxed()
+                    }
+                    None => Box::pin(async move {
+                        Ok(())
+                    })
+                }
             } else {
                 Box::pin(async move {
                     if let Some(mut writer) = self.inner.take() {
@@ -106,55 +133,66 @@ impl AsyncFileWriter for AsyncWriter {
     }
 }
 
-#[cfg(feature = "tokio")]
 #[cfg(test)]
+#[cfg(any(feature = "monoio", feature = "tokio"))]
 mod tests {
-    use std::{
-        io::{Read, Seek, SeekFrom},
-        sync::Arc,
-    };
+    use std::sync::Arc;
 
     use arrow::array::{ArrayRef, Int64Array, RecordBatch};
     use bytes::Bytes;
+    use fusio::{
+        disk::LocalFs,
+        fs::{Fs, OpenOptions},
+        path::Path,
+        DynRead,
+    };
     use parquet::arrow::{
         arrow_reader::ParquetRecordBatchReaderBuilder, async_writer::AsyncFileWriter,
         AsyncArrowWriter,
     };
-    use tempfile::tempfile;
-    use tokio::{
-        fs::File,
-        io::{AsyncReadExt, AsyncSeekExt},
-    };
+    use tempfile::tempdir;
 
     use crate::writer::AsyncWriter;
 
-    #[tokio::test]
-    async fn test_basic() {
-        let temp_file = tempfile().unwrap();
-        let temp_file_clone = temp_file.try_clone().unwrap();
+    async fn basic_write() {
+        let tmp_dir = tempdir().unwrap();
+        let fs = LocalFs {};
+        let file_path = Path::from_filesystem_path(tmp_dir.path())
+            .unwrap()
+            .child("basic");
+        let options = OpenOptions::default().create(true).write(true);
 
-        let mut writer = AsyncWriter::new(Box::new(File::from_std(temp_file)));
-
-        let bytes = Bytes::from_static(b"hello, world!");
+        let mut writer = AsyncWriter::new(Box::new(
+            fs.open_options(&file_path, options).await.unwrap(),
+        ));
+        let bytes = Bytes::from_static(b"Hello, world!");
         writer.write(bytes).await.unwrap();
-        let bytes = Bytes::from_static(b"hello, Fusio!");
+        let bytes = Bytes::from_static(b"Hello, Fusio!");
         writer.write(bytes).await.unwrap();
         writer.complete().await.unwrap();
 
-        let mut buf = Vec::new();
-        let mut file = File::from_std(temp_file_clone);
+        let buf = Vec::new();
+        let mut file = fs
+            .open_options(&file_path, OpenOptions::default())
+            .await
+            .unwrap();
 
-        file.seek(SeekFrom::Start(0)).await.unwrap();
-        let _ = file.read_to_end(&mut buf).await.unwrap();
-        assert_eq!(buf.as_slice(), b"hello, world!hello, Fusio!");
+        let (result, buf) = file.read_to_end_at(buf, 0).await;
+        result.unwrap();
+        assert_eq!(buf.as_slice(), b"Hello, world!Hello, Fusio!");
     }
 
-    #[tokio::test]
-    async fn test_async_writer() {
-        let temp_file = tempfile().unwrap();
-        let mut temp_file_clone = temp_file.try_clone().unwrap();
+    async fn async_writer() {
+        let tmp_dir = tempdir().unwrap();
+        let fs = LocalFs {};
+        let file_path = Path::from_filesystem_path(tmp_dir.path())
+            .unwrap()
+            .child("writer");
+        let options = OpenOptions::default().create(true).write(true);
 
-        let writer = AsyncWriter::new(Box::new(File::from_std(temp_file)));
+        let writer = AsyncWriter::new(Box::new(
+            fs.open_options(&file_path, options).await.unwrap(),
+        ));
 
         let col = Arc::new(Int64Array::from_iter_values([1, 2, 3])) as ArrayRef;
         let to_write = RecordBatch::try_from_iter([("col", col)]).unwrap();
@@ -162,14 +200,42 @@ mod tests {
         writer.write(&to_write).await.unwrap();
         writer.close().await.unwrap();
 
-        temp_file_clone.seek(SeekFrom::Start(0)).unwrap();
-        let mut buf = Vec::new();
-        let _ = temp_file_clone.read_to_end(&mut buf);
+        let buf = Vec::new();
+        let mut file = fs
+            .open_options(&file_path, OpenOptions::default())
+            .await
+            .unwrap();
+        let (result, buf) = file.read_to_end_at(buf, 0).await;
+        result.unwrap();
         let mut reader = ParquetRecordBatchReaderBuilder::try_new(Bytes::from(buf))
             .unwrap()
             .build()
             .unwrap();
         let read = reader.next().unwrap().unwrap();
         assert_eq!(to_write, read);
+    }
+
+    #[cfg(feature = "monoio")]
+    #[monoio::test]
+    async fn test_monoio_basic_write() {
+        basic_write().await;
+    }
+
+    #[cfg(feature = "tokio")]
+    #[tokio::test]
+    async fn test_tokio_basic_write() {
+        basic_write().await;
+    }
+
+    #[cfg(feature = "monoio")]
+    #[monoio::test]
+    async fn test_monoio_async_writer() {
+        async_writer().await;
+    }
+
+    #[cfg(feature = "tokio")]
+    #[tokio::test]
+    async fn test_tokio_async_writer() {
+        async_writer().await;
     }
 }
