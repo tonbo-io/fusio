@@ -10,6 +10,7 @@ version.workspace = true
 aws = ["fusio-dispatch/aws", "fusio/aws"]
 bytes = ["dep:bytes"]
 default = ["aws", "bytes", "tokio", "tokio-http"]
+monoio = ["fusio-dispatch/monoio", "fusio/monoio"]
 tokio = [
     "fusio-dispatch/tokio",
     "fusio/tokio",
@@ -19,7 +20,7 @@ web = ["fusio-dispatch/opfs", "fusio/opfs"]
 web-http = ["fusio/wasm-http"]
 
 [dependencies]
-bytes = { version = "1.7", optional = true }
+bytes = { workspace = true, optional = true }
 crc32fast = "1"
 fusio = { version = "0.3.4", path = "../fusio", features = [
     "dyn",
