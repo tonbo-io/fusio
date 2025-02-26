@@ -15,14 +15,18 @@ pub enum LogError {
     BadData,
     #[error("recover error: checksum does not match")]
     Checksum,
+    #[error(transparent)]
+    Other(#[from] BoxedError),
 }
+
+pub type BoxedError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
 impl From<fusio::Error> for LogError {
     fn from(err: fusio::Error) -> Self {
         match err {
             fusio::Error::Io(error) => LogError::IO(error),
             fusio::Error::S3Error(_) => LogError::S3Error(err),
-            _ => todo!(),
+            err => LogError::Other(Box::new(err)),
         }
     }
 }
