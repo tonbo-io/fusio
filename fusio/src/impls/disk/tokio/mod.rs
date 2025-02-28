@@ -12,10 +12,14 @@ use crate::{buf::IoBufMut, Error, IoBuf, Read, Write};
 
 pub struct TokioFile {
     file: Option<File>,
+    pos: u64,
 }
 impl TokioFile {
-    pub(crate) fn new(file: File) -> Self {
-        Self { file: Some(file) }
+    pub(crate) fn new(file: File, pos: u64) -> Self {
+        Self {
+            file: Some(file),
+            pos,
+        }
     }
 }
 
@@ -23,9 +27,16 @@ impl Write for TokioFile {
     async fn write_all<B: IoBuf>(&mut self, buf: B) -> (Result<(), Error>, B) {
         debug_assert!(self.file.is_some(), "file is already closed");
 
+        let file = self.file.as_mut().unwrap();
+        if let Err(e) = AsyncSeekExt::seek(file, SeekFrom::Start(self.pos)).await {
+            return (Err(Error::Io(e)), buf);
+        }
+        let buf_len = buf.bytes_init();
+        self.pos += buf_len as u64;
+
         (
             AsyncWriteExt::write_all(self.file.as_mut().unwrap(), unsafe {
-                &*slice_from_raw_parts(buf.as_ptr(), buf.bytes_init())
+                &*slice_from_raw_parts(buf.as_ptr(), buf_len)
             })
             .await
             .map_err(Error::from),

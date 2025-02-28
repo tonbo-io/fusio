@@ -29,16 +29,17 @@ impl Fs for TokioFs {
         let file = tokio::fs::OpenOptions::new()
             .read(options.read)
             .write(options.write)
-            .append(options.write)
             .create(options.create)
             .open(&local_path)
             .await?;
 
-        if options.truncate {
-            file.set_len(0).await?;
-        }
+        let pos = if options.truncate {
+            0
+        } else {
+            file.metadata().await?.len()
+        };
 
-        Ok(TokioFile::new(file))
+        Ok(TokioFile::new(file, pos))
     }
 
     async fn create_dir_all(path: &Path) -> Result<(), Error> {
