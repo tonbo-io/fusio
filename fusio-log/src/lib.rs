@@ -173,9 +173,10 @@ impl<T> Logger<T> {
 #[cfg(test)]
 mod tests {
 
+    use std::pin::pin;
+
     use futures_util::{StreamExt, TryStreamExt};
     use tempfile::TempDir;
-    use tokio::pin;
 
     use crate::{
         fs::{AwsCredential, SeqRead, Write},
@@ -233,8 +234,7 @@ mod tests {
         items
     }
 
-    #[tokio::test]
-    async fn test_write_u8() {
+    async fn write_u8() {
         let temp_dir = TempDir::new().unwrap();
         let path = Path::from_filesystem_path(temp_dir.path())
             .unwrap()
@@ -258,7 +258,7 @@ mod tests {
                 .await
                 .unwrap()
                 .into_stream();
-            pin!(stream);
+            let mut stream = pin!(stream);
             let mut i = 0;
             while let Some(res) = stream.next().await {
                 assert!(res.is_ok());
@@ -269,8 +269,13 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "tokio")]
     #[tokio::test]
-    async fn test_write_struct() {
+    async fn test_tokio_write_u8() {
+        write_u8().await;
+    }
+
+    async fn write_struct() {
         let temp_dir = TempDir::new().unwrap();
         let path = Path::from_filesystem_path(temp_dir.path())
             .unwrap()
@@ -307,7 +312,7 @@ mod tests {
                 .await
                 .unwrap()
                 .into_stream();
-            pin!(stream);
+            let mut stream = pin!(stream);
             let mut i = 0;
             while let Some(res) = stream.next().await {
                 assert!(res.is_ok());
@@ -321,19 +326,41 @@ mod tests {
         }
     }
 
-    #[ignore = "s3"]
+    #[cfg(feature = "tokio")]
     #[tokio::test]
-    async fn test_write_s3() {
+    async fn test_tokio_write_struct() {
+        write_struct().await
+    }
+
+    #[cfg(feature = "monoio")]
+    #[monoio::test]
+    async fn test_monoio_write_struct() {
+        write_struct().await
+    }
+
+    async fn write_s3() {
         let path = Path::from_url_path("log").unwrap();
-        let option = Options::new(path).fs(FsOptions::S3 {
-            bucket: "data".to_string(),
+
+        if option_env!("AWS_ACCESS_KEY_ID").is_none()
+            || option_env!("AWS_SECRET_ACCESS_KEY").is_none()
+        {
+            eprintln!("can not get `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`");
+            return;
+        }
+        let key_id = std::option_env!("AWS_ACCESS_KEY_ID").unwrap().to_string();
+        let secret_key = std::option_env!("AWS_SECRET_ACCESS_KEY")
+            .unwrap()
+            .to_string();
+
+        let option = Options::new(path).truncate(true).fs(FsOptions::S3 {
+            bucket: "fusio-test".to_string(),
             credential: Some(AwsCredential {
-                key_id: "key_id".to_string(),
-                secret_key: "secret_key".to_string(),
+                key_id,
+                secret_key,
                 token: None,
             }),
             endpoint: None,
-            region: Some("region".to_string()),
+            region: Some("ap-southeast-1".to_string()),
             sign_payload: None,
             checksum: None,
         });
@@ -362,7 +389,7 @@ mod tests {
                 &test_items()[0..],
             ];
             let stream = option.recover::<TestStruct>().await.unwrap().into_stream();
-            pin!(stream);
+            let mut stream = pin!(stream);
             let mut i = 0;
             while let Some(res) = stream.next().await {
                 assert!(res.is_ok());
@@ -375,8 +402,21 @@ mod tests {
         }
     }
 
+    #[ignore = "s3"]
+    #[cfg(feature = "tokio")]
     #[tokio::test]
-    async fn test_recover_empty() {
+    async fn test_tokio_write_s3() {
+        write_s3().await;
+    }
+
+    #[ignore = "s3"]
+    #[cfg(feature = "monoio")]
+    #[monoio::test(enable_timer = true)]
+    async fn test_monoio_write_s3() {
+        write_s3().await;
+    }
+
+    async fn recover_empty() {
         let temp_dir = TempDir::new().unwrap();
         let path = Path::from_filesystem_path(temp_dir.path())
             .unwrap()
@@ -395,5 +435,17 @@ mod tests {
             let res = stream.try_next().await.unwrap();
             assert!(res.is_none());
         }
+    }
+
+    #[cfg(feature = "tokio")]
+    #[tokio::test]
+    async fn test_recover_empty() {
+        recover_empty().await;
+    }
+
+    #[cfg(feature = "monoio")]
+    #[monoio::test]
+    async fn test_recover_empty() {
+        recover_empty().await;
     }
 }

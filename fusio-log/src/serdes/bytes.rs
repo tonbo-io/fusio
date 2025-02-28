@@ -8,6 +8,9 @@ impl Encode for &[u8] {
 
     async fn encode<W: Write>(&self, writer: &mut W) -> Result<(), Self::Error> {
         (self.len() as u32).encode(writer).await?;
+        #[cfg(feature = "monoio")]
+        let (result, _) = writer.write_all(self.to_vec()).await;
+        #[cfg(not(feature = "monoio"))]
         let (result, _) = writer.write_all(*self).await;
         result?;
 
@@ -24,6 +27,9 @@ impl Encode for Bytes {
 
     async fn encode<W: Write>(&self, writer: &mut W) -> Result<(), Self::Error> {
         (self.len() as u32).encode(writer).await?;
+        #[cfg(feature = "monoio")]
+        let (result, _) = writer.write_all(self.as_bytes()).await;
+        #[cfg(not(feature = "monoio"))]
         let (result, _) = writer.write_all(self.as_slice()).await;
         result?;
 
