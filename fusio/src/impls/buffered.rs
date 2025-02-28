@@ -181,7 +181,7 @@ pub(crate) mod tests {
 
         use crate::disk::tokio::TokioFile;
 
-        let mut file = TokioFile::new(tokio::fs::File::from_std(tempfile().unwrap()));
+        let mut file = TokioFile::new(tokio::fs::File::from_std(tempfile().unwrap()), 0);
         let _ = file
             .write_all([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15].as_slice())
             .await;
@@ -235,7 +235,7 @@ pub(crate) mod tests {
             Read, Write,
         };
 
-        let file = TokioFile::new(tokio::fs::File::from_std(tempfile().unwrap()));
+        let file = TokioFile::new(tokio::fs::File::from_std(tempfile().unwrap()), 0);
         let mut writer = BufWriter::new(file, 4);
         {
             let _ = writer.write_all("Hello".as_bytes()).await;
