@@ -93,7 +93,7 @@ jobs:
         uses: actions-rs/cargo@v1
         with:
           command: test
-          args: --package fusio --features=monoio
+          args: --package fusio --features=monoio,monoio-http
 
       - name: Run cargo test on tokio-uring
         uses: actions-rs/cargo@v1
