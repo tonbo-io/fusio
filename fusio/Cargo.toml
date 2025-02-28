@@ -40,7 +40,7 @@ http = [
     "tokio?/rt",
 ]
 monoio = ["async-stream", "completion-based", "dep:monoio", "no-send"]
-monoio-http = ["h2", "http", "hyper"]
+monoio-http = ["http", "dep:monoio-http-client", "dep:monoio-http"]
 no-send = []
 opfs = [
     "async-stream",
@@ -79,17 +79,13 @@ chrono = { version = "0.4", optional = true, default-features = false, features 
 ] }
 futures-core = { version = "0.3" }
 futures-util = { version = "0.3" }
-h2 = { version = "0.4.6", optional = true }
 http = { version = "1", optional = true, default-features = false }
 http-body = { version = "1", optional = true }
 http-body-util = { version = "0.1", optional = true, default-features = false }
-hyper = { version = "1", optional = true, default-features = false, features = [
-    "client",
-    "http1",
-    "http2",
-] }
 itertools = { version = "0.13" }
 monoio = { version = "0.2", optional = true, features = ["sync"] }
+monoio-http-client = {version = "0.3.3", optional = true}
+monoio-http = {version = "0.3", optional = true}
 object_store = { version = "0.11", optional = true, features = ["aws"] }
 percent-encoding = { version = "2", default-features = false }
 quick-xml = { version = "0.36", features = [
