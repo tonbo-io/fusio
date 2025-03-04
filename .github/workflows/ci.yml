@@ -75,7 +75,7 @@ jobs:
         uses: actions-rs/cargo@v1
         with:
           command: build
-          args: --package fusio-parquet --features=monoio
+          args: --package fusio-parquet --features=monoio --no-default-features
 
       - name: Run cargo build on fusio-log
         uses: actions-rs/cargo@v1
@@ -111,7 +111,7 @@ jobs:
         uses: actions-rs/cargo@v1
         with:
           command: test
-          args: --package fusio-parquet --features=monoio
+          args: --package fusio-parquet --features=monoio --no-default-features
 
       - name: Run cargo test on fusio-log
         uses: actions-rs/cargo@v1
@@ -165,7 +165,7 @@ jobs:
         uses: actions-rs/cargo@v1
         with:
           command: build
-          args: --target wasm32-unknown-unknown --package fusio-parquet --features=web
+          args: --target wasm32-unknown-unknown --package fusio-parquet --features=web --no-default-features
 
       - name: Run cargo build on fusio-dispatch
         uses: actions-rs/cargo@v1
@@ -195,4 +195,4 @@ jobs:
       - name: Run wasm-pack test on fusion-parquet
         run: |
           export PATH=$PATH:/tmp/chrome/chrome-linux64/:/tmp/chrome/chromedriver-linux64/
-          wasm-pack test --chrome --headless fusio-parquet --features web
+          wasm-pack test --chrome --headless fusio-parquet --features web --no-default-features
