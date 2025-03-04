@@ -7,10 +7,10 @@ repository.workspace = true
 version.workspace = true
 
 [features]
-default = ["tokio"]
-monoio = ["dep:monoio", "fusio/monoio"]
+default = []
 tokio = ["fusio/tokio"]
 web = ["fusio/opfs"]
+monoio = ["fusio/monoio", "dep:monoio"]
 
 [dependencies]
 bytes = { workspace = true }
