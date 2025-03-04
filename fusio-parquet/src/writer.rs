@@ -9,7 +9,7 @@ pub struct AsyncWriter {
     #[cfg(any(feature = "web", feature = "monoio"))]
     #[allow(clippy::arc_with_non_send_sync)]
     inner: Option<std::sync::Arc<futures::lock::Mutex<Box<dyn DynFile>>>>,
-    #[cfg(feature = "tokio")]
+    #[cfg(not(any(feature = "web", feature = "monoio")))]
     inner: Option<Box<dyn DynFile>>,
 }
 
