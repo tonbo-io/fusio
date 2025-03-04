@@ -18,7 +18,7 @@ const PREFETCH_FOOTER_SIZE: usize = 512 * 1024;
 pub struct AsyncReader {
     #[cfg(any(feature = "web", feature = "monoio"))]
     inner: Arc<futures::lock::Mutex<Box<dyn DynFile>>>,
-    #[cfg(feature = "tokio")]
+    #[cfg(not(any(feature = "web", feature = "monoio")))]
     inner: Box<dyn DynFile>,
     content_length: u64,
     // The prefetch size for fetching file footer.
