@@ -67,6 +67,12 @@ impl<F: Read> Read for BufReader<F> {
 
 impl<F: Read> BufReader<F> {
     async fn filling_buf(&mut self, pos: u64) -> Result<(), Error> {
+        if self.size <= pos {
+            return Err(Error::Io(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "read unexpected eof",
+            )));
+        }
         if self
             .buf
             .as_ref()
@@ -269,6 +275,36 @@ pub(crate) mod tests {
 
             let mut buf = [0; 5];
             let (result, _) = writer.read_exact_at(buf.as_mut(), 8).await;
+            assert!(result.is_err());
+        }
+    }
+
+    #[cfg(all(feature = "tokio", not(feature = "completion-based")))]
+    #[tokio::test]
+    async fn test_buf_read_eof() {
+        use tempfile::tempfile;
+
+        use crate::disk::tokio::TokioFile;
+
+        let mut file = TokioFile::new(tokio::fs::File::from_std(tempfile().unwrap()), 0);
+        let _ = file.write_all([0, 1, 2].as_slice()).await;
+
+        let mut reader = BufReader::new(file, 8).await.unwrap();
+        {
+            let (result, buf) = reader.read_exact_at(vec![0u8; 1], 0).await;
+            result.unwrap();
+            assert_eq!(buf, vec![0]);
+
+            let (result, _) = reader.read_exact_at(vec![0u8; 4], 4).await;
+            assert!(result.is_err());
+        }
+        {
+            let (result, buf) = reader.read_exact_at(vec![0u8; 3], 0).await;
+            result.unwrap();
+            assert_eq!(buf, vec![0, 1, 2]);
+        }
+        {
+            let (result, _) = reader.read_exact_at(vec![0u8; 4], 0).await;
             assert!(result.is_err());
         }
     }
