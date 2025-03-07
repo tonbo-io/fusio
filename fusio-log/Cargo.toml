@@ -21,12 +21,12 @@ web-http = ["fusio/wasm-http"]
 [dependencies]
 bytes = { version = "1.7", optional = true }
 crc32fast = "1"
-fusio = { version = "0.3.4", path = "../fusio", features = [
+fusio = { version = "0.3.7", path = "../fusio", features = [
     "dyn",
     "fs",
     "bytes"
 ] }
-fusio-dispatch = {  version = "0.3.4", path = "../fusio-dispatch" }
+fusio-dispatch = {  version = "0.3.7", path = "../fusio-dispatch" }
 futures-core = "0.3"
 futures-util = "0.3"
 thiserror = "2.0.3"
