@@ -7,7 +7,12 @@ use std::{io::Cursor, marker::PhantomData, sync::Arc};
 use error::LogError;
 use fs::hash::{HashReader, HashWriter};
 pub use fusio::path::Path;
-use fusio::{buffered::BufWriter, dynamic::DynFile, fs::OpenOptions, DynFs, DynWrite};
+use fusio::{
+    buffered::{BufReader, BufWriter},
+    dynamic::DynFile,
+    fs::OpenOptions,
+    DynFs, DynWrite,
+};
 use futures_core::TryStream;
 use futures_util::stream;
 #[allow(unused)]
@@ -125,9 +130,12 @@ where
         option: Options,
     ) -> Result<impl TryStream<Ok = Vec<T>, Error = LogError> + Unpin, LogError> {
         let fs = option.fs_option.parse()?;
-        let file = fs
-            .open_options(&option.path, OpenOptions::default().create(false))
-            .await?;
+        let file = BufReader::new(
+            fs.open_options(&option.path, OpenOptions::default().create(false))
+                .await?,
+            DEFAULT_BUF_SIZE,
+        )
+        .await?;
 
         Ok(Box::pin(stream::try_unfold(
             (file, 0),
@@ -137,7 +145,6 @@ where
                 let mut reader = HashReader::new(cursor);
 
                 let Ok(len) = u32::decode(&mut reader).await else {
-                    f.close().await?;
                     return Ok(None);
                 };
                 let mut buf = Vec::with_capacity(len as usize);

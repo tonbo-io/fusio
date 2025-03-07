@@ -6,7 +6,7 @@ use futures_core::TryStream;
 
 use crate::{error::LogError, Decode, Encode, Logger};
 
-const DEFAULT_BUF_SIZE: usize = 4 * 1024;
+pub(crate) const DEFAULT_BUF_SIZE: usize = 4 * 1024;
 
 #[derive(Clone)]
 pub struct Options {
