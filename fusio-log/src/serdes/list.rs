@@ -27,6 +27,10 @@ impl Encode for Vec<u8> {
         W: Write,
     {
         (self.len() as u32).encode(writer).await?;
+
+        #[cfg(feature = "monoio")]
+        let (result, _) = writer.write_all(self.to_owned()).await;
+        #[cfg(not(feature = "monoio"))]
         let (result, _) = writer.write_all(self.as_slice()).await;
         result?;
 
