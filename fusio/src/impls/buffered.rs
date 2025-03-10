@@ -7,6 +7,7 @@ pub struct BufReader<F> {
     capacity: usize,
     buf: Option<(Vec<u8>, usize)>,
     size: u64,
+    offset: usize, // the offset of first bytes in buf
 
     #[cfg(test)]
     filling_count: usize,
@@ -20,6 +21,7 @@ impl<F: Read> BufReader<F> {
             inner,
             capacity,
             buf: None,
+            offset: 0,
             size,
             #[cfg(test)]
             filling_count: 0,
@@ -73,16 +75,18 @@ impl<F: Read> BufReader<F> {
                 "read unexpected eof",
             )));
         }
+        let start = self.offset;
         if self
             .buf
             .as_ref()
-            .map(|(buf, current)| buf.len() == *current || *current != pos as usize)
+            .map(|(buf, current)| buf.len() == *current || start + *current != pos as usize)
             .unwrap_or(true)
         {
             let fill_buf = vec![0u8; cmp::min(self.capacity, (self.size - pos) as usize)];
             let (result, fill_buf) = self.inner.read_exact_at(fill_buf, pos).await;
             if result.is_ok() {
                 self.buf = Some((fill_buf, 0));
+                self.offset = pos as usize;
             }
             #[cfg(test)]
             {
