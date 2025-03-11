@@ -1,0 +1,16 @@
+[package]
+edition.workspace = true
+license.workspace = true
+name = "fusio-core"
+repository.workspace = true
+version.workspace = true
+
+[features]
+alloc = []
+bytes = ["dep:bytes"]
+completion-based = []
+default = ["alloc", "bytes"]
+no-send = []
+
+[dependencies]
+bytes = { version = "1", optional = true, default-features = false }
