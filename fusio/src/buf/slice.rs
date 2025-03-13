@@ -23,6 +23,8 @@ pub(super) enum SliceLayout {
     BytesMut(bytes::BytesMut),
 }
 
+unsafe impl Send for SliceLayout {}
+
 impl IoBuf for Slice {
     fn as_ptr(&self) -> *const u8 {
         match &self.layout {
@@ -102,6 +104,8 @@ pub(super) enum SliceMutLayout {
     #[cfg(feature = "bytes")]
     BytesMut(bytes::BytesMut),
 }
+
+unsafe impl Send for SliceMutLayout {}
 
 impl IoBuf for SliceMut {
     fn as_ptr(&self) -> *const u8 {
