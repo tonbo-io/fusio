@@ -604,6 +604,7 @@ mod tests {
         let mut file = TokioFile::new(File::from_std(tempfile().unwrap()));
         let (result, _) = file.write_all(&b"hello, world"[..]).await;
         result.unwrap();
+        file.flush().await.unwrap();
         let (result, buf) = file.read_exact_at(vec![0u8; 5], 0).await;
         result.unwrap();
         assert_eq!(buf.as_slice(), b"hello");
