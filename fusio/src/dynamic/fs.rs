@@ -208,15 +208,14 @@ pub async fn copy(
 mod tests {
 
     #[cfg(all(feature = "tokio", not(feature = "completion-based")))]
-    #[tokio::test]
+    // #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_dyn_fs() {
         use tempfile::tempfile;
 
         use crate::{disk::tokio::TokioFile, Write};
 
-        let file = TokioFile::new(tokio::fs::File::from_std(tempfile().unwrap()), 0)
-            .await
-            .unwrap();
+        let file = TokioFile::new(tokio::fs::File::from_std(tempfile().unwrap()), 0);
         let mut dyn_file: Box<dyn super::DynFile> = Box::new(file);
         let buf = [24, 9, 24, 0];
         let (result, _) = dyn_file.write_all(&buf[..]).await;
@@ -224,7 +223,7 @@ mod tests {
     }
 
     #[cfg(all(feature = "tokio", not(feature = "completion-based")))]
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_dyn_buf_fs() {
         use tempfile::NamedTempFile;
 
