@@ -3,6 +3,7 @@ members = [
     "examples",
     "examples/opfs",
     "fusio",
+    "fusio-core",
     "fusio-dispatch",
     "fusio-log",
     "fusio-object-store",
