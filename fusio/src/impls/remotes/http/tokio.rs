@@ -45,7 +45,7 @@ impl HttpClient for TokioClient {
 
 #[cfg(test)]
 mod tests {
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_tokio_client() {
         use bytes::Bytes;
         use http::{Request, StatusCode};

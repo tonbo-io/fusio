@@ -560,7 +560,7 @@ mod tests {
 
     // Test generated using https://docs.aws.amazon.com/general/latest/gr/sigv4-signed-request-examples.html
     #[cfg(feature = "tokio")]
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_sign_with_signed_payload() {
         // Test credentials from https://docs.aws.amazon.com/AmazonS3/latest/userguide/RESTAuthentication.html
         let credential = AwsCredential {
@@ -604,7 +604,7 @@ mod tests {
     }
 
     #[cfg(feature = "tokio")]
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_sign_with_unsigned_payload() {
         // Test credentials from https://docs.aws.amazon.com/AmazonS3/latest/userguide/RESTAuthentication.html
         let credential = AwsCredential {
@@ -688,7 +688,7 @@ mod tests {
     }
 
     #[cfg(feature = "tokio")]
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_sign_port() {
         let credential = AwsCredential {
             key_id: "H20ABqCkLZID4rLe".into(),
@@ -724,7 +724,7 @@ mod tests {
     }
 
     #[cfg(all(feature = "tokio-http", not(feature = "completion-based")))]
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_instance_metadata() {
         use std::env;
 

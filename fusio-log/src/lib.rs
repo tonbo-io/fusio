@@ -244,7 +244,7 @@ mod tests {
         items
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_write_u8() {
         let temp_dir = TempDir::new().unwrap();
         let path = Path::from_filesystem_path(temp_dir.path())
@@ -280,7 +280,7 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_write_struct() {
         let temp_dir = TempDir::new().unwrap();
         let path = Path::from_filesystem_path(temp_dir.path())
@@ -333,7 +333,7 @@ mod tests {
     }
 
     #[ignore = "s3"]
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_write_s3() {
         let path = Path::from_url_path("log").unwrap();
         let option = Options::new(path).fs(FsOptions::S3 {
@@ -386,7 +386,7 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_recover_empty() {
         let temp_dir = TempDir::new().unwrap();
         let path = Path::from_filesystem_path(temp_dir.path())

@@ -46,7 +46,7 @@ mod tests {
 
     use crate::serdes::{Decode, Encode};
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_u8_encode_decode() {
         let source = b"hello! Tonbo".to_vec();
 

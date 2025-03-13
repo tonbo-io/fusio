@@ -1,25 +1,25 @@
 #[cfg(feature = "fs")]
 pub mod fs;
 
-use std::{io::SeekFrom, ptr::slice_from_raw_parts};
+use std::{
+    io::SeekFrom,
+    os::fd::{AsFd, AsRawFd, FromRawFd},
+};
 
 use tokio::{
     fs::File,
     io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt},
+    task::block_in_place,
 };
 
 use crate::{buf::IoBufMut, Error, IoBuf, Read, Write};
 
 pub struct TokioFile {
     file: Option<File>,
-    pos: u64,
 }
 impl TokioFile {
-    pub(crate) fn new(file: File, pos: u64) -> Self {
-        Self {
-            file: Some(file),
-            pos,
-        }
+    pub(crate) fn new(file: File) -> Self {
+        Self { file: Some(file) }
     }
 }
 
@@ -27,19 +27,10 @@ impl Write for TokioFile {
     async fn write_all<B: IoBuf>(&mut self, buf: B) -> (Result<(), Error>, B) {
         debug_assert!(self.file.is_some(), "file is already closed");
 
-        let file = self.file.as_mut().unwrap();
-        if let Err(e) = AsyncSeekExt::seek(file, SeekFrom::Start(self.pos)).await {
-            return (Err(Error::Io(e)), buf);
-        }
-        let buf_len = buf.bytes_init();
-        self.pos += buf_len as u64;
-
         (
-            AsyncWriteExt::write_all(self.file.as_mut().unwrap(), unsafe {
-                &*slice_from_raw_parts(buf.as_ptr(), buf_len)
-            })
-            .await
-            .map_err(Error::from),
+            AsyncWriteExt::write_all(self.file.as_mut().unwrap(), buf.as_slice())
+                .await
+                .map_err(Error::from),
             buf,
         )
     }
@@ -78,13 +69,31 @@ impl Read for TokioFile {
             );
         }
         let file = self.file.as_mut().unwrap();
-        // TODO: Use pread instead of seek + read_exact
-        if let Err(e) = AsyncSeekExt::seek(file, SeekFrom::Start(pos)).await {
-            return (Err(Error::Io(e)), buf);
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::FileExt;
+
+            let f = file.as_fd();
+            let result = block_in_place(|| {
+                let buf = buf.as_slice_mut();
+                let file = unsafe { std::fs::File::from_raw_fd(f.as_raw_fd()) };
+                let result = file.read_exact_at(buf, pos).map_err(Error::Io);
+                std::mem::forget(file);
+                result
+            });
+            (result, buf)
         }
-        match AsyncReadExt::read_exact(file, buf.as_slice_mut()).await {
-            Ok(_) => (Ok(()), buf),
-            Err(e) => (Err(Error::Io(e)), buf),
+        #[cfg(not(unix))]
+        {
+            // TODO: Use pread instead of seek + read_exact
+            if let Err(e) = AsyncSeekExt::seek(file, SeekFrom::Start(pos)).await {
+                return (Err(Error::Io(e)), buf);
+            }
+            match AsyncReadExt::read_exact(file, buf.as_slice_mut()).await {
+                Ok(_) => (Ok(()), buf),
+                Err(e) => (Err(Error::Io(e)), buf),
+            }
         }
     }
 

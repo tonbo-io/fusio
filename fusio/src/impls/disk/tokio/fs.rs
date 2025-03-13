@@ -30,16 +30,12 @@ impl Fs for TokioFs {
             .read(options.read)
             .write(options.write)
             .create(options.create)
+            .truncate(options.truncate)
+            .append(!options.truncate)
             .open(&local_path)
             .await?;
 
-        let pos = if options.truncate {
-            0
-        } else {
-            file.metadata().await?.len()
-        };
-
-        Ok(TokioFile::new(file, pos))
+        Ok(TokioFile::new(file))
     }
 
     async fn create_dir_all(path: &Path) -> Result<(), Error> {
