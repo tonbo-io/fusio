@@ -20,7 +20,7 @@ fn multi_write(c: &mut Criterion) {
                     .with_entries(32768)
                     .build()
                     .unwrap()
-                    .block_on(read_parquet(path.clone()))
+                    .block_on(write_parquet(path.clone()))
             });
         },
     );

@@ -208,7 +208,6 @@ pub async fn copy(
 mod tests {
 
     #[cfg(all(feature = "tokio", not(feature = "completion-based")))]
-    // #[tokio::test]
     #[tokio::test(flavor = "multi_thread")]
     async fn test_dyn_fs() {
         use tempfile::tempfile;

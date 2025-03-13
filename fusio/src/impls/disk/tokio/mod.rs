@@ -1,6 +1,8 @@
 #[cfg(feature = "fs")]
 pub mod fs;
 
+#[cfg(not(unix))]
+use std::io::SeekFrom;
 #[cfg(unix)]
 use std::os::fd::{AsRawFd, FromRawFd};
 #[cfg(unix)]
@@ -8,13 +10,8 @@ use std::os::unix::fs::FileExt;
 use std::ptr::slice_from_raw_parts;
 
 #[cfg(not(unix))]
-use std::io::SeekFrom;
-#[cfg(not(unix))]
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
-
-use tokio::fs::File;
-use tokio::io::AsyncWriteExt;
-use tokio::task::block_in_place;
+use tokio::{fs::File, io::AsyncWriteExt, task::block_in_place};
 
 use crate::{buf::IoBufMut, Error, IoBuf, Read, Write};
 
@@ -35,11 +32,12 @@ impl Write for TokioFile {
     async fn write_all<B: IoBuf>(&mut self, buf: B) -> (Result<(), Error>, B) {
         debug_assert!(self.file.is_some(), "file is already closed");
 
+        let file = self.file.as_mut().unwrap();
         let buf_len = buf.bytes_init();
 
         let pos = self.pos;
         self.pos += buf.bytes_init() as u64;
-        let file = self.file.as_mut().unwrap();
+
         #[cfg(unix)]
         {
             let file = file.as_raw_fd();
@@ -164,14 +162,6 @@ impl Read for TokioFile {
                 Err(e) => (Err(Error::Io(e)), buf),
             }
         }
-        // // TODO: Use pread instead of seek + read_exact
-        // if let Err(e) = AsyncSeekExt::seek(file, SeekFrom::Start(pos)).await {
-        //     return (Err(Error::Io(e)), buf);
-        // }
-        // match AsyncReadExt::read_to_end(file, &mut buf).await {
-        //     Ok(_) => (Ok(()), buf),
-        //     Err(e) => (Err(Error::Io(e)), buf),
-        // }
     }
 
     async fn size(&self) -> Result<u64, Error> {

@@ -222,7 +222,7 @@ mod tests {
     }
 
     #[cfg(feature = "tokio")]
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_tokio_basic_write() {
         basic_write().await;
     }
@@ -234,7 +234,7 @@ mod tests {
     }
 
     #[cfg(feature = "tokio")]
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_tokio_async_writer() {
         async_writer().await;
     }

@@ -594,7 +594,7 @@ mod tests {
     }
 
     #[cfg(all(feature = "tokio", not(target_arch = "wasm32")))]
-    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_read_exact() {
         use tempfile::tempfile;
         use tokio::fs::File;
