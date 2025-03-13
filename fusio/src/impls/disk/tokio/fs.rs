@@ -39,7 +39,7 @@ impl Fs for TokioFs {
             file.metadata().await?.len()
         };
 
-        Ok(TokioFile::new(file, pos))
+        Ok(TokioFile::new(file, pos).await?)
     }
 
     async fn create_dir_all(path: &Path) -> Result<(), Error> {
