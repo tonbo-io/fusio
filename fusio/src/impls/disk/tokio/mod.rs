@@ -15,20 +15,31 @@ use tokio::{
 use crate::{buf::IoBufMut, Error, IoBuf, Read, Write};
 
 pub struct TokioFile {
-    file: Option<File>,
+    file: File,
 }
+
 impl TokioFile {
     pub(crate) fn new(file: File) -> Self {
-        Self { file: Some(file) }
+        Self { file }
+    }
+}
+
+impl AsRef<File> for TokioFile {
+    fn as_ref(&self) -> &File {
+        &self.file
+    }
+}
+
+impl AsMut<File> for TokioFile {
+    fn as_mut(&mut self) -> &mut File {
+        &mut self.file
     }
 }
 
 impl Write for TokioFile {
     async fn write_all<B: IoBuf>(&mut self, buf: B) -> (Result<(), Error>, B) {
-        debug_assert!(self.file.is_some(), "file is already closed");
-
         (
-            AsyncWriteExt::write_all(self.file.as_mut().unwrap(), buf.as_slice())
+            AsyncWriteExt::write_all(&mut self.file, buf.as_slice())
                 .await
                 .map_err(Error::from),
             buf,
@@ -36,45 +47,24 @@ impl Write for TokioFile {
     }
 
     async fn flush(&mut self) -> Result<(), Error> {
-        debug_assert!(self.file.is_some(), "file is already closed");
-
-        AsyncWriteExt::flush(self.file.as_mut().unwrap())
+        AsyncWriteExt::flush(&mut self.file)
             .await
             .map_err(Error::from)
     }
 
     async fn close(&mut self) -> Result<(), Error> {
-        debug_assert!(self.file.is_some(), "file is already closed");
-
-        let file = self.file.as_mut().unwrap();
-        AsyncWriteExt::flush(file).await.map_err(Error::from)?;
-        File::shutdown(file).await?;
-        self.file.take();
+        File::shutdown(&mut self.file).await?;
         Ok(())
     }
 }
 
 impl Read for TokioFile {
     async fn read_exact_at<B: IoBufMut>(&mut self, mut buf: B, pos: u64) -> (Result<(), Error>, B) {
-        debug_assert!(self.file.is_some(), "file is already closed");
-
-        let size = self.size().await.unwrap();
-        if size < pos + buf.bytes_init() as u64 {
-            return (
-                Err(Error::Io(std::io::Error::new(
-                    std::io::ErrorKind::UnexpectedEof,
-                    "Read unexpected eof",
-                ))),
-                buf,
-            );
-        }
-        let file = self.file.as_mut().unwrap();
-
         #[cfg(unix)]
         {
             use std::os::unix::fs::FileExt;
 
-            let f = file.as_fd();
+            let f = self.file.as_fd();
             let result = block_in_place(|| {
                 let buf = buf.as_slice_mut();
                 let file = unsafe { std::fs::File::from_raw_fd(f.as_raw_fd()) };
@@ -86,11 +76,10 @@ impl Read for TokioFile {
         }
         #[cfg(not(unix))]
         {
-            // TODO: Use pread instead of seek + read_exact
-            if let Err(e) = AsyncSeekExt::seek(file, SeekFrom::Start(pos)).await {
+            if let Err(e) = AsyncSeekExt::seek(&mut self.file, SeekFrom::Start(pos)).await {
                 return (Err(Error::Io(e)), buf);
             }
-            match AsyncReadExt::read_exact(file, buf.as_slice_mut()).await {
+            match AsyncReadExt::read_exact(&mut self.file, buf.as_slice_mut()).await {
                 Ok(_) => (Ok(()), buf),
                 Err(e) => (Err(Error::Io(e)), buf),
             }
@@ -98,22 +87,17 @@ impl Read for TokioFile {
     }
 
     async fn read_to_end_at(&mut self, mut buf: Vec<u8>, pos: u64) -> (Result<(), Error>, Vec<u8>) {
-        debug_assert!(self.file.is_some(), "file is already closed");
-
-        let file = self.file.as_mut().unwrap();
         // TODO: Use pread instead of seek + read_exact
-        if let Err(e) = AsyncSeekExt::seek(file, SeekFrom::Start(pos)).await {
+        if let Err(e) = AsyncSeekExt::seek(&mut self.file, SeekFrom::Start(pos)).await {
             return (Err(Error::Io(e)), buf);
         }
-        match AsyncReadExt::read_to_end(file, &mut buf).await {
+        match AsyncReadExt::read_to_end(&mut self.file, &mut buf).await {
             Ok(_) => (Ok(()), buf),
             Err(e) => (Err(Error::Io(e)), buf),
         }
     }
 
     async fn size(&self) -> Result<u64, Error> {
-        debug_assert!(self.file.is_some(), "file is already closed");
-
-        Ok(self.file.as_ref().unwrap().metadata().await?.len())
+        Ok(self.file.metadata().await?.len())
     }
 }
