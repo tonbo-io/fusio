@@ -6,8 +6,6 @@ use std::ops::{Bound, RangeBounds};
 
 pub use slice::*;
 
-use crate::MaybeSend;
-
 #[cfg(not(feature = "completion-based"))]
 pub unsafe trait MaybeOwned {
     //! A trait for determining whether the buffer is owned or borrowed.
@@ -28,7 +26,7 @@ pub unsafe trait MaybeOwned: 'static {}
 #[cfg(feature = "completion-based")]
 unsafe impl<T: 'static> MaybeOwned for T {}
 
-pub trait IoBuf: Unpin + Sized + MaybeOwned + MaybeSend {
+pub trait IoBuf: Unpin + Sized + Send + MaybeOwned {
     //! A poll-based I/O and completion-based I/O buffer compatible buffer.
     //! The [`IoBuf`] trait is implemented by buffer types that can be used with [`crate::Read`].
     //! Fusio has already implemented this trait for common buffer types
