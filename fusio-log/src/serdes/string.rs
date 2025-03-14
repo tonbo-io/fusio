@@ -58,7 +58,7 @@ mod tests {
 
     use crate::serdes::{Decode, Encode};
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_encode_decode() {
         let source_0 = "Hello! World";
         let source_1 = "Hello! Tonbo".to_string();

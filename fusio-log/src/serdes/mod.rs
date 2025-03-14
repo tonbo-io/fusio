@@ -85,7 +85,7 @@ mod tests {
 
     use super::*;
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_encode_decode() {
         // Implement a simple struct that implements Encode and Decode
         struct TestStruct(u32);

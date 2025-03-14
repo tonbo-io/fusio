@@ -28,7 +28,7 @@ fn write(c: &mut Criterion) {
 
     let fs = TokioFs;
     let file = Rc::new(RefCell::new(runtime.block_on(async {
-        fs.open_options(&path, OpenOptions::default().write(true).append(true))
+        fs.open_options(&path, OpenOptions::default().write(true))
             .await
             .unwrap()
     })));
@@ -52,7 +52,7 @@ fn write(c: &mut Criterion) {
 
             async move {
                 tokio::io::AsyncWriteExt::write_all(
-                    &mut *(*file).borrow_mut(),
+                    file.borrow_mut().as_mut(),
                     &bytes.as_ref()[..],
                 )
                 .await
@@ -82,11 +82,13 @@ fn read(c: &mut Criterion) {
     let fs = TokioFs;
     let file = Rc::new(RefCell::new(runtime.block_on(async {
         let mut file = fs
-            .open_options(&path, OpenOptions::default().write(true).append(true))
+            .open_options(&path, OpenOptions::default().write(true))
             .await
             .unwrap();
-        let (result, _) = file.write_all(&write_bytes[..]).await;
-        result.unwrap();
+        for _ in 0..1024 * 1024 {
+            let (result, _) = file.write_all(&write_bytes[..]).await;
+            result.unwrap();
+        }
         file
     })));
 
@@ -96,11 +98,11 @@ fn read(c: &mut Criterion) {
             let mut bytes = [0u8; 4096];
 
             async move {
-                fusio::dynamic::DynSeek::seek(&mut *(*file).borrow_mut(), 0)
-                    .await
-                    .unwrap();
+                let random_pos = rand::thread_rng().gen_range(0..4096 * 1024 * 1024 - 4096);
+                let file = file.clone();
                 let (result, _) =
-                    fusio::Read::read_exact(&mut *(*file).borrow_mut(), &mut bytes[..]).await;
+                    fusio::Read::read_exact_at(&mut *file.borrow_mut(), &mut bytes[..], random_pos)
+                        .await;
                 result.unwrap();
             }
         })
@@ -112,12 +114,16 @@ fn read(c: &mut Criterion) {
             let mut bytes = [0u8; 4096];
 
             async move {
+                let random_pos = rand::thread_rng().gen_range(0..4096 * 1024 * 1024 - 4096);
+                let file = file.clone();
+                let _ = tokio::io::AsyncSeekExt::seek(
+                    file.borrow_mut().as_mut(),
+                    SeekFrom::Start(random_pos),
+                )
+                .await
+                .unwrap();
                 let _ =
-                    tokio::io::AsyncSeekExt::seek(&mut *(*file).borrow_mut(), SeekFrom::Start(0))
-                        .await
-                        .unwrap();
-                let _ =
-                    tokio::io::AsyncReadExt::read_exact(&mut *(*file).borrow_mut(), &mut bytes[..])
+                    tokio::io::AsyncReadExt::read_exact(file.borrow_mut().as_mut(), &mut bytes[..])
                         .await
                         .unwrap();
             }

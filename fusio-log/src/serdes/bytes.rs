@@ -56,7 +56,7 @@ mod tests {
 
     use crate::serdes::{Decode, Encode};
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_encode_decode() {
         let source = Bytes::from_static(b"hello! Tonbo");
 

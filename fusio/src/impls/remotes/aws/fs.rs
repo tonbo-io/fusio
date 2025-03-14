@@ -318,7 +318,7 @@ mod tests {
     use crate::{fs::Fs, path::Path};
 
     #[cfg(feature = "tokio-http")]
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn list_and_remove() {
         use std::{env, pin::pin};
 
@@ -353,7 +353,7 @@ mod tests {
 
     #[ignore]
     #[cfg(all(feature = "tokio-http", not(feature = "completion-based")))]
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn copy() {
         use std::sync::Arc;
 

@@ -65,7 +65,7 @@ mod tests {
         feature = "aws",
         not(feature = "completion-based")
     ))]
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_diff_fs_copy() -> Result<(), crate::Error> {
         use std::sync::Arc;
 

@@ -185,13 +185,13 @@ pub(crate) mod tests {
     }
 
     #[cfg(all(feature = "tokio", not(feature = "completion-based")))]
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_buf_read() {
         use tempfile::tempfile;
 
         use crate::disk::tokio::TokioFile;
 
-        let mut file = TokioFile::new(tokio::fs::File::from_std(tempfile().unwrap()), 0);
+        let mut file = TokioFile::new(tokio::fs::File::from_std(tempfile().unwrap()));
         let _ = file
             .write_all([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15].as_slice())
             .await;
@@ -236,7 +236,7 @@ pub(crate) mod tests {
     }
 
     #[cfg(all(feature = "tokio", not(feature = "completion-based")))]
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_buf_read_write() {
         use tempfile::tempfile;
 
@@ -245,7 +245,7 @@ pub(crate) mod tests {
             Read, Write,
         };
 
-        let file = TokioFile::new(tokio::fs::File::from_std(tempfile().unwrap()), 0);
+        let file = TokioFile::new(tokio::fs::File::from_std(tempfile().unwrap()));
         let mut writer = BufWriter::new(file, 4);
         {
             let _ = writer.write_all("Hello".as_bytes()).await;
@@ -284,13 +284,13 @@ pub(crate) mod tests {
     }
 
     #[cfg(all(feature = "tokio", not(feature = "completion-based")))]
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_buf_read_eof() {
         use tempfile::tempfile;
 
         use crate::disk::tokio::TokioFile;
 
-        let mut file = TokioFile::new(tokio::fs::File::from_std(tempfile().unwrap()), 0);
+        let mut file = TokioFile::new(tokio::fs::File::from_std(tempfile().unwrap()));
         let _ = file.write_all([0, 1, 2].as_slice()).await;
 
         let mut reader = BufReader::new(file, 8).await.unwrap();

@@ -116,7 +116,7 @@ impl<O: ObjectStore> Write for S3File<O> {
 #[cfg(test)]
 mod tests {
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_s3() {
         use std::{env, env::VarError, sync::Arc};
 

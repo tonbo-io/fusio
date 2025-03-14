@@ -53,7 +53,7 @@ mod tests {
 
     use crate::serdes::{Decode, Encode};
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_encode_decode() {
         let source_0 = Some(1u64);
         let source_1 = None;

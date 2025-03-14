@@ -257,7 +257,7 @@ mod tests {
 
     #[ignore]
     #[cfg(all(feature = "tokio-http", not(feature = "completion-based")))]
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn write_and_read_s3_file() {
         use std::sync::Arc;
 
