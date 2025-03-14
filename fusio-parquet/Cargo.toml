@@ -11,7 +11,7 @@ default = []
 tokio = ["fusio/tokio"]
 web = ["fusio/opfs"]
 monoio = ["fusio/monoio", "dep:monoio"]
-bench-tokio = ["dep:tokio"]
+bench = ["dep:monoio", "dep:tokio", "tokio"]
 
 [[bench]]
 harness = false
@@ -20,21 +20,15 @@ path = "../benches/parquet/common.rs"
 
 [[bench]]
 harness = false
-name = "parquet_raw"
-path = "../benches/parquet/parquet.rs"
-required-features = ["tokio", "bench-tokio"]
-
-[[bench]]
-harness = false
 name = "parquet_tokio"
 path = "../benches/parquet/tokio.rs"
-required-features = ["tokio", "bench-tokio"]
+required-features = ["bench"]
 
 [[bench]]
 harness = false
 name = "parquet_monoio"
 path = "../benches/parquet/monoio.rs"
-required-features = ["monoio"]
+required-features = ["bench"]
 
 [dependencies]
 bytes = { workspace = true }

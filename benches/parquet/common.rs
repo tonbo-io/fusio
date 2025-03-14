@@ -9,12 +9,12 @@ use fusio_parquet::{reader::AsyncReader, writer::AsyncWriter};
 use parquet::arrow::{
     arrow_reader::{ArrowReaderBuilder, RowSelection},
     async_reader::AsyncFileReader,
-    AsyncArrowWriter, ParquetRecordBatchStreamBuilder,
+    AsyncArrowWriter,
 };
 use rand::{distributions::Alphanumeric, thread_rng, Rng};
 
-const RECORD_PER_BATCH: usize = 1000;
-const ITERATION_TIMES: usize = 500_000;
+const RECORD_PER_BATCH: usize = 100;
+const ITERATION_TIMES: usize = 5000;
 
 pub(crate) async fn write_parquet(path: Path) {
     let fs = LocalFs {};
