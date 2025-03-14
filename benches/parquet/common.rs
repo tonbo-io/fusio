@@ -15,22 +15,25 @@ use rand::{distributions::Alphanumeric, thread_rng, Rng};
 
 const RECORD_PER_BATCH: usize = 100;
 const ITERATION_TIMES: usize = 5000;
+pub(crate) const READ_PARQUET_FILE_PATH: &str = "../benches/parquet/data.parquet";
 
-pub(crate) async fn write_parquet(path: Path) {
+pub(crate) async fn write_parquet(path: &Path, data: &[RecordBatch]) {
     let fs = LocalFs {};
     let options = OpenOptions::default().create(true).write(true);
 
     let writer = AsyncWriter::new(Box::new(fs.open_options(&path, options).await.unwrap()));
 
     let mut writer = AsyncArrowWriter::try_new(writer, schema(), None).unwrap();
-    for _ in 0..ITERATION_TIMES {
-        writer.write(&generate_record_batch()).await.unwrap();
+    for batch in data {
+        writer.write(&batch).await.unwrap();
     }
     writer.close().await.unwrap();
 }
 
-#[cfg(feature = "tokio")]
-pub(crate) async fn write_raw_tokio_parquet(path: impl AsRef<std::path::Path>) {
+pub(crate) async fn write_raw_tokio_parquet(
+    path: impl AsRef<std::path::Path>,
+    data: &[RecordBatch],
+) {
     let file = tokio::fs::OpenOptions::default()
         .create(true)
         .write(true)
@@ -38,13 +41,13 @@ pub(crate) async fn write_raw_tokio_parquet(path: impl AsRef<std::path::Path>) {
         .await
         .unwrap();
     let mut writer = AsyncArrowWriter::try_new(file, schema(), None).unwrap();
-    for _ in 0..ITERATION_TIMES {
-        writer.write(&generate_record_batch()).await.unwrap();
+    for batch in data {
+        writer.write(&batch).await.unwrap();
     }
     writer.close().await.unwrap();
 }
 
-pub(crate) async fn read_parquet(path: Path) {
+pub(crate) async fn read_parquet(path: &Path) {
     let fs = LocalFs {};
     let options = OpenOptions::default().create(true).write(true);
 
@@ -55,7 +58,6 @@ pub(crate) async fn read_parquet(path: Path) {
     random_read(reader).await;
 }
 
-#[cfg(feature = "tokio")]
 pub(crate) async fn read_raw_parquet(path: impl AsRef<std::path::Path>) {
     let file = tokio::fs::File::open(path).await.unwrap();
     random_read(file).await;
@@ -123,19 +125,35 @@ fn generate_record_batch() -> RecordBatch {
     .unwrap()
 }
 
+pub(crate) fn generate_record_batches() -> Vec<RecordBatch> {
+    let mut data = vec![];
+    for _ in 0..ITERATION_TIMES {
+        data.push(generate_record_batch());
+    }
+    data
+}
+
 fn generate_num(range: Range<usize>) -> usize {
     let mut rng = thread_rng();
     rng.gen_range(range)
 }
 
-fn load_data() {
+pub(crate) fn load_data() {
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .unwrap()
-        .block_on(write_raw_tokio_parquet("../benches/parquet/data.parquet"))
-}
-
-fn main() {
-    load_data();
+        .block_on(async {
+            let file = tokio::fs::OpenOptions::default()
+                .create(true)
+                .write(true)
+                .open(READ_PARQUET_FILE_PATH)
+                .await
+                .unwrap();
+            let mut writer = AsyncArrowWriter::try_new(file, schema(), None).unwrap();
+            for _ in 0..ITERATION_TIMES {
+                writer.write(&generate_record_batch()).await.unwrap();
+            }
+            writer.close().await.unwrap();
+        });
 }

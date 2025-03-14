@@ -1,50 +1,43 @@
-use common::{read_parquet, write_parquet};
+use common::{generate_record_batches, read_parquet, write_parquet, READ_PARQUET_FILE_PATH};
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use monoio::RuntimeBuilder;
 use tempfile::tempdir;
 
 mod common;
 
-fn multi_write(c: &mut Criterion) {
+fn bench_monoio_write(c: &mut Criterion) {
     let tmp_dir = tempdir().unwrap();
     let path = fusio::path::Path::from_filesystem_path(tmp_dir.path())
         .unwrap()
         .child("monoio");
-
-    c.bench_with_input(
-        BenchmarkId::new("parquet_monoio_write", path.clone()),
-        &path,
-        |b, path| {
-            b.iter(|| {
-                RuntimeBuilder::<monoio::IoUringDriver>::new()
-                    .with_entries(32768)
-                    .build()
-                    .unwrap()
-                    .block_on(write_parquet(path.clone()))
-            });
-        },
-    );
+    let data = generate_record_batches();
+    c.bench_with_input("parquet_monoio_write", &data, |b, data| {
+        b.iter(|| {
+            RuntimeBuilder::<monoio::IoUringDriver>::new()
+                .with_entries(32768)
+                .build()
+                .unwrap()
+                .block_on(write_parquet(&path, data))
+        });
+    });
 }
 
-fn random_read(c: &mut Criterion) {
-    let path = fusio::path::Path::from_filesystem_path("../benches/parquet")
-        .unwrap()
-        .child("data.parquet");
-
-    c.bench_with_input(
-        BenchmarkId::new("parquet_monoio_random_read", path.clone()),
-        &path,
-        |b, path| {
-            b.iter(|| {
-                RuntimeBuilder::<monoio::IoUringDriver>::new()
-                    .with_entries(32768)
-                    .build()
-                    .unwrap()
-                    .block_on(read_parquet(path.clone()))
-            });
-        },
-    );
+fn bench_monoio_read(c: &mut Criterion) {
+    let path = std::path::Path::new(READ_PARQUET_FILE_PATH);
+    if !path.exists() {
+        load_data();
+    }
+    let path = fusio::path::Path::from_filesystem_path(READ_PARQUET_FILE_PATH).unwrap();
+    c.bench_with_input("parquet_monoio_random_read", &path, |b, path| {
+        b.iter(|| {
+            RuntimeBuilder::<monoio::IoUringDriver>::new()
+                .with_entries(32768)
+                .build()
+                .unwrap()
+                .block_on(read_parquet(path))
+        });
+    });
 }
 
-criterion_group!(benches, multi_write, random_read);
+criterion_group!(benches, bench_monoio_write, bench_monoio_read);
 criterion_main!(benches);
