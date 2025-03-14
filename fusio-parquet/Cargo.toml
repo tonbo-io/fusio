@@ -11,7 +11,7 @@ default = []
 tokio = ["fusio/tokio"]
 web = ["fusio/opfs"]
 monoio = ["fusio/monoio", "dep:monoio"]
-bench = ["dep:monoio", "dep:tokio", "tokio"]
+bench = ["dep:monoio", "dep:tokio"]
 
 [[bench]]
 harness = false
@@ -22,13 +22,13 @@ path = "../benches/parquet/common.rs"
 harness = false
 name = "parquet_tokio"
 path = "../benches/parquet/tokio.rs"
-required-features = ["bench"]
+required-features = ["bench", "tokio"]
 
 [[bench]]
 harness = false
 name = "parquet_monoio"
 path = "../benches/parquet/monoio.rs"
-required-features = ["bench"]
+required-features = ["bench", "monoio"]
 
 [dependencies]
 bytes = { workspace = true }
@@ -40,7 +40,7 @@ parquet = { version = "54", default-features = false, features = [
     "arrow",
     "async",
 ] }
-tokio = { version = "1.40", optional = true, features = ["rt-multi-thread"] }
+tokio = { version = "1.40", optional = true, features = ["rt-multi-thread", "fs"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen-futures = { version = "0.4.45" }
@@ -56,4 +56,4 @@ wasm-bindgen = "0.2.95"
 wasm-bindgen-test = "0.3.9"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
-criterion = { version = "0.5", features = ["html_reports"] }
+criterion = { version = "0.5", features = ["async_tokio", "html_reports"] }
