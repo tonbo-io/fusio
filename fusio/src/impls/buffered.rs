@@ -185,7 +185,7 @@ pub(crate) mod tests {
     }
 
     #[cfg(all(feature = "tokio", not(feature = "completion-based")))]
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_buf_read() {
         use tempfile::tempfile;
 
@@ -236,7 +236,7 @@ pub(crate) mod tests {
     }
 
     #[cfg(all(feature = "tokio", not(feature = "completion-based")))]
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_buf_read_write() {
         use tempfile::tempfile;
 
@@ -284,7 +284,7 @@ pub(crate) mod tests {
     }
 
     #[cfg(all(feature = "tokio", not(feature = "completion-based")))]
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_buf_read_eof() {
         use tempfile::tempfile;
 

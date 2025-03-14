@@ -432,7 +432,7 @@ mod tests {
     }
 
     #[cfg(feature = "tokio")]
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_tokio_async_reader_with_prefetch_footer_size() {
         async_reader_with_prefetch_footer_size().await;
     }
@@ -444,7 +444,7 @@ mod tests {
     }
 
     #[cfg(feature = "tokio")]
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_tokio_async_reader_with_large_metadata() {
         async_reader_with_large_metadata().await;
     }
