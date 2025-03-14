@@ -128,14 +128,14 @@ fn generate_num(range: Range<usize>) -> usize {
     rng.gen_range(range)
 }
 
-// fn load_data() {
-//     tokio::::new_current_thread()
-//         .enable_all()
-//         .build()
-//         .unwrap()
-//         .block_on(write_raw_tokio_parquet("../benches/parquet/data.parquet"))
-// }
+fn load_data() {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(write_raw_tokio_parquet("../benches/parquet/data.parquet"))
+}
 
-// fn main() {
-//     load_data();
-// }
+fn main() {
+    load_data();
+}
