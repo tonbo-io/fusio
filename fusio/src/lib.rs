@@ -559,8 +559,8 @@ mod tests {
 
         let read = tempfile().unwrap();
         let write = read.try_clone().unwrap();
-        let read_file = TokioFile::new(File::from_std(read), 0);
-        let write_file = TokioFile::new(File::from_std(write), 0);
+        let read_file = TokioFile::new(File::from_std(read));
+        let write_file = TokioFile::new(File::from_std(write));
         write_and_read(write_file, read_file).await;
     }
 
@@ -601,7 +601,7 @@ mod tests {
 
         use crate::disk::tokio::TokioFile;
 
-        let mut file = TokioFile::new(File::from_std(tempfile().unwrap()), 0);
+        let mut file = TokioFile::new(File::from_std(tempfile().unwrap()));
         let (result, _) = file.write_all(&b"hello, world"[..]).await;
         result.unwrap();
         let (result, buf) = file.read_exact_at(vec![0u8; 5], 0).await;

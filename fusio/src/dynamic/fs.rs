@@ -214,7 +214,7 @@ mod tests {
 
         use crate::{disk::tokio::TokioFile, Write};
 
-        let file = TokioFile::new(tokio::fs::File::from_std(tempfile().unwrap()), 0);
+        let file = TokioFile::new(tokio::fs::File::from_std(tempfile().unwrap()));
         let mut dyn_file: Box<dyn super::DynFile> = Box::new(file);
         let buf = [24, 9, 24, 0];
         let (result, _) = dyn_file.write_all(&buf[..]).await;

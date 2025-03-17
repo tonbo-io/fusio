@@ -7,7 +7,6 @@ use std::io::SeekFrom;
 use std::os::fd::{AsRawFd, FromRawFd};
 #[cfg(unix)]
 use std::os::unix::fs::FileExt;
-use std::ptr::slice_from_raw_parts;
 
 #[cfg(not(unix))]
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
@@ -17,38 +16,25 @@ use crate::{buf::IoBufMut, Error, IoBuf, Read, Write};
 
 pub struct TokioFile {
     file: Option<File>,
-    pos: u64,
 }
 impl TokioFile {
-    pub(crate) fn new(file: File, pos: u64) -> Self {
-        Self {
-            file: Some(file),
-            pos,
-        }
+    pub(crate) fn new(file: File) -> Self {
+        Self { file: Some(file) }
     }
 }
 
 impl Write for TokioFile {
     async fn write_all<B: IoBuf>(&mut self, buf: B) -> (Result<(), Error>, B) {
         debug_assert!(self.file.is_some(), "file is already closed");
-
         let file = self.file.as_mut().unwrap();
-        let buf_len = buf.bytes_init();
-
-        let pos = self.pos;
-        self.pos += buf.bytes_init() as u64;
 
         #[cfg(unix)]
         {
             let file = file.as_raw_fd();
             let result = block_in_place(|| {
-                let file = unsafe { std::fs::File::from_raw_fd(file) };
-                let res = file
-                    .write_all_at(
-                        unsafe { &*slice_from_raw_parts(buf.as_ptr(), buf_len) },
-                        pos,
-                    )
-                    .map_err(Error::Io);
+                let buf = buf.as_slice();
+                let mut file = unsafe { std::fs::File::from_raw_fd(file) };
+                let res = std::io::Write::write_all(&mut file, buf).map_err(Error::Io);
                 std::mem::forget(file);
                 res
             });
@@ -56,15 +42,10 @@ impl Write for TokioFile {
         }
         #[cfg(not(unix))]
         {
-            if let Err(e) = AsyncSeekExt::seek(&mut file, SeekFrom::Start(pos)).await {
-                return (Err(Error::Io(e)), buf);
-            }
             (
-                AsyncWriteExt::write_all(self.file.as_mut().unwrap(), unsafe {
-                    &*slice_from_raw_parts(buf.as_ptr(), buf_len)
-                })
-                .await
-                .map_err(Error::from),
+                AsyncWriteExt::write_all(file, buf.as_slice())
+                    .await
+                    .map_err(Error::from),
                 buf,
             )
         }
@@ -82,7 +63,6 @@ impl Write for TokioFile {
         debug_assert!(self.file.is_some(), "file is already closed");
 
         let file = self.file.as_mut().unwrap();
-        AsyncWriteExt::flush(file).await.map_err(Error::from)?;
         File::shutdown(file).await?;
         self.file.take();
         Ok(())
@@ -92,17 +72,6 @@ impl Write for TokioFile {
 impl Read for TokioFile {
     async fn read_exact_at<B: IoBufMut>(&mut self, mut buf: B, pos: u64) -> (Result<(), Error>, B) {
         debug_assert!(self.file.is_some(), "file is already closed");
-
-        let size = self.size().await.unwrap();
-        if size < pos + buf.bytes_init() as u64 {
-            return (
-                Err(Error::Io(std::io::Error::new(
-                    std::io::ErrorKind::UnexpectedEof,
-                    "Read unexpected eof",
-                ))),
-                buf,
-            );
-        }
         let file = self.file.as_mut().unwrap();
 
         #[cfg(unix)]

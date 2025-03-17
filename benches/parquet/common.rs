@@ -16,41 +16,38 @@ use parquet::{
 };
 use rand::{distributions::Alphanumeric, thread_rng, Rng};
 
-const RECORD_PER_BATCH: usize = 1000;
-const ITERATION_TIMES: usize = 5000;
+const RECORD_PER_BATCH: usize = 1024;
+
 pub(crate) const READ_PARQUET_FILE_PATH: &str = "../benches/parquet/data.parquet";
 
-pub(crate) async fn write_parquet(path: &Path, data: &[RecordBatch]) {
+pub(crate) async fn write_parquet(path: &Path, data: &RecordBatch) {
     let fs = LocalFs {};
-    let options = OpenOptions::default().create(true).write(true);
+    let options = OpenOptions::default()
+        .create(true)
+        .truncate(true)
+        .write(true);
 
-    let writer = AsyncWriter::new(Box::new(fs.open_options(&path, options).await.unwrap()));
+    let writer = AsyncWriter::new(Box::new(fs.open_options(path, options).await.unwrap()));
 
     let mut writer = AsyncArrowWriter::try_new(writer, schema(), None).unwrap();
-    for batch in data {
-        writer.write(&batch).await.unwrap();
-    }
+    writer.write(data).await.unwrap();
     writer.close().await.unwrap();
 }
 
-pub(crate) async fn write_raw_tokio_parquet(
-    path: impl AsRef<std::path::Path>,
-    data: &[RecordBatch],
-) {
+pub(crate) async fn write_raw_tokio_parquet(path: impl AsRef<std::path::Path>, data: &RecordBatch) {
     let file = tokio::fs::OpenOptions::default()
         .create(true)
         .write(true)
+        .truncate(true)
         .open(path)
         .await
         .unwrap();
     let mut writer = AsyncArrowWriter::try_new(file, schema(), None).unwrap();
-    for batch in data {
-        writer.write(&batch).await.unwrap();
-    }
+    writer.write(data).await.unwrap();
     writer.close().await.unwrap();
 }
 
-pub async fn read_parquet(path: &Path) {
+pub async fn read_parquet(path: Path) {
     let fs = LocalFs {};
     let options = OpenOptions::default().create(true).write(true);
 
@@ -61,7 +58,7 @@ pub async fn read_parquet(path: &Path) {
     random_read(reader).await;
 }
 
-pub(crate) async fn read_raw_parquet(path: impl AsRef<std::path::Path>) {
+pub(crate) async fn read_raw_parquet(path: std::path::PathBuf) {
     let file = tokio::fs::File::open(path).await.unwrap();
     random_read(file).await;
 }
@@ -82,20 +79,21 @@ where
     let row_group = metadata.row_group(selected_row_group);
     let num_rows = row_group.num_rows() as usize;
 
-    let left = generate_num(0..num_rows);
-    let right = generate_num(left..num_rows);
+    let left = generate_num(0..num_rows - 512);
 
     let mut reader = builder
         .with_row_groups(vec![selected_row_group])
         .with_row_selection(RowSelection::from_consecutive_ranges(
-            [left..right].into_iter(),
+            [left..left + 512].into_iter(),
             num_rows,
         ))
         .build()
         .unwrap();
 
-    while let Some(mut group) = reader.next_row_group().await.unwrap() {
-        while let Some(_) = group.next() {}
+    while let Some(group) = reader.next_row_group().await.unwrap() {
+        for batch in group {
+            batch.unwrap();
+        }
     }
 }
 
@@ -107,7 +105,7 @@ fn schema() -> SchemaRef {
     ]))
 }
 
-fn generate_record_batch() -> RecordBatch {
+pub(crate) fn generate_record_batch() -> RecordBatch {
     let mut rng = thread_rng();
     let mut ids = Vec::with_capacity(RECORD_PER_BATCH);
     let mut names = Vec::with_capacity(RECORD_PER_BATCH);
@@ -133,14 +131,6 @@ fn generate_record_batch() -> RecordBatch {
     .unwrap()
 }
 
-pub(crate) fn generate_record_batches() -> Vec<RecordBatch> {
-    let mut data = vec![];
-    for _ in 0..ITERATION_TIMES {
-        data.push(generate_record_batch());
-    }
-    data
-}
-
 fn generate_num(range: Range<usize>) -> usize {
     let mut rng = thread_rng();
     rng.gen_range(range)
@@ -159,10 +149,12 @@ pub(crate) fn load_data() {
                 .await
                 .unwrap();
             let prop = WriterProperties::builder()
+                // .set_data_page_size_limit(8192)
+                // .set_dictionary_page_size_limit(8192)
                 .set_statistics_enabled(EnabledStatistics::Chunk)
                 .build();
             let mut writer = AsyncArrowWriter::try_new(file, schema(), Some(prop)).unwrap();
-            for _ in 0..ITERATION_TIMES {
+            for _ in 0..1024 * 16 {
                 writer.write(&generate_record_batch()).await.unwrap();
             }
             writer.close().await.unwrap();

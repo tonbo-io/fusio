@@ -7,16 +7,11 @@ repository.workspace = true
 version.workspace = true
 
 [features]
+bench = ["dep:monoio", "dep:tokio"]
 default = []
+monoio = ["dep:monoio", "fusio/monoio"]
 tokio = ["fusio/tokio"]
 web = ["fusio/opfs"]
-monoio = ["fusio/monoio", "dep:monoio"]
-bench = ["dep:monoio", "dep:tokio"]
-
-[[bench]]
-harness = false
-name = "common"
-path = "../benches/parquet/common.rs"
 
 [[bench]]
 harness = false
@@ -40,13 +35,16 @@ parquet = { version = "54", default-features = false, features = [
     "arrow",
     "async",
 ] }
-tokio = { version = "1.40", optional = true, features = ["rt-multi-thread", "fs"] }
+tokio = { version = "1.40", optional = true, features = [
+    "fs",
+    "rt-multi-thread",
+] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen-futures = { version = "0.4.45" }
 
 [dev-dependencies]
-arrow = "54"
+arrow = { version = "54" }
 rand = "0.8"
 tempfile = "3.12.0"
 tokio = { version = "1.40" }
@@ -56,4 +54,8 @@ wasm-bindgen = "0.2.95"
 wasm-bindgen-test = "0.3.9"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
-criterion = { version = "0.5", features = ["async_tokio", "html_reports"] }
+criterion = { version = "0.5", features = [
+    "async_tokio",
+    "async_futures",
+    "html_reports",
+] }

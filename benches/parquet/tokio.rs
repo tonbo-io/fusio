@@ -1,5 +1,5 @@
 use common::{
-    generate_record_batches, load_data, read_parquet, read_raw_parquet, write_parquet,
+    generate_record_batch, load_data, read_parquet, read_raw_parquet, write_parquet,
     write_raw_tokio_parquet, READ_PARQUET_FILE_PATH,
 };
 use criterion::{criterion_group, criterion_main, Criterion};
@@ -19,7 +19,7 @@ fn bench_write(c: &mut Criterion) {
         .build()
         .unwrap();
 
-    let data = generate_record_batches();
+    let data = generate_record_batch();
 
     let mut group = c.benchmark_group("write");
 
@@ -43,6 +43,7 @@ fn bench_read(c: &mut Criterion) {
     let tokio_path = READ_PARQUET_FILE_PATH;
 
     let tokio_runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
         .worker_threads(1)
         .build()
         .unwrap();
@@ -50,12 +51,14 @@ fn bench_read(c: &mut Criterion) {
     let mut group = c.benchmark_group("random read");
 
     group.bench_with_input("raw tokio read", &tokio_path, |b, path| {
-        b.to_async(&tokio_runtime).iter(|| read_raw_parquet(path));
+        b.to_async(&tokio_runtime)
+            .iter(|| read_raw_parquet(path.into()));
     });
     group.bench_with_input("fusio tokio read", &fusio_path, |b, path| {
-        b.to_async(&tokio_runtime).iter(|| read_parquet(path));
+        b.to_async(&tokio_runtime)
+            .iter(|| read_parquet(path.clone()));
     });
 }
 
-criterion_group!(benches, bench_write, bench_read);
+criterion_group!(benches, bench_read, bench_write);
 criterion_main!(benches);
