@@ -1,5 +1,5 @@
 use common::{
-    generate_record_batches, load_data, read_parquet, read_raw_parquet, write_parquet,
+    generate_record_batch, load_data, read_parquet, read_raw_parquet, write_parquet,
     write_raw_tokio_parquet, READ_PARQUET_FILE_PATH,
 };
 use criterion::{criterion_group, criterion_main, Criterion};
@@ -15,11 +15,11 @@ fn bench_write(c: &mut Criterion) {
     let tokio_path = tmp_dir.path().join("tokio").to_path_buf();
 
     let tokio_runtime = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(1)
+        .worker_threads(4)
         .build()
         .unwrap();
 
-    let data = generate_record_batches();
+    let data = generate_record_batch();
 
     let mut group = c.benchmark_group("write");
 
@@ -57,5 +57,5 @@ fn bench_read(c: &mut Criterion) {
     });
 }
 
-criterion_group!(benches, bench_write, bench_read);
+criterion_group!(benches, bench_read);
 criterion_main!(benches);

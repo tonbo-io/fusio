@@ -91,18 +91,12 @@ impl Write for TokioFile {
 
 impl Read for TokioFile {
     async fn read_exact_at<B: IoBufMut>(&mut self, mut buf: B, pos: u64) -> (Result<(), Error>, B) {
+        // println!(
+        //     "read eact at range: {:?}, len: {:?}",
+        //     pos..pos + buf.bytes_init() as u64,
+        //     buf.bytes_init()
+        // );
         debug_assert!(self.file.is_some(), "file is already closed");
-
-        let size = self.size().await.unwrap();
-        if size < pos + buf.bytes_init() as u64 {
-            return (
-                Err(Error::Io(std::io::Error::new(
-                    std::io::ErrorKind::UnexpectedEof,
-                    "Read unexpected eof",
-                ))),
-                buf,
-            );
-        }
         let file = self.file.as_mut().unwrap();
 
         #[cfg(unix)]

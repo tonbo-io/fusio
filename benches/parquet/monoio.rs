@@ -45,5 +45,5 @@ fn bench_monoio_read(c: &mut Criterion) {
     );
 }
 
-criterion_group!(benches, bench_monoio_write, bench_monoio_read);
+criterion_group!(benches, bench_monoio_read);
 criterion_main!(benches);
