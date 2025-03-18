@@ -16,14 +16,16 @@ use parquet::{
 };
 use rand::{distributions::Alphanumeric, thread_rng, Rng};
 
-const RECORD_PER_BATCH: usize = 1000;
-const ITERATION_TIMES: usize = 5000;
-pub(crate) const READ_PARQUET_FILE_PATH: &str =
-    "/Users/gwo/Idea/fusio/benches/parquet/data.parquet";
+const RECORD_PER_BATCH: usize = 1024;
+
+pub(crate) const READ_PARQUET_FILE_PATH: &str = "../benches/parquet/data.parquet";
 
 pub(crate) async fn write_parquet(path: &Path, data: &RecordBatch) {
     let fs = LocalFs {};
-    let options = OpenOptions::default().create(true).write(true);
+    let options = OpenOptions::default()
+        .create(true)
+        .truncate(true)
+        .write(true);
 
     let writer = AsyncWriter::new(Box::new(fs.open_options(path, options).await.unwrap()));
 
@@ -36,6 +38,7 @@ pub(crate) async fn write_raw_tokio_parquet(path: impl AsRef<std::path::Path>, d
     let file = tokio::fs::OpenOptions::default()
         .create(true)
         .write(true)
+        .truncate(true)
         .open(path)
         .await
         .unwrap();
@@ -44,7 +47,7 @@ pub(crate) async fn write_raw_tokio_parquet(path: impl AsRef<std::path::Path>, d
     writer.close().await.unwrap();
 }
 
-pub async fn read_parquet(path: &Path) {
+pub async fn read_parquet(path: Path) {
     let fs = LocalFs {};
     let options = OpenOptions::default().create(true).write(true);
 
@@ -55,7 +58,7 @@ pub async fn read_parquet(path: &Path) {
     random_read(reader).await;
 }
 
-pub(crate) async fn read_raw_parquet(path: impl AsRef<std::path::Path>) {
+pub(crate) async fn read_raw_parquet(path: std::path::PathBuf) {
     let file = tokio::fs::File::open(path).await.unwrap();
     random_read(file).await;
 }
@@ -77,11 +80,6 @@ where
     let num_rows = row_group.num_rows() as usize;
 
     let left = generate_num(0..num_rows - 512);
-
-    // println!(
-    //     "num_row_groups: {}, selected_row_group: {}, num_rows: {}, left: {}",
-    //     num_row_groups, selected_row_group, num_rows, left
-    // );
 
     let mut reader = builder
         .with_row_groups(vec![selected_row_group])
@@ -151,8 +149,8 @@ pub(crate) fn load_data() {
                 .await
                 .unwrap();
             let prop = WriterProperties::builder()
-                .set_data_page_size_limit(8192)
-                .set_dictionary_page_size_limit(8192)
+                // .set_data_page_size_limit(8192)
+                // .set_dictionary_page_size_limit(8192)
                 .set_statistics_enabled(EnabledStatistics::Chunk)
                 .build();
             let mut writer = AsyncArrowWriter::try_new(file, schema(), Some(prop)).unwrap();

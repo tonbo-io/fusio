@@ -43,19 +43,21 @@ fn bench_read(c: &mut Criterion) {
     let tokio_path = READ_PARQUET_FILE_PATH;
 
     let tokio_runtime = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(1)
+        .enable_all()
         .build()
         .unwrap();
 
     let mut group = c.benchmark_group("random read");
 
     group.bench_with_input("raw tokio read", &tokio_path, |b, path| {
-        b.to_async(&tokio_runtime).iter(|| read_raw_parquet(path));
+        b.to_async(&tokio_runtime)
+            .iter(|| read_raw_parquet(path.into()));
     });
     group.bench_with_input("fusio tokio read", &fusio_path, |b, path| {
-        b.to_async(&tokio_runtime).iter(|| read_parquet(path));
+        b.to_async(&tokio_runtime)
+            .iter(|| read_parquet(path.clone()));
     });
 }
 
-criterion_group!(benches, bench_read);
+criterion_group!(benches, bench_read, bench_write);
 criterion_main!(benches);

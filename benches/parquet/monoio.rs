@@ -1,8 +1,12 @@
+use std::cell::RefCell;
+use std::future::Future;
+
 use common::{
-    generate_record_batches, load_data, read_parquet, write_parquet, READ_PARQUET_FILE_PATH,
+    generate_record_batch, load_data, read_parquet, write_parquet, READ_PARQUET_FILE_PATH,
 };
+use criterion::async_executor::{AsyncExecutor, FuturesExecutor};
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
-use monoio::RuntimeBuilder;
+use monoio::{spawn, RuntimeBuilder};
 use tempfile::tempdir;
 
 mod common;
@@ -12,15 +16,12 @@ fn bench_monoio_write(c: &mut Criterion) {
     let path = fusio::path::Path::from_filesystem_path(tmp_dir.path())
         .unwrap()
         .child("monoio");
-    let data = generate_record_batches();
+    let data = generate_record_batch();
     c.bench_with_input(BenchmarkId::new("monoio write", ""), &data, |b, data| {
-        b.iter(|| {
-            RuntimeBuilder::<monoio::IoUringDriver>::new()
-                .with_entries(32768)
-                .build()
-                .unwrap()
-                .block_on(write_parquet(&path, data))
-        });
+        let mut runtime = RuntimeBuilder::<monoio::IoUringDriver>::new()
+            .build()
+            .unwrap();
+        b.iter(|| runtime.block_on(write_parquet(&path, data)));
     });
 }
 
@@ -34,16 +35,26 @@ fn bench_monoio_read(c: &mut Criterion) {
         BenchmarkId::new("monoio random read", ""),
         &path,
         |b, path| {
-            b.iter(|| {
-                RuntimeBuilder::<monoio::IoUringDriver>::new()
-                    .with_entries(32768)
-                    .build()
-                    .unwrap()
-                    .block_on(read_parquet(path))
-            });
+            let runtime = RuntimeBuilder::<monoio::IoUringDriver>::new()
+                .build()
+                .unwrap();
+            b.to_async(MonoioExecutor {
+                runtime: RefCell::new(runtime),
+            })
+            .iter(|| read_parquet(path.clone()));
         },
     );
 }
 
-criterion_group!(benches, bench_monoio_read);
+struct MonoioExecutor {
+    runtime: RefCell<monoio::Runtime<monoio::IoUringDriver>>,
+}
+
+impl AsyncExecutor for MonoioExecutor {
+    fn block_on<T>(&self, future: impl Future<Output = T>) -> T {
+        self.runtime.borrow_mut().block_on(future)
+    }
+}
+
+criterion_group!(benches, bench_monoio_read, bench_monoio_write);
 criterion_main!(benches);

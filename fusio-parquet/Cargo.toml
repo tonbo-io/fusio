@@ -31,7 +31,7 @@ cfg-if = "1.0.0"
 fusio = { version = "0.3.4", path = "../fusio", features = ["bytes", "dyn"] }
 futures = { version = "0.3" }
 monoio = { version = "0.2", optional = true, features = ["sync"] }
-parquet = { path = "../../arrow-rs/parquet", default-features = false, features = [
+parquet = { version = "54", default-features = false, features = [
     "arrow",
     "async",
 ] }
@@ -44,7 +44,7 @@ tokio = { version = "1.40", optional = true, features = [
 wasm-bindgen-futures = { version = "0.4.45" }
 
 [dev-dependencies]
-arrow = { path = "../../arrow-rs/arrow" }
+arrow = { version = "54" }
 rand = "0.8"
 tempfile = "3.12.0"
 tokio = { version = "1.40" }
@@ -54,4 +54,8 @@ wasm-bindgen = "0.2.95"
 wasm-bindgen-test = "0.3.9"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
-criterion = { version = "0.5", features = ["async_tokio", "html_reports"] }
+criterion = { version = "0.5", features = [
+    "async_tokio",
+    "async_futures",
+    "html_reports",
+] }
