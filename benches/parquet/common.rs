@@ -6,7 +6,12 @@ use arrow::{
     array::{ArrayRef, RecordBatch, StringArray, UInt64Array, UInt8Array},
     datatypes::{DataType, Field, Schema, SchemaRef},
 };
-use fusio::{disk::LocalFs, fs::OpenOptions, path::Path, DynFs};
+use fusio::{
+    disk::LocalFs,
+    fs::{Fs, OpenOptions},
+    path::Path,
+    Read,
+};
 use fusio_parquet::{reader::AsyncReader, writer::AsyncWriter};
 use parquet::{
     arrow::{
@@ -51,7 +56,7 @@ pub(crate) async fn write_raw_tokio_parquet(path: impl AsRef<std::path::Path>, d
 
 pub async fn read_parquet(path: Path) {
     let fs = LocalFs {};
-    let options = OpenOptions::default().create(true).write(true);
+    let options = OpenOptions::default();
 
     let file = fs.open_options(&path, options).await.unwrap();
     let size = file.size().await.unwrap();
