@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use std::{ops::Range, sync::Arc};
 
 use arrow::{
@@ -97,7 +99,7 @@ where
     }
 }
 
-fn schema() -> SchemaRef {
+pub(crate) fn schema() -> SchemaRef {
     SchemaRef::new(Schema::new(vec![
         Field::new("id", DataType::UInt64, false),
         Field::new("name", DataType::Utf8, false),

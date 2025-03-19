@@ -3,11 +3,8 @@ use std::{cell::RefCell, future::Future};
 use common::{
     generate_record_batch, load_data, read_parquet, write_parquet, READ_PARQUET_FILE_PATH,
 };
-use criterion::{
-    async_executor::{AsyncExecutor, FuturesExecutor},
-    criterion_group, criterion_main, BenchmarkId, Criterion,
-};
-use monoio::{spawn, RuntimeBuilder};
+use criterion::{async_executor::AsyncExecutor, criterion_group, criterion_main, Criterion};
+use monoio::RuntimeBuilder;
 use tempfile::tempdir;
 
 mod common;
@@ -18,11 +15,11 @@ fn bench_monoio_write(c: &mut Criterion) {
         .unwrap()
         .child("monoio");
     let data = generate_record_batch();
-    c.bench_with_input(BenchmarkId::new("monoio write", ""), &data, |b, data| {
+    c.bench_function("sequential write/monoio", |b| {
         let mut runtime = RuntimeBuilder::<monoio::IoUringDriver>::new()
             .build()
             .unwrap();
-        b.iter(|| runtime.block_on(write_parquet(&path, data)));
+        b.iter(|| runtime.block_on(write_parquet(&path, &data)));
     });
 }
 
@@ -32,19 +29,15 @@ fn bench_monoio_read(c: &mut Criterion) {
         load_data();
     }
     let path = fusio::path::Path::from_filesystem_path(READ_PARQUET_FILE_PATH).unwrap();
-    c.bench_with_input(
-        BenchmarkId::new("monoio random read", ""),
-        &path,
-        |b, path| {
-            let runtime = RuntimeBuilder::<monoio::IoUringDriver>::new()
-                .build()
-                .unwrap();
-            b.to_async(MonoioExecutor {
-                runtime: RefCell::new(runtime),
-            })
-            .iter(|| read_parquet(path.clone()));
-        },
-    );
+    c.bench_function("random read/monoio", |b| {
+        let runtime = RuntimeBuilder::<monoio::IoUringDriver>::new()
+            .build()
+            .unwrap();
+        b.to_async(MonoioExecutor {
+            runtime: RefCell::new(runtime),
+        })
+        .iter(|| read_parquet(path.clone()));
+    });
 }
 
 struct MonoioExecutor {

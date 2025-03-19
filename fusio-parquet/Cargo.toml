@@ -15,15 +15,21 @@ web = ["fusio/opfs"]
 
 [[bench]]
 harness = false
-name = "parquet_tokio"
+name = "tokio"
 path = "../benches/parquet/tokio.rs"
 required-features = ["bench", "tokio"]
 
 [[bench]]
 harness = false
-name = "parquet_monoio"
+name = "monoio"
 path = "../benches/parquet/monoio.rs"
 required-features = ["bench", "monoio"]
+
+[[bench]]
+harness = false
+name = "opendal"
+path = "../benches/parquet/opendal.rs"
+required-features = ["bench", "tokio"]
 
 [dependencies]
 bytes = { workspace = true }
@@ -45,6 +51,10 @@ wasm-bindgen-futures = { version = "0.4.45" }
 
 [dev-dependencies]
 arrow = { version = "54" }
+opendal = { path = "../../opendal/core", package = "opendal", features = [
+    "services-fs",
+] }
+parquet_opendal = { path = "../../opendal/integrations/parquet", package = "parquet_opendal" }
 rand = "0.8"
 tempfile = "3.12.0"
 tokio = { version = "1.40" }
@@ -54,8 +64,4 @@ wasm-bindgen = "0.2.95"
 wasm-bindgen-test = "0.3.9"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
-criterion = { version = "0.5", features = [
-    "async_tokio",
-    "async_futures",
-    "html_reports",
-] }
+criterion = { version = "0.5", features = ["async_tokio", "html_reports"] }

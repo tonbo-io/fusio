@@ -21,15 +21,15 @@ fn bench_write(c: &mut Criterion) {
 
     let data = generate_record_batch();
 
-    let mut group = c.benchmark_group("write");
+    let mut group = c.benchmark_group("sequential write");
 
-    group.bench_with_input("raw tokio write", &data, |b, data| {
+    group.bench_function("tokio", |b| {
         b.to_async(&tokio_runtime)
-            .iter(|| async { write_raw_tokio_parquet(&tokio_path, data).await });
+            .iter(|| async { write_raw_tokio_parquet(&tokio_path, &data).await });
     });
-    group.bench_with_input("fusio tokio write", &data, |b, data| {
+    group.bench_function("fusio/tokio", |b| {
         b.to_async(&tokio_runtime).iter(|| async {
-            write_parquet(&fusio_path, data).await;
+            write_parquet(&fusio_path, &data).await;
         });
     });
 }
@@ -50,13 +50,13 @@ fn bench_read(c: &mut Criterion) {
 
     let mut group = c.benchmark_group("random read");
 
-    group.bench_with_input("raw tokio read", &tokio_path, |b, path| {
+    group.bench_function("tokio", |b| {
         b.to_async(&tokio_runtime)
-            .iter(|| read_raw_parquet(path.into()));
+            .iter(|| read_raw_parquet(tokio_path.into()));
     });
-    group.bench_with_input("fusio tokio read", &fusio_path, |b, path| {
+    group.bench_function("fusio/tokio", |b| {
         b.to_async(&tokio_runtime)
-            .iter(|| read_parquet(path.clone()));
+            .iter(|| read_parquet(fusio_path.clone()));
     });
 }
 
