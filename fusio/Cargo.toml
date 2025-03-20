@@ -61,6 +61,12 @@ name = "tokio"
 path = "../benches/tokio.rs"
 required-features = ["tokio"]
 
+[[bench]]
+harness = false
+name = "monoio"
+path = "../benches/monoio.rs"
+required-features = ["monoio"]
+
 [dependencies]
 async-stream = { version = "0.3", optional = true }
 base64 = { version = "0.22", optional = true }
