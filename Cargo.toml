@@ -23,3 +23,4 @@ bytes = { version = "1.7" }
 [profile.bench]
 codegen-units = 1
 lto = "thin"
+debug = true

@@ -61,6 +61,12 @@ name = "tokio"
 path = "../benches/tokio.rs"
 required-features = ["tokio"]
 
+[[bench]]
+harness = false
+name = "monoio"
+path = "../benches/monoio.rs"
+required-features = ["monoio"]
+
 [dependencies]
 async-stream = { version = "0.3", optional = true }
 base64 = { version = "0.22", optional = true }
@@ -100,6 +106,7 @@ serde_urlencoded = { version = "0.7", optional = true }
 thiserror = "1"
 tokio = { version = "1", optional = true, default-features = false, features = [
     "io-util",
+    "rt-multi-thread",
 ] }
 url = { version = "2.5.3", default-features = false, features = ["std"] }
 

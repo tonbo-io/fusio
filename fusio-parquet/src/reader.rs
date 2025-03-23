@@ -52,21 +52,23 @@ impl AsyncReader {
 
 impl AsyncFileReader for AsyncReader {
     fn get_bytes(&mut self, range: Range<usize>) -> BoxFuture<'_, parquet::errors::Result<Bytes>> {
-        let len = range.end - range.start;
-        let mut buf = BytesMut::with_capacity(len);
-        buf.resize(len, 0);
-
         cfg_if::cfg_if! {
             if #[cfg(all(feature = "web", target_arch = "wasm32"))] {
                 let (sender, receiver) = futures::channel::oneshot::channel::<Result<Bytes, ParquetError>>();
 
                 let reader = self.inner.clone();
                 wasm_bindgen_futures::spawn_local(async move {
+                    let len = range.end - range.start;
+                    let mut buf = Vec::with_capacity(len);
+                    unsafe {
+                        buf.set_len(len);
+                    }
+
                     let result = {
                         let mut guard = reader.lock().await;
                         let (result, buf) = guard.read_exact_at(buf, range.start as u64).await;
                         match result {
-                            Ok(_) => Ok(buf.freeze()),
+                            Ok(_) => Ok(buf.into()),
                             Err(err) => Err(ParquetError::External(Box::new(err)))
                         }
                     };
@@ -81,18 +83,30 @@ impl AsyncFileReader for AsyncReader {
             } else if #[cfg(feature = "monoio")] {
                 let reader = self.inner.clone();
                 monoio::spawn(async move {
+                    let len = range.end - range.start;
+                    let mut buf = Vec::with_capacity(len);
+                    unsafe {
+                        buf.set_len(len);
+                    }
+
                     let mut guard = reader.lock().await;
                     let (result, buf) = guard.read_exact_at(buf, range.start as u64).await;
                     match result {
-                        Ok(_) => Ok(buf.freeze()),
+                        Ok(_) => Ok(buf.into()),
                         Err(err) => Err(ParquetError::External(Box::new(err)))
                     }
                 }).boxed()
             } else {
                 async move {
-                    let (result, buf) = self.inner.read_exact_at(buf, range.start as u64).await;
+                    let len = range.end - range.start;
+                    let mut buf = Vec::with_capacity(len);
+                    unsafe {
+                        buf.set_len(len);
+                    }
+
+                    let (result, _) = self.inner.read_exact_at(&mut buf[..], range.start as u64).await;
                     result.map_err(|err| ParquetError::External(Box::new(err)))?;
-                    Ok(buf.freeze())
+                    Ok(buf.into())
                 }
                 .boxed()
             }
@@ -432,7 +446,7 @@ mod tests {
     }
 
     #[cfg(feature = "tokio")]
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_tokio_async_reader_with_prefetch_footer_size() {
         async_reader_with_prefetch_footer_size().await;
     }
@@ -444,7 +458,7 @@ mod tests {
     }
 
     #[cfg(feature = "tokio")]
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_tokio_async_reader_with_large_metadata() {
         async_reader_with_large_metadata().await;
     }
