@@ -1,8 +1,6 @@
-use std::future::Future;
-use std::{cell::RefCell, rc::Rc, sync::Arc};
+use std::{cell::RefCell, future::Future, rc::Rc, sync::Arc};
 
-use criterion::async_executor::AsyncExecutor;
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{async_executor::AsyncExecutor, criterion_group, criterion_main, Criterion};
 use fusio::{
     disk::MonoIoFs,
     fs::{Fs, OpenOptions},
