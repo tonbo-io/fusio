@@ -14,10 +14,7 @@ fn bench_write(c: &mut Criterion) {
         .child("fusio");
     let tokio_path = tmp_dir.path().join("tokio").to_path_buf();
 
-    let tokio_runtime = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(1)
-        .build()
-        .unwrap();
+    let tokio_runtime = tokio::runtime::Builder::new_multi_thread().build().unwrap();
 
     let data = generate_record_batch();
 
@@ -42,11 +39,7 @@ fn bench_read(c: &mut Criterion) {
     let fusio_path = fusio::path::Path::from_filesystem_path(READ_PARQUET_FILE_PATH).unwrap();
     let tokio_path = READ_PARQUET_FILE_PATH;
 
-    let tokio_runtime = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .worker_threads(1)
-        .build()
-        .unwrap();
+    let tokio_runtime = tokio::runtime::Builder::new_multi_thread().build().unwrap();
 
     let mut group = c.benchmark_group("random read");
 
