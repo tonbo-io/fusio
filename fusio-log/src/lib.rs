@@ -78,6 +78,7 @@ impl<T> Logger<T>
 where
     T: Encode,
 {
+    /// Write a batch of log entries to the log file.
     pub async fn write_batch<'r>(
         &mut self,
         data: impl ExactSizeIterator<Item = &'r T>,
@@ -98,6 +99,8 @@ where
         Ok(())
     }
 
+    /// Write a single log entry to the log file. This method has the same behavior as `write_batch`
+    /// but for a single entry.
     pub async fn write(&mut self, data: &T) -> Result<(), LogError> {
         let mut writer = HashWriter::new(&mut self.buf_writer);
 
@@ -111,11 +114,14 @@ where
         Ok(())
     }
 
+    /// Flush the data to the log file.
     pub async fn flush(&mut self) -> Result<(), LogError> {
         self.buf_writer.flush().await?;
         Ok(())
     }
 
+    /// Close the log file. This will flush the data to the log file and close it.
+    /// It is not guaranteed that the log file can be operated after closing.
     pub async fn close(&mut self) -> Result<(), LogError> {
         self.buf_writer.close().await?;
         Ok(())
@@ -405,6 +411,46 @@ mod tests {
             let mut stream = Options::new(path).recover::<TestStruct>().await.unwrap();
             let res = stream.try_next().await.unwrap();
             assert!(res.is_none());
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_disable_buffer() {
+        let temp_dir = TempDir::new().unwrap();
+        let path = Path::from_filesystem_path(temp_dir.path())
+            .unwrap()
+            .child("disable_buf");
+
+        {
+            let mut logger = Options::new(path.clone())
+                .disable_buf()
+                .build::<u8>()
+                .await
+                .unwrap();
+            logger.write(&1).await.unwrap();
+            logger.write_batch([2, 3, 4].iter()).await.unwrap();
+            logger
+                .write_batch([2, 3, 4, 5, 1, 255].iter())
+                .await
+                .unwrap();
+            logger.flush().await.unwrap();
+            logger.close().await.unwrap();
+        }
+        {
+            let expected = [vec![1], vec![2, 3, 4], vec![2, 3, 4, 5, 1, 255]];
+            let stream = Options::new(path)
+                .recover::<u8>()
+                .await
+                .unwrap()
+                .into_stream();
+            pin!(stream);
+            let mut i = 0;
+            while let Some(res) = stream.next().await {
+                assert!(res.is_ok());
+                assert_eq!(&expected[i], &res.unwrap());
+                i += 1;
+            }
+            assert_eq!(i, expected.len())
         }
     }
 }

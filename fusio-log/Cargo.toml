@@ -10,10 +10,7 @@ version.workspace = true
 aws = ["fusio-dispatch/aws", "fusio/aws"]
 bytes = ["dep:bytes"]
 default = ["aws", "bytes", "tokio", "tokio-http"]
-tokio = [
-    "fusio-dispatch/tokio",
-    "fusio/tokio",
-]
+tokio = ["fusio-dispatch/tokio", "fusio/tokio"]
 tokio-http = ["fusio/tokio-http"]
 web = ["fusio-dispatch/opfs", "fusio/opfs"]
 web-http = ["fusio/wasm-http"]
@@ -24,9 +21,9 @@ crc32fast = "1"
 fusio = { version = "0.3.7", path = "../fusio", features = [
     "dyn",
     "fs",
-    "bytes"
+    "bytes",
 ] }
-fusio-dispatch = {  version = "0.3.7", path = "../fusio-dispatch" }
+fusio-dispatch = { version = "0.3.7", path = "../fusio-dispatch" }
 futures-core = "0.3"
 futures-util = "0.3"
 thiserror = "2.0.3"
