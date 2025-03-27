@@ -84,7 +84,23 @@ impl Path {
     }
 }
 
+#[cfg(target_arch = "wasm32")]
 impl Path {
+    pub fn from_opfs_path(path: impl AsRef<std::path::Path>) -> Result<Self, Error> {
+        Self::parse(path.as_ref().to_str().unwrap())
+    }
+}
+
+impl Path {
+    pub fn new(path: impl AsRef<std::path::Path>) -> Result<Self, Error> {
+        #[cfg(target_arch = "wasm32")]
+        {
+            Self::from_opfs_path(path)
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        Self::from_filesystem_path(path)
+    }
+
     pub fn parse(path: impl AsRef<str>) -> Result<Self, Error> {
         let path = path.as_ref();
 
@@ -110,10 +126,6 @@ impl Path {
         Ok(Self {
             raw: stripped.to_string(),
         })
-    }
-
-    pub fn from_opfs_path(path: impl AsRef<std::path::Path>) -> Result<Self, Error> {
-        Self::parse(path.as_ref().to_str().unwrap())
     }
 
     pub fn from_url_path(path: impl AsRef<str>) -> Result<Self, Error> {
