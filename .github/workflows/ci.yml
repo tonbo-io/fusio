@@ -65,11 +65,17 @@ jobs:
           command: build
           args: --package fusio-opendal
 
-      - name: Run cargo build on fusio-parquet
+      - name: Run cargo build on fusio-parquet tokio
         uses: actions-rs/cargo@v1
         with:
           command: build
-          args: --package fusio-parquet
+          args: --package fusio-parquet --features=tokio
+
+      - name: Run cargo build on fusio-parquet monoio
+        uses: actions-rs/cargo@v1
+        with:
+          command: build
+          args: --package fusio-parquet --features=monoio
 
       - name: Run cargo build on fusio-log
         uses: actions-rs/cargo@v1
@@ -87,13 +93,25 @@ jobs:
         uses: actions-rs/cargo@v1
         with:
           command: test
-          args: --package fusio --features=monoio
+          args: --package fusio --features=monoio,monoio-http
 
       - name: Run cargo test on tokio-uring
         uses: actions-rs/cargo@v1
         with:
           command: test
           args: --package fusio --features=tokio-uring
+
+      - name: Run cargo test on fusio-parquet tokio
+        uses: actions-rs/cargo@v1
+        with:
+          command: test
+          args: --package fusio-parquet --features=tokio
+
+      - name: Run cargo test on fusio-parquet monoio
+        uses: actions-rs/cargo@v1
+        with:
+          command: test
+          args: --package fusio-parquet --features=monoio
 
       - name: Run cargo test on fusio-log
         uses: actions-rs/cargo@v1

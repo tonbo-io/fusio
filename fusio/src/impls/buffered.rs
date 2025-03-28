@@ -7,6 +7,7 @@ pub struct BufReader<F> {
     capacity: usize,
     buf: Option<(Vec<u8>, usize)>,
     size: u64,
+    offset: usize, // the offset of first bytes in buf
 
     #[cfg(test)]
     filling_count: usize,
@@ -20,6 +21,7 @@ impl<F: Read> BufReader<F> {
             inner,
             capacity,
             buf: None,
+            offset: 0,
             size,
             #[cfg(test)]
             filling_count: 0,
@@ -67,16 +69,24 @@ impl<F: Read> Read for BufReader<F> {
 
 impl<F: Read> BufReader<F> {
     async fn filling_buf(&mut self, pos: u64) -> Result<(), Error> {
+        if self.size <= pos {
+            return Err(Error::Io(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "read unexpected eof",
+            )));
+        }
+        let start = self.offset;
         if self
             .buf
             .as_ref()
-            .map(|(buf, current)| buf.len() == *current || *current != pos as usize)
+            .map(|(buf, current)| buf.len() == *current || start + *current != pos as usize)
             .unwrap_or(true)
         {
             let fill_buf = vec![0u8; cmp::min(self.capacity, (self.size - pos) as usize)];
             let (result, fill_buf) = self.inner.read_exact_at(fill_buf, pos).await;
             if result.is_ok() {
                 self.buf = Some((fill_buf, 0));
+                self.offset = pos as usize;
             }
             #[cfg(test)]
             {
@@ -175,7 +185,7 @@ pub(crate) mod tests {
     }
 
     #[cfg(all(feature = "tokio", not(feature = "completion-based")))]
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_buf_read() {
         use tempfile::tempfile;
 
@@ -226,7 +236,7 @@ pub(crate) mod tests {
     }
 
     #[cfg(all(feature = "tokio", not(feature = "completion-based")))]
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_buf_read_write() {
         use tempfile::tempfile;
 
@@ -269,6 +279,36 @@ pub(crate) mod tests {
 
             let mut buf = [0; 5];
             let (result, _) = writer.read_exact_at(buf.as_mut(), 8).await;
+            assert!(result.is_err());
+        }
+    }
+
+    #[cfg(all(feature = "tokio", not(feature = "completion-based")))]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_buf_read_eof() {
+        use tempfile::tempfile;
+
+        use crate::disk::tokio::TokioFile;
+
+        let mut file = TokioFile::new(tokio::fs::File::from_std(tempfile().unwrap()));
+        let _ = file.write_all([0, 1, 2].as_slice()).await;
+
+        let mut reader = BufReader::new(file, 8).await.unwrap();
+        {
+            let (result, buf) = reader.read_exact_at(vec![0u8; 1], 0).await;
+            result.unwrap();
+            assert_eq!(buf, vec![0]);
+
+            let (result, _) = reader.read_exact_at(vec![0u8; 4], 4).await;
+            assert!(result.is_err());
+        }
+        {
+            let (result, buf) = reader.read_exact_at(vec![0u8; 3], 0).await;
+            result.unwrap();
+            assert_eq!(buf, vec![0, 1, 2]);
+        }
+        {
+            let (result, _) = reader.read_exact_at(vec![0u8; 4], 0).await;
             assert!(result.is_err());
         }
     }

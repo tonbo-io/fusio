@@ -26,6 +26,7 @@ impl Fs for MonoIoFs {
             .write(options.write)
             .create(options.create)
             .truncate(options.truncate)
+            .append(!options.truncate)
             .open(&local_path)
             .await?;
         let metadata = file.metadata().await?;

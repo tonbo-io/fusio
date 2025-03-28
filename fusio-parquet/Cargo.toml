@@ -7,25 +7,57 @@ repository.workspace = true
 version.workspace = true
 
 [features]
+bench = ["dep:monoio", "dep:tokio"]
 default = []
+monoio = ["dep:monoio", "fusio/monoio"]
 tokio = ["fusio/tokio"]
 web = ["fusio/opfs"]
+
+[[bench]]
+harness = false
+name = "tokio"
+path = "../benches/parquet/tokio.rs"
+required-features = ["bench", "tokio"]
+
+[[bench]]
+harness = false
+name = "monoio"
+path = "../benches/parquet/monoio.rs"
+required-features = ["bench", "monoio"]
+
+[[bench]]
+harness = false
+name = "opendal"
+path = "../benches/parquet/opendal.rs"
+required-features = ["bench", "tokio"]
 
 [dependencies]
 bytes = { workspace = true }
 cfg-if = "1.0.0"
 fusio = { version = "0.3.4", path = "../fusio", features = ["bytes", "dyn"] }
 futures = { version = "0.3" }
+monoio = { version = "0.2", optional = true, features = ["sync"] }
 parquet = { version = "54", default-features = false, features = [
     "arrow",
     "async",
+] }
+tokio = { version = "1.40", optional = true, features = [
+    "fs",
+    "rt-multi-thread",
 ] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen-futures = { version = "0.4.45" }
 
 [dev-dependencies]
-arrow = "54"
+arrow = { version = "54" }
+# only parquet_dal maain brach supports parquet v54.x
+# but opendal does not support depends on git respository
+# therefore, clone it to local and use it as a local package
+# opendal = { path = "../../opendal/core", package = "opendal", features = [
+#     "services-fs",
+# ] }
+# parquet_opendal = { path = "../../opendal/integrations/parquet", package = "parquet_opendal" }
 rand = "0.8"
 tempfile = "3.12.0"
 tokio = { version = "1.40" }
@@ -33,3 +65,6 @@ tokio = { version = "1.40" }
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 wasm-bindgen = "0.2.95"
 wasm-bindgen-test = "0.3.9"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+criterion = { version = "0.5", features = ["async_tokio", "html_reports"] }
