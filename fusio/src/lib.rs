@@ -550,7 +550,7 @@ mod tests {
     }
 
     #[cfg(all(feature = "tokio", not(target_arch = "wasm32")))]
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_tokio() {
         use tempfile::tempfile;
         use tokio::fs::File;
@@ -565,7 +565,7 @@ mod tests {
     }
 
     #[cfg(all(feature = "tokio", not(target_arch = "wasm32")))]
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_tokio_fs() {
         use crate::disk::TokioFs;
 
@@ -594,7 +594,7 @@ mod tests {
     }
 
     #[cfg(all(feature = "tokio", not(target_arch = "wasm32")))]
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_read_exact() {
         use tempfile::tempfile;
         use tokio::fs::File;

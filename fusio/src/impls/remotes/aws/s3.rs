@@ -317,4 +317,53 @@ mod tests {
         result.unwrap();
         assert_eq!(buf, b"The answer of life, universe and everthing");
     }
+
+    #[ignore]
+    #[cfg(all(feature = "monoio-http", feature = "completion-based"))]
+    #[monoio::test(enable_timer = true)]
+    async fn monoio_write_and_read_s3_file() {
+        use crate::{
+            remotes::aws::{credential::AwsCredential, fs::AmazonS3Builder, s3::S3File},
+            Read, Write,
+        };
+
+        if option_env!("AWS_ACCESS_KEY_ID").is_none()
+            || option_env!("AWS_SECRET_ACCESS_KEY").is_none()
+        {
+            eprintln!("can not get `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`");
+            return;
+        }
+        let key_id = std::option_env!("AWS_ACCESS_KEY_ID").unwrap().to_string();
+        let secret_key = std::option_env!("AWS_SECRET_ACCESS_KEY")
+            .unwrap()
+            .to_string();
+
+        let s3 = AmazonS3Builder::new("fusio-test".into())
+            .credential(AwsCredential {
+                key_id,
+                secret_key,
+                token: None,
+            })
+            .region("ap-southeast-1".into())
+            .sign_payload(true)
+            .build();
+
+        {
+            let mut s3 = S3File::new(s3.clone(), "read-write.txt".into());
+
+            let (result, _) = s3
+                .write_all(&b"The answer of life, universe and everthing"[..])
+                .await;
+            result.unwrap();
+            s3.close().await.unwrap();
+        }
+        let mut s3 = S3File::new(s3, "read-write.txt".into());
+
+        let size = s3.size().await.unwrap();
+        assert_eq!(size, 42);
+        let buf = Vec::new();
+        let (result, buf) = s3.read_to_end_at(buf, 0).await;
+        result.unwrap();
+        assert_eq!(buf, b"The answer of life, universe and everthing");
+    }
 }

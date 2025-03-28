@@ -6,7 +6,16 @@ use futures_core::TryStream;
 
 use crate::{error::LogError, Decode, Encode, Logger};
 
-const DEFAULT_BUF_SIZE: usize = 4 * 1024;
+pub(crate) const DEFAULT_BUF_SIZE: usize = 4 * 1024;
+
+#[cfg(not(any(feature = "tokio", feature = "web", feature = "aws")))]
+compile_error!("one of these features must be enabled: tokio, web, aws");
+
+#[cfg(all(
+    feature = "aws",
+    not(any(feature = "tokio-http", feature = "web-http"))
+))]
+compile_error!("aws feature must be used with tokio-http or web-http feature");
 
 #[derive(Clone)]
 pub struct Options {
@@ -17,6 +26,8 @@ pub struct Options {
 }
 
 impl Options {
+    /// Create a new log options.
+    #[cfg(any(feature = "tokio", feature = "web"))]
     pub fn new(path: fusio::path::Path) -> Self {
         Self {
             path,
@@ -26,6 +37,20 @@ impl Options {
         }
     }
 
+    /// Create a new log options with [`FsOptions`].
+    ///
+    /// See [`FsOptions`] for more details.
+    pub fn with_fs_options(path: fusio::path::Path, fs_option: FsOptions) -> Self {
+        Self {
+            path,
+            buf_size: DEFAULT_BUF_SIZE,
+            fs_option,
+            truncate: false,
+        }
+    }
+
+    /// Disable buffer for the log. It is recommended to keep the buffer enabled and use
+    /// [`Logger::flush`] to flush the data to the log file.
     pub fn disable_buf(self) -> Self {
         Self {
             buf_size: 0,
@@ -33,18 +58,24 @@ impl Options {
         }
     }
 
+    /// Set the buffer size for the log. Default is 4K.
     pub fn buf_size(self, buf_size: usize) -> Self {
         Self { buf_size, ..self }
     }
 
+    /// Set the filesystem options for the log.
+    ///
+    /// See [`FsOptions`] for more details.
     pub fn fs(self, fs_option: FsOptions) -> Self {
         Self { fs_option, ..self }
     }
 
+    /// Open log file with truncate option.
     pub fn truncate(self, truncate: bool) -> Self {
         Self { truncate, ..self }
     }
 
+    /// Open the log file. Return error if open file failed.
     pub async fn build<T>(self) -> Result<Logger<T>, LogError>
     where
         T: Encode,
@@ -53,6 +84,7 @@ impl Options {
         Ok(logger)
     }
 
+    /// Open the log with the given [`DynFs`]. Return error if open file failed.
     pub async fn build_with_fs<T>(self, fs: Arc<dyn DynFs>) -> Result<Logger<T>, LogError>
     where
         T: Encode,
@@ -61,6 +93,7 @@ impl Options {
         Ok(logger)
     }
 
+    /// Recover the log from existing log file. Return a stream of log entries.
     pub async fn recover<T>(
         self,
     ) -> Result<impl TryStream<Ok = Vec<T>, Error = LogError> + Unpin, LogError>

@@ -44,7 +44,7 @@ impl<T: Encode + Sync> Encode for &T {
 pub trait Decode: Sized {
     type Error: From<fusio::Error> + std::error::Error + Send + Sync + 'static;
 
-    fn decode<R>(reader: &mut R) -> impl Future<Output = Result<Self, Self::Error>>
+    fn decode<R>(reader: &mut R) -> impl Future<Output = Result<Self, Self::Error>> + MaybeSend
     where
         R: SeqRead;
 }

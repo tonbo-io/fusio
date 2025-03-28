@@ -7,7 +7,12 @@ use std::{io::Cursor, marker::PhantomData, sync::Arc};
 use error::LogError;
 use fs::hash::{HashReader, HashWriter};
 pub use fusio::path::Path;
-use fusio::{buffered::BufWriter, dynamic::DynFile, fs::OpenOptions, DynFs, DynWrite};
+use fusio::{
+    buffered::{BufReader, BufWriter},
+    dynamic::DynFile,
+    fs::OpenOptions,
+    DynFs, DynWrite,
+};
 use futures_core::TryStream;
 use futures_util::stream;
 #[allow(unused)]
@@ -51,7 +56,11 @@ where
         let file = fs
             .open_options(
                 &option.path,
-                OpenOptions::default().read(true).write(true).create(true),
+                OpenOptions::default()
+                    .read(true)
+                    .write(true)
+                    .create(true)
+                    .truncate(option.truncate),
             )
             .await?;
 
@@ -69,6 +78,7 @@ impl<T> Logger<T>
 where
     T: Encode,
 {
+    /// Write a batch of log entries to the log file.
     pub async fn write_batch<'r>(
         &mut self,
         data: impl ExactSizeIterator<Item = &'r T>,
@@ -89,6 +99,8 @@ where
         Ok(())
     }
 
+    /// Write a single log entry to the log file. This method has the same behavior as `write_batch`
+    /// but for a single entry.
     pub async fn write(&mut self, data: &T) -> Result<(), LogError> {
         let mut writer = HashWriter::new(&mut self.buf_writer);
 
@@ -102,11 +114,14 @@ where
         Ok(())
     }
 
+    /// Flush the data to the log file.
     pub async fn flush(&mut self) -> Result<(), LogError> {
         self.buf_writer.flush().await?;
         Ok(())
     }
 
+    /// Close the log file. This will flush the data to the log file and close it.
+    /// It is not guaranteed that the log file can be operated after closing.
     pub async fn close(&mut self) -> Result<(), LogError> {
         self.buf_writer.close().await?;
         Ok(())
@@ -121,9 +136,12 @@ where
         option: Options,
     ) -> Result<impl TryStream<Ok = Vec<T>, Error = LogError> + Unpin, LogError> {
         let fs = option.fs_option.parse()?;
-        let file = fs
-            .open_options(&option.path, OpenOptions::default().create(false))
-            .await?;
+        let file = BufReader::new(
+            fs.open_options(&option.path, OpenOptions::default().create(false))
+                .await?,
+            DEFAULT_BUF_SIZE,
+        )
+        .await?;
 
         Ok(Box::pin(stream::try_unfold(
             (file, 0),
@@ -133,7 +151,6 @@ where
                 let mut reader = HashReader::new(cursor);
 
                 let Ok(len) = u32::decode(&mut reader).await else {
-                    f.close().await?;
                     return Ok(None);
                 };
                 let mut buf = Vec::with_capacity(len as usize);
@@ -270,7 +287,7 @@ mod tests {
     }
 
     #[cfg(feature = "tokio")]
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_tokio_write_u8() {
         write_u8().await;
     }
@@ -327,7 +344,7 @@ mod tests {
     }
 
     #[cfg(feature = "tokio")]
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_tokio_write_struct() {
         write_struct().await
     }
@@ -403,8 +420,7 @@ mod tests {
     }
 
     #[ignore = "s3"]
-    #[cfg(feature = "tokio")]
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_tokio_write_s3() {
         write_s3().await;
     }
@@ -438,7 +454,7 @@ mod tests {
     }
 
     #[cfg(feature = "tokio")]
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_recover_empty() {
         recover_empty().await;
     }
@@ -447,5 +463,45 @@ mod tests {
     #[monoio::test]
     async fn test_recover_empty() {
         recover_empty().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_disable_buffer() {
+        let temp_dir = TempDir::new().unwrap();
+        let path = Path::from_filesystem_path(temp_dir.path())
+            .unwrap()
+            .child("disable_buf");
+
+        {
+            let mut logger = Options::new(path.clone())
+                .disable_buf()
+                .build::<u8>()
+                .await
+                .unwrap();
+            logger.write(&1).await.unwrap();
+            logger.write_batch([2, 3, 4].iter()).await.unwrap();
+            logger
+                .write_batch([2, 3, 4, 5, 1, 255].iter())
+                .await
+                .unwrap();
+            logger.flush().await.unwrap();
+            logger.close().await.unwrap();
+        }
+        {
+            let expected = [vec![1], vec![2, 3, 4], vec![2, 3, 4, 5, 1, 255]];
+            let mut stream = Options::new(path)
+                .recover::<u8>()
+                .await
+                .unwrap()
+                .into_stream();
+            let mut stream = pin!(stream);
+            let mut i = 0;
+            while let Some(res) = stream.next().await {
+                assert!(res.is_ok());
+                assert_eq!(&expected[i], &res.unwrap());
+                i += 1;
+            }
+            assert_eq!(i, expected.len())
+        }
     }
 }
