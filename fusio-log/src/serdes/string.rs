@@ -12,6 +12,9 @@ impl Encode for &str {
         W: Write,
     {
         (self.len() as u16).encode(writer).await?;
+        #[cfg(feature = "monoio")]
+        let (result, _) = writer.write_all(self.as_bytes().to_vec()).await;
+        #[cfg(not(feature = "monoio"))]
         let (result, _) = writer.write_all(self.as_bytes()).await;
         result?;
 

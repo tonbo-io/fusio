@@ -10,13 +10,18 @@ version.workspace = true
 aws = ["fusio-dispatch/aws", "fusio/aws"]
 bytes = ["dep:bytes"]
 default = ["aws", "bytes", "tokio", "tokio-http"]
-tokio = ["fusio-dispatch/tokio", "fusio/tokio"]
+monoio = ["fusio-dispatch/monoio", "fusio/monoio"]
+monoio-http = ["fusio/monoio-http"]
+tokio = [
+    "fusio-dispatch/tokio",
+    "fusio/tokio",
+]
 tokio-http = ["fusio/tokio-http"]
 web = ["fusio-dispatch/opfs", "fusio/opfs"]
 web-http = ["fusio/wasm-http"]
 
 [dependencies]
-bytes = { version = "1.7", optional = true }
+bytes = { workspace = true, optional = true }
 crc32fast = "1"
 fusio = { version = "0.3.7", path = "../fusio", features = [
     "dyn",
@@ -32,6 +37,7 @@ thiserror = "2.0.3"
 tempfile = "3"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+monoio = { version = "0.2", features = ["sync"] }
 tokio = { version = "1", features = ["full"] }
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]

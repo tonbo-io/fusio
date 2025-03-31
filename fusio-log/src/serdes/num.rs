@@ -11,6 +11,9 @@ macro_rules! implement_encode_decode {
             type Error = fusio::Error;
 
             async fn encode<W: Write>(&self, writer: &mut W) -> Result<(), Self::Error> {
+                #[cfg(feature = "monoio")]
+                let (result, _) = writer.write_all(self.to_le_bytes().to_vec()).await;
+                #[cfg(not(feature = "monoio"))]
                 let (result, _) = writer.write_all(&self.to_le_bytes()[..]).await;
                 result?;
 
@@ -26,11 +29,21 @@ macro_rules! implement_encode_decode {
             type Error = fusio::Error;
 
             async fn decode<R: SeqRead>(reader: &mut R) -> Result<Self, Self::Error> {
-                let mut bytes = [0u8; size_of::<Self>()];
-                let (result, _) = reader.read_exact(&mut bytes[..]).await;
-                result?;
+                #[cfg(feature = "monoio")]
+                let data = {
+                    let (result, buf) = reader.read_exact(vec![0u8; size_of::<Self>()]).await;
+                    result?;
+                    Self::from_le_bytes(buf.try_into().unwrap())
+                };
+                #[cfg(not(feature = "monoio"))]
+                let data = {
+                    let mut bytes = [0u8; size_of::<Self>()];
+                    let (result, _) = reader.read_exact(&mut bytes[..]).await;
+                    result?;
+                    Self::from_le_bytes(bytes)
+                };
 
-                Ok(Self::from_le_bytes(bytes))
+                Ok(data)
             }
         }
     };
@@ -47,14 +60,11 @@ implement_encode_decode!(u64);
 
 #[cfg(test)]
 mod tests {
-    use std::io::Cursor;
-
-    use tokio::io::AsyncSeekExt;
+    use std::io::{Cursor, Seek};
 
     use crate::serdes::{Decode, Encode};
 
-    #[tokio::test]
-    async fn test_encode_decode() {
+    async fn encode_decode() {
         let source_0 = 8u8;
         let source_1 = 16u16;
         let source_2 = 32u32;
@@ -76,7 +86,7 @@ mod tests {
         source_6.encode(&mut cursor).await.unwrap();
         source_7.encode(&mut cursor).await.unwrap();
 
-        cursor.seek(std::io::SeekFrom::Start(0)).await.unwrap();
+        cursor.seek(std::io::SeekFrom::Start(0)).unwrap();
         let decoded_0 = u8::decode(&mut cursor).await.unwrap();
         let decoded_1 = u16::decode(&mut cursor).await.unwrap();
         let decoded_2 = u32::decode(&mut cursor).await.unwrap();
@@ -94,5 +104,17 @@ mod tests {
         assert_eq!(source_5, decoded_5);
         assert_eq!(source_6, decoded_6);
         assert_eq!(source_7, decoded_7);
+    }
+
+    #[cfg(feature = "tokio")]
+    #[tokio::test]
+    async fn test_tokio_encode_decode() {
+        encode_decode().await;
+    }
+
+    #[cfg(feature = "monoio")]
+    #[monoio::test]
+    async fn test_monoio_encode_decode() {
+        encode_decode().await;
     }
 }
