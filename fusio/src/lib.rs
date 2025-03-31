@@ -47,7 +47,6 @@
 //! }
 //! ```
 
-pub mod buf;
 #[cfg(feature = "dyn")]
 pub mod dynamic;
 mod error;
@@ -58,13 +57,12 @@ pub mod path;
 
 use std::future::Future;
 
-pub use buf::{IoBuf, IoBufMut};
 #[cfg(all(feature = "dyn", feature = "fs"))]
 pub use dynamic::fs::DynFs;
 #[cfg(feature = "dyn")]
 pub use dynamic::{DynRead, DynWrite};
 pub use error::Error;
-pub use fusio_core::{MaybeSend, MaybeSync};
+pub use fusio_core::{IoBuf, IoBufMut, MaybeSend, MaybeSync};
 pub use impls::*;
 
 pub trait Write: MaybeSend {
@@ -174,8 +172,10 @@ impl<W: Write> Write for &mut W {
 
 #[cfg(test)]
 mod tests {
+    use fusio_core::{IoBuf, IoBufMut};
+
     use super::{Read, Write};
-    use crate::{buf::IoBufMut, Error, IoBuf};
+    use crate::Error;
 
     #[allow(unused)]
     struct CountWrite<W> {
