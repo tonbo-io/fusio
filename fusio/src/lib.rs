@@ -64,50 +64,8 @@ pub use dynamic::fs::DynFs;
 #[cfg(feature = "dyn")]
 pub use dynamic::{DynRead, DynWrite};
 pub use error::Error;
+pub use fusio_core::{MaybeSend, MaybeSync};
 pub use impls::*;
-
-#[cfg(not(feature = "no-send"))]
-pub unsafe trait MaybeSend: Send {
-    //! Considering lots of runtimes does not require [`std::marker::Send`] for
-    //! [`std::future::Future`] and [`futures_core::stream::Stream`], we provide a trait to
-    //! represent the future or stream that may not require [`std::marker::Send`]. Users could
-    //! switch the feature `no-send` at compile-time to disable the [`std::marker::Send`] bound
-    //! for [`std::future::Future`] and [`futures_core::stream::Stream`].
-    //!
-    //! # Safety
-    //! Do not implement it directly.
-}
-
-/// # Safety
-/// Do not implement it directly
-#[cfg(feature = "no-send")]
-pub unsafe trait MaybeSend {}
-
-#[cfg(not(feature = "no-send"))]
-unsafe impl<T: Send> MaybeSend for T {}
-#[cfg(feature = "no-send")]
-unsafe impl<T> MaybeSend for T {}
-
-#[cfg(not(feature = "no-send"))]
-pub unsafe trait MaybeSync: Sync {
-    //! Same as [`MaybeSend`], but for [`std::marker::Sync`].
-    //!
-    //! # Safety
-    //! Do not implement it directly.
-}
-
-#[cfg(feature = "no-send")]
-pub unsafe trait MaybeSync {
-    //! Same as [`MaybeSend`], but for [`std::marker::Sync`].
-    //!
-    //! # Safety
-    //! Do not implement it directly.
-}
-
-#[cfg(not(feature = "no-send"))]
-unsafe impl<T: Sync> MaybeSync for T {}
-#[cfg(feature = "no-send")]
-unsafe impl<T> MaybeSync for T {}
 
 pub trait Write: MaybeSend {
     //! The core trait for writing data,
