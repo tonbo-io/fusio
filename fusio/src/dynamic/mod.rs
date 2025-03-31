@@ -3,20 +3,17 @@
 #[cfg(feature = "fs")]
 pub mod fs;
 
-use std::{future::Future, pin::Pin};
+use std::pin::Pin;
 
 #[cfg(feature = "fs")]
 pub use fs::{DynFile, DynFs};
+use fusio_core::{MaybeSend, MaybeSendFuture, MaybeSync};
 use futures_core::Stream;
 
 use crate::{
     buf::{Slice, SliceMut},
-    Error, IoBuf, IoBufMut, MaybeSend, MaybeSync, Read, Write,
+    Error, IoBuf, IoBufMut, Read, Write,
 };
-
-pub trait MaybeSendFuture: Future + MaybeSend {}
-
-impl<F> MaybeSendFuture for F where F: Future + MaybeSend {}
 
 pub trait MaybeSendStream: Stream + MaybeSend {}
 

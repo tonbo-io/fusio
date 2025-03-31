@@ -10,12 +10,13 @@ use std::{future::Future, pin::Pin};
 
 use bytes::Bytes;
 pub use error::HttpError;
+use fusio_core::{MaybeSend, MaybeSendFuture, MaybeSync};
 use futures_core::Stream;
 use http::{Request, Response};
 use http_body::Body;
 use http_body_util::BodyExt;
 
-use crate::{dynamic::MaybeSendFuture, error::BoxedError, MaybeSend, MaybeSync};
+use crate::error::BoxedError;
 
 pub trait HttpClient: MaybeSend + MaybeSync {
     type RespBody: Body<Data: Into<Bytes>, Error: Into<BoxedError>> + Send + MaybeSync + 'static;
