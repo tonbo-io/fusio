@@ -3,20 +3,15 @@
 #[cfg(feature = "fs")]
 pub mod fs;
 
-use std::{future::Future, pin::Pin};
+use std::pin::Pin;
 
 #[cfg(feature = "fs")]
 pub use fs::{DynFile, DynFs};
+use fusio_core::buf::slice::{Buf, BufMut};
+pub use fusio_core::{MaybeSend, MaybeSendFuture, MaybeSync};
 use futures_core::Stream;
 
-use crate::{
-    buf::{Slice, SliceMut},
-    Error, IoBuf, IoBufMut, MaybeSend, MaybeSync, Read, Write,
-};
-
-pub trait MaybeSendFuture: Future + MaybeSend {}
-
-impl<F> MaybeSendFuture for F where F: Future + MaybeSend {}
+use crate::{Error, IoBuf, IoBufMut, Read, Write};
 
 pub trait MaybeSendStream: Stream + MaybeSend {}
 
@@ -30,8 +25,8 @@ pub trait DynWrite: MaybeSend {
 
     fn write_all(
         &mut self,
-        buf: Slice,
-    ) -> Pin<Box<dyn MaybeSendFuture<Output = (Result<(), Error>, Slice)> + '_>>;
+        buf: Buf,
+    ) -> Pin<Box<dyn MaybeSendFuture<Output = (Result<(), Error>, Buf)> + '_>>;
 
     fn flush(&mut self) -> Pin<Box<dyn MaybeSendFuture<Output = Result<(), Error>> + '_>>;
 
@@ -41,8 +36,8 @@ pub trait DynWrite: MaybeSend {
 impl<W: Write> DynWrite for W {
     fn write_all(
         &mut self,
-        buf: Slice,
-    ) -> Pin<Box<dyn MaybeSendFuture<Output = (Result<(), Error>, Slice)> + '_>> {
+        buf: Buf,
+    ) -> Pin<Box<dyn MaybeSendFuture<Output = (Result<(), Error>, Buf)> + '_>> {
         Box::pin(W::write_all(self, buf))
     }
 
@@ -77,9 +72,9 @@ pub trait DynRead: MaybeSend + MaybeSync {
 
     fn read_exact_at(
         &mut self,
-        buf: SliceMut,
+        buf: BufMut,
         pos: u64,
-    ) -> Pin<Box<dyn MaybeSendFuture<Output = (Result<(), Error>, SliceMut)> + '_>>;
+    ) -> Pin<Box<dyn MaybeSendFuture<Output = (Result<(), Error>, BufMut)> + '_>>;
 
     fn read_to_end_at(
         &mut self,
@@ -96,9 +91,9 @@ where
 {
     fn read_exact_at(
         &mut self,
-        buf: SliceMut,
+        buf: BufMut,
         pos: u64,
-    ) -> Pin<Box<dyn MaybeSendFuture<Output = (Result<(), Error>, SliceMut)> + '_>> {
+    ) -> Pin<Box<dyn MaybeSendFuture<Output = (Result<(), Error>, BufMut)> + '_>> {
         Box::pin(async move { R::read_exact_at(self, buf, pos).await })
     }
 

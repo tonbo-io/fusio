@@ -2,10 +2,9 @@ use std::{cmp, pin::Pin, sync::Arc};
 
 use super::{MaybeSendFuture, MaybeSendStream};
 use crate::{
-    buf::IoBufMut,
     fs::{FileMeta, FileSystemTag, Fs, OpenOptions},
     path::Path,
-    DynRead, DynWrite, Error, IoBuf, MaybeSend, MaybeSync, Read, Write,
+    DynRead, DynWrite, Error, IoBuf, IoBufMut, MaybeSend, MaybeSync, Read, Write,
 };
 
 pub trait DynFile: DynRead + DynWrite + 'static {}

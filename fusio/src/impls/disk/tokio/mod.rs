@@ -12,7 +12,7 @@ use std::os::unix::fs::FileExt;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio::{fs::File, io::AsyncWriteExt, task::block_in_place};
 
-use crate::{buf::IoBufMut, Error, IoBuf, Read, Write};
+use crate::{Error, IoBuf, IoBufMut, Read, Write};
 
 pub struct TokioFile {
     file: File,

@@ -1,11 +1,11 @@
 use std::{mem, pin::Pin, sync::Arc};
 
 use bytes::{BufMut, BytesMut};
+use fusio_core::MaybeSendFuture;
 use futures_util::{stream::FuturesOrdered, StreamExt};
 use http_body_util::Full;
 
 use crate::{
-    dynamic::MaybeSendFuture,
     remotes::{
         aws::multipart_upload::{MultipartUpload, UploadType},
         serde::MultipartPart,

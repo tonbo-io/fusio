@@ -3,7 +3,7 @@ pub mod fs;
 
 use monoio::fs::File;
 
-use crate::{buf::IoBufMut, Error, IoBuf, Read, Write};
+use crate::{Error, IoBuf, IoBufMut, Read, Write};
 
 #[repr(transparent)]
 struct MonoioBuf<B> {
