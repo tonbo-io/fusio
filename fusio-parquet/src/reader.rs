@@ -25,6 +25,7 @@ pub struct AsyncReader {
     prefetch_footer_size: usize,
 }
 
+#[cfg(any(feature = "web", feature = "monoio"))]
 unsafe impl Send for AsyncReader {}
 
 fn set_prefetch_footer_size(footer_size: usize, content_size: u64) -> usize {
