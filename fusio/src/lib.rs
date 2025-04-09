@@ -7,7 +7,7 @@
 //!     file: &mut F,
 //!     write_buf: B,
 //!     read_buf: BM,
-//! ) -> (Result<(), fusio_core::Error>, B, BM)
+//! ) -> (Result<(), Error>, B, BM)
 //! where
 //!     F: Read + Write,
 //!     B: IoBuf,
@@ -57,19 +57,16 @@ pub mod path;
 
 #[cfg(all(feature = "dyn", feature = "fs"))]
 pub use dynamic::fs::DynFs;
-pub use error::Error;
+pub use fusio_core::{BoxedError, Error, IoBuf, IoBufMut, MaybeSend, MaybeSync, Read, Write};
 #[cfg(feature = "dyn")]
 pub use fusio_core::{DynRead, DynWrite};
-pub use fusio_core::{IoBuf, IoBufMut, MaybeSend, MaybeSync};
-pub use fusio_core::{Read, Write};
 pub use impls::*;
 
 #[cfg(test)]
 mod tests {
     use fusio_core::{IoBuf, IoBufMut};
 
-    use super::{Read, Write};
-    use crate::Error;
+    use super::{Error, Read, Write};
 
     #[allow(unused)]
     struct CountWrite<W> {
@@ -88,16 +85,16 @@ mod tests {
     where
         W: Write,
     {
-        async fn write_all<B: IoBuf>(&mut self, buf: B) -> (Result<(), fusio_core::Error>, B) {
+        async fn write_all<B: IoBuf>(&mut self, buf: B) -> (Result<(), Error>, B) {
             let (result, buf) = self.w.write_all(buf).await;
             (result.inspect(|_| self.cnt += buf.bytes_init()), buf)
         }
 
-        async fn flush(&mut self) -> Result<(), fusio_core::Error> {
+        async fn flush(&mut self) -> Result<(), Error> {
             self.w.flush().await.map(Into::into)
         }
 
-        async fn close(&mut self) -> Result<(), fusio_core::Error> {
+        async fn close(&mut self) -> Result<(), Error> {
             self.w.close().await
         }
     }
@@ -119,11 +116,7 @@ mod tests {
     where
         R: Read,
     {
-        async fn read_exact_at<B: IoBufMut>(
-            &mut self,
-            buf: B,
-            pos: u64,
-        ) -> (Result<(), fusio_core::Error>, B) {
+        async fn read_exact_at<B: IoBufMut>(&mut self, buf: B, pos: u64) -> (Result<(), Error>, B) {
             let (result, buf) = self.r.read_exact_at(buf, pos).await;
             match result {
                 Ok(()) => {
@@ -134,11 +127,7 @@ mod tests {
             }
         }
 
-        async fn read_to_end_at(
-            &mut self,
-            buf: Vec<u8>,
-            pos: u64,
-        ) -> (Result<(), fusio_core::Error>, Vec<u8>) {
+        async fn read_to_end_at(&mut self, buf: Vec<u8>, pos: u64) -> (Result<(), Error>, Vec<u8>) {
             let (result, buf) = self.r.read_to_end_at(buf, pos).await;
             match result {
                 Ok(()) => {
@@ -149,7 +138,7 @@ mod tests {
             }
         }
 
-        async fn size(&self) -> Result<u64, fusio_core::Error> {
+        async fn size(&self) -> Result<u64, Error> {
             self.r.size().await
         }
     }
@@ -195,6 +184,7 @@ mod tests {
     {
         use std::collections::HashSet;
 
+        use fusio_core::Error;
         use futures_util::StreamExt;
         use tempfile::TempDir;
 
@@ -204,13 +194,16 @@ mod tests {
         let work_dir_path = tmp_dir.path().join("work");
         let work_file_path = work_dir_path.join("test.file");
 
-        fs.create_dir_all(&Path::from_absolute_path(&work_dir_path)?)
-            .await?;
+        fs.create_dir_all(
+            &Path::from_absolute_path(&work_dir_path).map_err(|err| Error::Path(Box::new(err)))?,
+        )
+        .await?;
 
         assert!(work_dir_path.exists());
         assert!(fs
             .open_options(
-                &Path::from_absolute_path(&work_file_path)?,
+                &Path::from_absolute_path(&work_file_path)
+                    .map_err(|err| Error::Path(Box::new(err)))?,
                 OpenOptions::default()
             )
             .await
@@ -218,7 +211,8 @@ mod tests {
         {
             let _ = fs
                 .open_options(
-                    &Path::from_absolute_path(&work_file_path)?,
+                    &Path::from_absolute_path(&work_file_path)
+                        .map_err(|err| Error::Path(Box::new(err)))?,
                     OpenOptions::default().create(true).write(true),
                 )
                 .await?;
@@ -227,14 +221,16 @@ mod tests {
         {
             let mut file = fs
                 .open_options(
-                    &Path::from_absolute_path(&work_file_path)?,
+                    &Path::from_absolute_path(&work_file_path)
+                        .map_err(|err| Error::Path(Box::new(err)))?,
                     OpenOptions::default().write(true),
                 )
                 .await?;
             file.write_all("Hello! fusio".as_bytes()).await.0?;
             let mut file = fs
                 .open_options(
-                    &Path::from_absolute_path(&work_file_path)?,
+                    &Path::from_absolute_path(&work_file_path)
+                        .map_err(|err| Error::Path(Box::new(err)))?,
                     OpenOptions::default().write(true),
                 )
                 .await?;
@@ -244,7 +240,8 @@ mod tests {
 
             let mut file = fs
                 .open_options(
-                    &Path::from_absolute_path(&work_file_path)?,
+                    &Path::from_absolute_path(&work_file_path)
+                        .map_err(|err| Error::Path(Box::new(err)))?,
                     OpenOptions::default().read(true),
                 )
                 .await?;
@@ -277,19 +274,24 @@ mod tests {
         let dst_file_path = work_dir_path.join("dst_test.file");
 
         src_fs
-            .create_dir_all(&Path::from_absolute_path(&work_dir_path)?)
+            .create_dir_all(
+                &Path::from_absolute_path(&work_dir_path)
+                    .map_err(|err| Error::Path(Box::new(err)))?,
+            )
             .await?;
 
         // create files
         let _ = src_fs
             .open_options(
-                &Path::from_absolute_path(&src_file_path)?,
+                &Path::from_absolute_path(&src_file_path)
+                    .map_err(|err| Error::Path(Box::new(err)))?,
                 OpenOptions::default().create(true),
             )
             .await?;
         let _ = src_fs
             .open_options(
-                &Path::from_absolute_path(&dst_file_path)?,
+                &Path::from_absolute_path(&dst_file_path)
+                    .map_err(|err| Error::Path(Box::new(err)))?,
                 OpenOptions::default().create(true),
             )
             .await?;
@@ -297,7 +299,8 @@ mod tests {
         {
             let mut src_file = src_fs
                 .open_options(
-                    &Path::from_absolute_path(&src_file_path)?,
+                    &Path::from_absolute_path(&src_file_path)
+                        .map_err(|err| Error::Path(Box::new(err)))?,
                     OpenOptions::default().write(true),
                 )
                 .await?;
@@ -306,14 +309,17 @@ mod tests {
 
             src_fs
                 .copy(
-                    &Path::from_absolute_path(&src_file_path)?,
-                    &Path::from_absolute_path(&dst_file_path)?,
+                    &Path::from_absolute_path(&src_file_path)
+                        .map_err(|err| Error::Path(Box::new(err)))?,
+                    &Path::from_absolute_path(&dst_file_path)
+                        .map_err(|err| Error::Path(Box::new(err)))?,
                 )
                 .await?;
 
             let mut src_file = src_fs
                 .open_options(
-                    &Path::from_absolute_path(&src_file_path)?,
+                    &Path::from_absolute_path(&src_file_path)
+                        .map_err(|err| Error::Path(Box::new(err)))?,
                     OpenOptions::default().write(true).read(true),
                 )
                 .await?;
@@ -323,7 +329,8 @@ mod tests {
 
             let mut src_file = src_fs
                 .open_options(
-                    &Path::from_absolute_path(&src_file_path)?,
+                    &Path::from_absolute_path(&src_file_path)
+                        .map_err(|err| Error::Path(Box::new(err)))?,
                     OpenOptions::default().write(true).read(true),
                 )
                 .await?;
@@ -337,7 +344,8 @@ mod tests {
 
             let mut dst_file = src_fs
                 .open_options(
-                    &Path::from_absolute_path(&dst_file_path)?,
+                    &Path::from_absolute_path(&dst_file_path)
+                        .map_err(|err| Error::Path(Box::new(err)))?,
                     OpenOptions::default().read(true),
                 )
                 .await?;
@@ -348,13 +356,17 @@ mod tests {
         }
 
         src_fs
-            .remove(&Path::from_absolute_path(&dst_file_path)?)
+            .remove(
+                &Path::from_absolute_path(&dst_file_path)
+                    .map_err(|err| Error::Path(Box::new(err)))?,
+            )
             .await?;
         // link
         {
             let mut src_file = src_fs
                 .open_options(
-                    &Path::from_absolute_path(&src_file_path)?,
+                    &Path::from_absolute_path(&src_file_path)
+                        .map_err(|err| Error::Path(Box::new(err)))?,
                     OpenOptions::default().write(true),
                 )
                 .await?;
@@ -363,14 +375,17 @@ mod tests {
 
             src_fs
                 .link(
-                    &Path::from_absolute_path(&src_file_path)?,
-                    &Path::from_absolute_path(&dst_file_path)?,
+                    &Path::from_absolute_path(&src_file_path)
+                        .map_err(|err| Error::Path(Box::new(err)))?,
+                    &Path::from_absolute_path(&dst_file_path)
+                        .map_err(|err| Error::Path(Box::new(err)))?,
                 )
                 .await?;
 
             let mut src_file = src_fs
                 .open_options(
-                    &Path::from_absolute_path(&src_file_path)?,
+                    &Path::from_absolute_path(&src_file_path)
+                        .map_err(|err| Error::Path(Box::new(err)))?,
                     OpenOptions::default().write(true).read(true),
                 )
                 .await?;
@@ -380,7 +395,8 @@ mod tests {
 
             let mut src_file = src_fs
                 .open_options(
-                    &Path::from_absolute_path(&src_file_path)?,
+                    &Path::from_absolute_path(&src_file_path)
+                        .map_err(|err| Error::Path(Box::new(err)))?,
                     OpenOptions::default().write(true).read(true),
                 )
                 .await?;
@@ -393,7 +409,8 @@ mod tests {
 
             let mut dst_file = src_fs
                 .open_options(
-                    &Path::from_absolute_path(&dst_file_path)?,
+                    &Path::from_absolute_path(&dst_file_path)
+                        .map_err(|err| Error::Path(Box::new(err)))?,
                     OpenOptions::default().read(true),
                 )
                 .await?;
@@ -469,7 +486,7 @@ mod tests {
         assert_eq!(buf.as_slice(), b"hello");
         let (result, _) = file.read_exact_at(vec![0u8; 8], 5).await;
         assert!(result.is_err());
-        if let fusio_core::Error::Io(e) = result.unwrap_err() {
+        if let Error::Io(e) = result.unwrap_err() {
             assert_eq!(e.kind(), std::io::ErrorKind::UnexpectedEof);
         }
     }

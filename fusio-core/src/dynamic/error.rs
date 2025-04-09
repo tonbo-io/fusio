@@ -10,6 +10,10 @@ pub type BoxedError = Box<dyn core::error::Error + Send + Sync + 'static>;
 pub enum Error {
     #[cfg(feature = "std")]
     Io(#[from] std::io::Error),
+    #[error(transparent)]
+    Path(BoxedError),
+    #[error(transparent)]
+    Remote(BoxedError),
     #[error("unsupported operation: {message}")]
     Unsupported { message: String },
     #[error("Performs dynamic cast failed.")]
@@ -17,5 +21,5 @@ pub enum Error {
     #[error("Error occurs in wasm: {message}")]
     Wasm { message: String },
     #[error(transparent)]
-    Other(#[from] BoxedError),
+    Other(BoxedError),
 }

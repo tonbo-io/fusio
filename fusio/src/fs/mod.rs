@@ -79,11 +79,12 @@ mod tests {
                 aws::{credential::AwsCredential, fs::AmazonS3, options::S3Options, s3::S3File},
                 http::tokio::TokioClient,
             },
-            DynFs, Read, Write,
+            DynFs, Error, Read, Write,
         };
 
         let tmp_dir = TempDir::new()?;
-        let local_path = Path::from_absolute_path(&tmp_dir.as_ref().join("test.file"))?;
+        let local_path = Path::from_absolute_path(&tmp_dir.as_ref().join("test.file"))
+            .map_err(|err| Error::Path(Box::new(err)))?;
         let s3_path: Path = "s3_copy_test.file".into();
 
         let key_id = "user".to_string();

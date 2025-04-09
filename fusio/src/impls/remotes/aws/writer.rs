@@ -37,7 +37,7 @@ impl S3Writer {
         }
     }
 
-    async fn upload_part<F>(&mut self, fn_bytes_init: F) -> Result<(), fusio_core::Error>
+    async fn upload_part<F>(&mut self, fn_bytes_init: F) -> Result<(), Error>
     where
         F: FnOnce() -> BytesMut,
     {
@@ -47,7 +47,7 @@ impl S3Writer {
                     self.inner
                         .initiate()
                         .await
-                        .map_err(|err| fusio_core::Error::Other(Box::new(err)))?,
+                        .map_err(|err| Error::Remote(Box::new(err)))?,
                 );
                 self.upload_id = Some(upload_id.clone());
                 upload_id
@@ -70,7 +70,7 @@ impl S3Writer {
 }
 
 impl Write for S3Writer {
-    async fn write_all<B: IoBuf>(&mut self, buf: B) -> (Result<(), fusio_core::Error>, B) {
+    async fn write_all<B: IoBuf>(&mut self, buf: B) -> (Result<(), Error>, B) {
         if self.buf.len() > S3_PART_MINIMUM_SIZE {
             if let Err(e) = self
                 .upload_part(|| BytesMut::with_capacity(S3_PART_MINIMUM_SIZE))
@@ -84,7 +84,7 @@ impl Write for S3Writer {
         (Ok(()), buf)
     }
 
-    async fn flush(&mut self) -> Result<(), fusio_core::Error> {
+    async fn flush(&mut self) -> Result<(), Error> {
         if self.buf.len() > S3_PART_MINIMUM_SIZE {
             self.upload_part(BytesMut::new).await?;
         }
@@ -92,7 +92,7 @@ impl Write for S3Writer {
         Ok(())
     }
 
-    async fn close(&mut self) -> Result<(), fusio_core::Error> {
+    async fn close(&mut self) -> Result<(), Error> {
         let Some(upload_id) = self.upload_id.clone() else {
             if !self.buf.is_empty() {
                 let bytes = mem::replace(&mut self.buf, BytesMut::new()).freeze();
@@ -111,13 +111,13 @@ impl Write for S3Writer {
         }
         let mut parts = Vec::with_capacity(self.handlers.len());
         while let Some(handle) = self.handlers.next().await {
-            parts.push(handle.map_err(|err| fusio_core::Error::Other(Box::new(err)))?);
+            parts.push(handle.map_err(|err| Error::Remote(Box::new(err)))?);
         }
         assert_eq!(self.next_part_numer, parts.len());
         self.inner
             .complete_part(&upload_id, &parts)
             .await
-            .map_err(|err| fusio_core::Error::Other(Box::new(err)))?;
+            .map_err(|err| Error::Remote(Box::new(err)))?;
 
         Ok(())
     }

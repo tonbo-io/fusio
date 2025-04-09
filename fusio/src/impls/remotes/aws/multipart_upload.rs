@@ -69,21 +69,18 @@ impl MultipartUpload {
         request
             .sign(&self.fs.as_ref().options)
             .await
-            .map_err(|e| Error::S3Error(S3Error::from(e)))?;
+            .map_err(|e| Error::Remote(S3Error::from(e).into()))?;
         let response = self
             .fs
             .as_ref()
             .client
             .send_request(request)
             .await
-            .map_err(|e| Error::S3Error(S3Error::from(e)))?;
+            .map_err(|e| Error::Remote(S3Error::from(e).into()))?;
         Self::check_response(response).await
     }
 
-    pub(crate) async fn upload_once<B>(
-        &self,
-        upload_type: UploadType<B>,
-    ) -> Result<(), fusio_core::Error>
+    pub(crate) async fn upload_once<B>(&self, upload_type: UploadType<B>) -> Result<(), Error>
     where
         B: Body<Data = Bytes> + Clone + Unpin + Send + Sync + 'static,
         B::Error: std::error::Error + Send + Sync + 'static,
@@ -111,13 +108,11 @@ impl MultipartUpload {
         if let Some(size) = size {
             builder = builder.header(CONTENT_LENGTH, size)
         }
-        let request = builder
-            .body(body)
-            .map_err(|e| fusio_core::Error::Other(e.into()))?;
+        let request = builder.body(body).map_err(|e| Error::Remote(e.into()))?;
         let _ = self
             .send_request(request)
             .await
-            .map_err(|err| fusio_core::Error::Other(Box::new(err)))?;
+            .map_err(|err| Error::Remote(err.into()))?;
 
         Ok(())
     }
@@ -138,11 +133,11 @@ impl MultipartUpload {
             response
                 .collect()
                 .await
-                .map_err(S3Error::from)?
+                .map_err(|err| Error::Remote(err.into()))?
                 .aggregate()
                 .reader(),
         )
-        .map_err(S3Error::from)?;
+        .map_err(|err| Error::Remote(Box::new(S3Error::from(err))))?;
 
         Ok(result.upload_id)
     }
@@ -205,7 +200,7 @@ impl MultipartUpload {
                 })
                 .collect_vec(),
         })
-        .map_err(S3Error::from)?;
+        .map_err(|err| Error::Remote(S3Error::from(err).into()))?;
 
         let request = Request::builder()
             .uri(url)
@@ -221,11 +216,11 @@ impl MultipartUpload {
         let maybe_error: S3ResponseError = quick_xml::de::from_reader(
             body.collect()
                 .await
-                .map_err(S3Error::from)?
+                .map_err(|err| Error::Remote(err.into()))?
                 .aggregate()
                 .reader(),
         )
-        .map_err(S3Error::from)?;
+        .map_err(|err| Error::Remote(S3Error::from(err).into()))?;
         if !maybe_error.code.is_empty() {
             return Err(Error::Other(
                 format!("{:#?}, {:?}", parts, maybe_error).into(),
