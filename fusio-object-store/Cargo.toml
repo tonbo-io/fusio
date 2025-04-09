@@ -8,7 +8,7 @@ version.workspace = true
 
 [dependencies]
 async-stream = { version = "0.3" }
-fusio = { version = "0.3.4", path = "../fusio", features = [
+fusio = { version = "0.3.8", path = "../fusio", features = [
     "bytes",
     "dyn",
     "object_store",
