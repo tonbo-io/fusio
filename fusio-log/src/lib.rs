@@ -292,6 +292,12 @@ mod tests {
         write_u8().await;
     }
 
+    #[cfg(feature = "monoio")]
+    #[monoio::test]
+    async fn test_tokio_write_u8() {
+        write_u8().await;
+    }
+
     async fn write_struct() {
         let temp_dir = TempDir::new().unwrap();
         let path = Path::from_filesystem_path(temp_dir.path())
@@ -465,8 +471,7 @@ mod tests {
         recover_empty().await;
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_disable_buffer() {
+    async fn disable_buffer() {
         let temp_dir = TempDir::new().unwrap();
         let path = Path::from_filesystem_path(temp_dir.path())
             .unwrap()
@@ -503,5 +508,17 @@ mod tests {
             }
             assert_eq!(i, expected.len())
         }
+    }
+
+    #[cfg(feature = "tokio")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_disable_buffer() {
+        disable_buffer().await;
+    }
+
+    #[cfg(feature = "monoio")]
+    #[monoio::test]
+    async fn test_disable_buffer() {
+        disable_buffer().await;
     }
 }

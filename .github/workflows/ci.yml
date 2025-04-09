@@ -77,11 +77,17 @@ jobs:
           command: build
           args: --package fusio-parquet --features=monoio
 
-      - name: Run cargo build on fusio-log
+      - name: Run cargo build on fusio-log tokio
         uses: actions-rs/cargo@v1
         with:
           command: build
           args: --package fusio-log
+
+      - name: Run cargo build on fusio-log monoio
+        uses: actions-rs/cargo@v1
+        with:
+          command: build
+          args: --package fusio-log --no-default-features --features=aws,bytes,monoio,monoio-http
 
       - name: Run cargo test on tokio
         uses: actions-rs/cargo@v1
@@ -113,11 +119,17 @@ jobs:
           command: test
           args: --package fusio-parquet --features=monoio
 
-      - name: Run cargo test on fusio-log
+      - name: Run cargo test on fusio-log tokio
         uses: actions-rs/cargo@v1
         with:
           command: test
           args: --package fusio-log --features=tokio
+
+      - name: Run cargo test on fusio-log monoio
+        uses: actions-rs/cargo@v1
+        with:
+          command: test
+          args: --package fusio-log --no-default-features --features=aws,bytes,monoio,monoio-http
   # 2
   fmt:
     name: Rust fmt

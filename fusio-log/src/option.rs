@@ -8,14 +8,19 @@ use crate::{error::LogError, Decode, Encode, Logger};
 
 pub(crate) const DEFAULT_BUF_SIZE: usize = 4 * 1024;
 
-#[cfg(not(any(feature = "tokio", feature = "web", feature = "aws")))]
-compile_error!("one of these features must be enabled: tokio, web, aws");
+#[cfg(not(any(
+    feature = "tokio",
+    feature = "web",
+    feature = "monoio",
+    feature = "aws"
+)))]
+compile_error!("one of these features must be enabled: tokio, monoio, web, aws");
 
 #[cfg(all(
     feature = "aws",
-    not(any(feature = "tokio-http", feature = "web-http"))
+    not(any(feature = "tokio-http", feature = "web-http", feature = "monoio-http"))
 ))]
-compile_error!("aws feature must be used with tokio-http or web-http feature");
+compile_error!("aws feature must be used with tokio-http, monoio-http or web-http feature");
 
 #[derive(Clone)]
 pub struct Options {
@@ -27,7 +32,7 @@ pub struct Options {
 
 impl Options {
     /// Create a new log options.
-    #[cfg(any(feature = "tokio", feature = "web"))]
+    #[cfg(any(feature = "tokio", feature = "web", feature = "monoio"))]
     pub fn new(path: fusio::path::Path) -> Self {
         Self {
             path,
