@@ -7,7 +7,7 @@
 //!     file: &mut F,
 //!     write_buf: B,
 //!     read_buf: BM,
-//! ) -> (Result<(), Error>, B, BM)
+//! ) -> (Result<(), fusio_core::Error>, B, BM)
 //! where
 //!     F: Read + Write,
 //!     B: IoBuf,
@@ -22,7 +22,7 @@
 //!
 //!     let (result, read_buf) = file.read_exact_at(read_buf, 0).await;
 //!     if result.is_err() {
-//!         return (result.map(|_| ()), write_buf, read_buf);
+//!         return (result, write_buf, read_buf);
 //!     }
 //!
 //!     (Ok(()), write_buf, read_buf)
@@ -55,120 +55,14 @@ pub mod fs;
 pub mod impls;
 pub mod path;
 
-use std::future::Future;
-
 #[cfg(all(feature = "dyn", feature = "fs"))]
 pub use dynamic::fs::DynFs;
-#[cfg(feature = "dyn")]
-pub use dynamic::{DynRead, DynWrite};
 pub use error::Error;
+#[cfg(feature = "dyn")]
+pub use fusio_core::{DynRead, DynWrite};
 pub use fusio_core::{IoBuf, IoBufMut, MaybeSend, MaybeSync};
+pub use fusio_core::{Read, Write};
 pub use impls::*;
-
-pub trait Write: MaybeSend {
-    //! The core trait for writing data,
-    //! it is similar to [`std::io::Write`], but it takes the ownership of the buffer,
-    //! because completion-based IO requires the buffer to be pinned and should be safe to
-    //! cancellation.
-    //!
-    //! [`Write`] represents "sequential write all and overwrite" semantics,
-    //! which means each buffer will be written to the file sequentially and overwrite the previous
-    //! file when closed.
-    //!
-    //! Contents are not be garanteed to be written to the file until the [`Write::close`] method is
-    //! called, [`Write::flush`] may be used to flush the data to the file in some
-    //! implementations, but not all implementations will do so.
-    //!
-    //! Whether the operation is successful or not, the buffer will be returned,
-    //! fusio promises that the returned buffer will be the same as the input buffer.
-    //!
-    //! # Dyn Compatibility
-    //! This trait is not dyn compatible.
-    //! If you want to use [`Write`] trait in a dynamic way, you could use [`DynWrite`] trait.
-
-    fn write_all<B: IoBuf>(
-        &mut self,
-        buf: B,
-    ) -> impl Future<Output = (Result<(), Error>, B)> + MaybeSend;
-
-    fn flush(&mut self) -> impl Future<Output = Result<(), Error>> + MaybeSend;
-
-    fn close(&mut self) -> impl Future<Output = Result<(), Error>> + MaybeSend;
-}
-
-pub trait Read: MaybeSend + MaybeSync {
-    //! The core trait for reading data,
-    //! it is similar to [`std::io::Read`],
-    //! but it takes the ownership of the buffer,
-    //! because completion-based IO requires the buffer to be pinned and should be safe to
-    //! cancellation.
-    //!
-    //! [`Read`] represents "random exactly read" semantics,
-    //! which means the read operation will start at the specified position, and the buffer will be
-    //! exactly filled with the data read.
-    //!
-    //! The buffer will be returned with the result, whether the operation is successful or not,
-    //! fusio promises that the returned buffer will be the same as the input buffer.
-    //!
-    //! If you want sequential reading, try [`SeqRead`].
-    //!
-    //! # Dyn Compatibility
-    //! This trait is not dyn compatible.
-    //! If you want to use [`Read`] trait in a dynamic way, you could use [`DynRead`] trait.
-
-    fn read_exact_at<B: IoBufMut>(
-        &mut self,
-        buf: B,
-        pos: u64,
-    ) -> impl Future<Output = (Result<(), Error>, B)> + MaybeSend;
-
-    fn read_to_end_at(
-        &mut self,
-        buf: Vec<u8>,
-        pos: u64,
-    ) -> impl Future<Output = (Result<(), Error>, Vec<u8>)> + MaybeSend;
-
-    fn size(&self) -> impl Future<Output = Result<u64, Error>> + MaybeSend;
-}
-
-impl<R: Read> Read for &mut R {
-    fn read_exact_at<B: IoBufMut>(
-        &mut self,
-        buf: B,
-        pos: u64,
-    ) -> impl Future<Output = (Result<(), Error>, B)> + MaybeSend {
-        R::read_exact_at(self, buf, pos)
-    }
-
-    fn read_to_end_at(
-        &mut self,
-        buf: Vec<u8>,
-        pos: u64,
-    ) -> impl Future<Output = (Result<(), Error>, Vec<u8>)> + MaybeSend {
-        R::read_to_end_at(self, buf, pos)
-    }
-
-    fn size(&self) -> impl Future<Output = Result<u64, Error>> + MaybeSend {
-        R::size(self)
-    }
-}
-
-impl<W: Write> Write for &mut W {
-    fn write_all<B: IoBuf>(
-        &mut self,
-        buf: B,
-    ) -> impl Future<Output = (Result<(), Error>, B)> + MaybeSend {
-        W::write_all(self, buf)
-    }
-
-    fn flush(&mut self) -> impl Future<Output = Result<(), Error>> + MaybeSend {
-        W::flush(self)
-    }
-
-    fn close(&mut self) -> impl Future<Output = Result<(), Error>> + MaybeSend {
-        W::close(self)
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -194,16 +88,16 @@ mod tests {
     where
         W: Write,
     {
-        async fn write_all<B: IoBuf>(&mut self, buf: B) -> (Result<(), Error>, B) {
+        async fn write_all<B: IoBuf>(&mut self, buf: B) -> (Result<(), fusio_core::Error>, B) {
             let (result, buf) = self.w.write_all(buf).await;
             (result.inspect(|_| self.cnt += buf.bytes_init()), buf)
         }
 
-        async fn flush(&mut self) -> Result<(), Error> {
-            self.w.flush().await
+        async fn flush(&mut self) -> Result<(), fusio_core::Error> {
+            self.w.flush().await.map(Into::into)
         }
 
-        async fn close(&mut self) -> Result<(), Error> {
+        async fn close(&mut self) -> Result<(), fusio_core::Error> {
             self.w.close().await
         }
     }
@@ -225,7 +119,11 @@ mod tests {
     where
         R: Read,
     {
-        async fn read_exact_at<B: IoBufMut>(&mut self, buf: B, pos: u64) -> (Result<(), Error>, B) {
+        async fn read_exact_at<B: IoBufMut>(
+            &mut self,
+            buf: B,
+            pos: u64,
+        ) -> (Result<(), fusio_core::Error>, B) {
             let (result, buf) = self.r.read_exact_at(buf, pos).await;
             match result {
                 Ok(()) => {
@@ -236,7 +134,11 @@ mod tests {
             }
         }
 
-        async fn read_to_end_at(&mut self, buf: Vec<u8>, pos: u64) -> (Result<(), Error>, Vec<u8>) {
+        async fn read_to_end_at(
+            &mut self,
+            buf: Vec<u8>,
+            pos: u64,
+        ) -> (Result<(), fusio_core::Error>, Vec<u8>) {
             let (result, buf) = self.r.read_to_end_at(buf, pos).await;
             match result {
                 Ok(()) => {
@@ -247,7 +149,7 @@ mod tests {
             }
         }
 
-        async fn size(&self) -> Result<u64, Error> {
+        async fn size(&self) -> Result<u64, fusio_core::Error> {
             self.r.size().await
         }
     }
@@ -567,7 +469,7 @@ mod tests {
         assert_eq!(buf.as_slice(), b"hello");
         let (result, _) = file.read_exact_at(vec![0u8; 8], 5).await;
         assert!(result.is_err());
-        if let Error::Io(e) = result.unwrap_err() {
+        if let fusio_core::Error::Io(e) = result.unwrap_err() {
             assert_eq!(e.kind(), std::io::ErrorKind::UnexpectedEof);
         }
     }

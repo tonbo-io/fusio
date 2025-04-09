@@ -1,27 +1,21 @@
-use alloc::boxed::Box;
+use alloc::{boxed::Box, string::String};
+use core::fmt::Debug;
+use thiserror::Error;
 
 pub type BoxedError = Box<dyn core::error::Error + Send + Sync + 'static>;
 
-pub struct Error {
-    inner: BoxedError,
-}
-
-impl core::fmt::Debug for Error {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        core::fmt::Debug::fmt(&self.inner, f)
-    }
-}
-
-impl core::fmt::Display for Error {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        core::fmt::Display::fmt(&self.inner, f)
-    }
-}
-
-impl core::error::Error for Error {}
-
-impl From<BoxedError> for Error {
-    fn from(inner: BoxedError) -> Self {
-        Self { inner }
-    }
+#[derive(Debug, Error)]
+#[error(transparent)]
+#[non_exhaustive]
+pub enum Error {
+    #[cfg(feature = "std")]
+    Io(#[from] std::io::Error),
+    #[error("unsupported operation: {message}")]
+    Unsupported { message: String },
+    #[error("Performs dynamic cast failed.")]
+    CastError,
+    #[error("Error occurs in wasm: {message}")]
+    Wasm { message: String },
+    #[error(transparent)]
+    Other(#[from] BoxedError),
 }

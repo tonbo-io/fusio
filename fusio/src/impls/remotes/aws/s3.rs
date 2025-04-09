@@ -46,7 +46,11 @@ impl S3File {
 }
 
 impl Read for S3File {
-    async fn read_exact_at<B: IoBufMut>(&mut self, mut buf: B, pos: u64) -> (Result<(), Error>, B) {
+    async fn read_exact_at<B: IoBufMut>(
+        &mut self,
+        mut buf: B,
+        pos: u64,
+    ) -> (Result<(), fusio_core::Error>, B) {
         let request = self
             .build_request(Method::GET)
             .header(
@@ -58,7 +62,7 @@ impl Read for S3File {
 
         let mut request = match request {
             Ok(request) => request,
-            Err(e) => return (Err(e.into()), buf),
+            Err(e) => return (Err(fusio_core::Error::Other(Box::new(e))), buf),
         };
 
         if let Err(e) = request
@@ -66,7 +70,7 @@ impl Read for S3File {
             .await
             .map_err(S3Error::from)
         {
-            return (Err(e.into()), buf);
+            return (Err(fusio_core::Error::Other(Box::new(e))), buf);
         }
 
         let response = match self
@@ -78,24 +82,25 @@ impl Read for S3File {
             .map_err(S3Error::from)
         {
             Ok(response) => response,
-            Err(e) => return (Err(e.into()), buf),
+            Err(e) => return (Err(fusio_core::Error::Other(Box::new(e))), buf),
         };
 
         if !response.status().is_success() {
             return (
-                Err(S3Error::from(HttpError::HttpNotSuccess {
-                    status: response.status(),
-                    body: String::from_utf8_lossy(
-                        &response
-                            .into_body()
-                            .collect()
-                            .await
-                            .map(|b| b.to_bytes())
-                            .unwrap_or_default(),
-                    )
-                    .to_string(),
-                })
-                .into()),
+                Err(fusio_core::Error::Other(Box::new(
+                    HttpError::HttpNotSuccess {
+                        status: response.status(),
+                        body: String::from_utf8_lossy(
+                            &response
+                                .into_body()
+                                .collect()
+                                .await
+                                .map(|b| b.to_bytes())
+                                .unwrap_or_default(),
+                        )
+                        .to_string(),
+                    },
+                ))),
                 buf,
             );
         } else {
@@ -108,21 +113,25 @@ impl Read for S3File {
                         return (Err(e.into()), buf);
                     }
                 }
-                Err(e) => return (Err(e.into()), buf),
+                Err(e) => return (Err(fusio_core::Error::Other(Box::new(e))), buf),
             }
 
             (Ok(()), buf)
         }
     }
 
-    async fn read_to_end_at(&mut self, mut buf: Vec<u8>, pos: u64) -> (Result<(), Error>, Vec<u8>) {
+    async fn read_to_end_at(
+        &mut self,
+        mut buf: Vec<u8>,
+        pos: u64,
+    ) -> (Result<(), fusio_core::Error>, Vec<u8>) {
         let mut request = match self
             .build_request(Method::GET)
             .header(RANGE, format!("bytes={}-", pos))
             .body(Empty::new())
             .map_err(|e| S3Error::from(HttpError::from(e)))
         {
-            Err(e) => return (Err(e.into()), buf),
+            Err(e) => return (Err(fusio_core::Error::Other(Box::new(e))), buf),
             Ok(request) => request,
         };
 
@@ -131,7 +140,7 @@ impl Read for S3File {
             .await
             .map_err(S3Error::from)
         {
-            return (Err(e.into()), buf);
+            return (Err(fusio_core::Error::Other(Box::new(e))), buf);
         }
 
         let response = match self
@@ -143,24 +152,25 @@ impl Read for S3File {
             .map_err(S3Error::from)
         {
             Ok(response) => response,
-            Err(e) => return (Err(e.into()), buf),
+            Err(e) => return (Err(fusio_core::Error::Other(Box::new(e))), buf),
         };
 
         if !response.status().is_success() {
             return (
-                Err(S3Error::from(HttpError::HttpNotSuccess {
-                    status: response.status(),
-                    body: String::from_utf8_lossy(
-                        &response
-                            .into_body()
-                            .collect()
-                            .await
-                            .map(|b| b.to_bytes())
-                            .unwrap_or_default(),
-                    )
-                    .to_string(),
-                })
-                .into()),
+                Err(fusio_core::Error::Other(Box::new(
+                    HttpError::HttpNotSuccess {
+                        status: response.status(),
+                        body: String::from_utf8_lossy(
+                            &response
+                                .into_body()
+                                .collect()
+                                .await
+                                .map(|b| b.to_bytes())
+                                .unwrap_or_default(),
+                        )
+                        .to_string(),
+                    },
+                ))),
                 buf,
             );
         } else {
@@ -171,20 +181,21 @@ impl Read for S3File {
                     body.copy_to_slice(&mut buf[..]);
                     (Ok(()), buf)
                 }
-                Err(e) => (Err(e.into()), buf),
+                Err(e) => (Err(fusio_core::Error::Other(Box::new(e))), buf),
             }
         }
     }
 
-    async fn size(&self) -> Result<u64, Error> {
+    async fn size(&self) -> Result<u64, fusio_core::Error> {
         let mut request = self
             .build_request(Method::HEAD)
             .body(Empty::new())
-            .map_err(|e| S3Error::from(HttpError::from(e)))?;
+            .map_err(|e| fusio_core::Error::Other(Box::new(HttpError::from(e))))?;
         request
             .sign(&self.fs.as_ref().options)
             .await
-            .map_err(S3Error::from)?;
+            // .map_err(S3Error::from)?;
+            .map_err(|err| fusio_core::Error::Other(Box::new(err)))?;
 
         let response = self
             .fs
@@ -192,38 +203,42 @@ impl Read for S3File {
             .client
             .send_request(request)
             .await
-            .map_err(S3Error::from)?;
+            // .map_err(S3Error::from)?;
+            .map_err(|err| fusio_core::Error::Other(Box::new(err)))?;
 
         if !response.status().is_success() {
-            Err(S3Error::from(HttpError::HttpNotSuccess {
-                status: response.status(),
-                body: String::from_utf8_lossy(
-                    &response
-                        .into_body()
-                        .collect()
-                        .await
-                        .map_err(S3Error::from)?
-                        .to_bytes(),
-                )
-                .to_string(),
-            })
-            .into())
+            Err(fusio_core::Error::Other(Box::new(
+                HttpError::HttpNotSuccess {
+                    status: response.status(),
+                    body: String::from_utf8_lossy(
+                        &response
+                            .into_body()
+                            .collect()
+                            .await
+                            // .map_err(S3Error::from)?
+                            .map_err(|err| fusio_core::Error::Other(Box::new(err)))?
+                            .to_bytes(),
+                    )
+                    .to_string(),
+                },
+            )))
         } else {
             let size = response
                 .headers()
                 .get(CONTENT_LENGTH)
-                .ok_or_else(|| Error::Other("missing content-length header".into()))?
+                .ok_or_else(|| Error::Other("missing content-length header".into()))
+                .map_err(|err| fusio_core::Error::Other(Box::new(err)))?
                 .to_str()
-                .map_err(|e| Error::Other(e.into()))?
+                .map_err(|e| fusio_core::Error::Other(e.into()))?
                 .parse::<u64>()
-                .map_err(|e| Error::Other(e.into()))?;
+                .map_err(|e| fusio_core::Error::Other(e.into()))?;
             Ok(size)
         }
     }
 }
 
 impl Write for S3File {
-    async fn write_all<B: IoBuf>(&mut self, buf: B) -> (Result<(), Error>, B) {
+    async fn write_all<B: IoBuf>(&mut self, buf: B) -> (Result<(), fusio_core::Error>, B) {
         self.writer
             .get_or_insert_with(|| {
                 #[allow(clippy::arc_with_non_send_sync)]
@@ -236,14 +251,14 @@ impl Write for S3File {
             .await
     }
 
-    async fn flush(&mut self) -> Result<(), Error> {
+    async fn flush(&mut self) -> Result<(), fusio_core::Error> {
         if let Some(writer) = self.writer.as_mut() {
             writer.flush().await?;
         }
         Ok(())
     }
 
-    async fn close(&mut self) -> Result<(), Error> {
+    async fn close(&mut self) -> Result<(), fusio_core::Error> {
         if let Some(mut writer) = self.writer.take() {
             writer.close().await?;
         }

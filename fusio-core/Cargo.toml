@@ -11,6 +11,8 @@ bytes = ["dep:bytes"]
 completion-based = []
 default = ["alloc", "bytes"]
 no-send = []
+std = []
 
 [dependencies]
 bytes = { version = "1", optional = true, default-features = false }
+thiserror = { version = "2", default-features = false }

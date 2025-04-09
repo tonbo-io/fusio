@@ -24,6 +24,8 @@ pub enum Error {
     },
     #[error(transparent)]
     Other(#[from] BoxedError),
+    #[error(transparent)]
+    Other2(#[from] fusio_core::Error),
 }
 
 pub type BoxedError = Box<dyn std::error::Error + Send + Sync + 'static>;
@@ -34,3 +36,18 @@ pub(crate) fn wasm_err(js_val: js_sys::wasm_bindgen::JsValue) -> Error {
         message: format!("{js_val:?}"),
     }
 }
+
+// impl From<fusio_core::Error> for Error {
+//     fn from(err: fusio_core::Error) -> Self {
+//         match err {
+//             fusio_core::Error::Io(error) => Error::Io(error),
+//             fusio_core::Error::Unsupported { message } => Error::Unsupported { message },
+//             fusio_core::Error::CastError => Error::CastError,
+//             fusio_core::Error::Wasm { message } => Error::Wasm { message },
+//             fusio_core::Error::Other(error) => Error::Other(error),
+//             _ => todo!(),
+//         }
+//     }
+// }
+//
+//

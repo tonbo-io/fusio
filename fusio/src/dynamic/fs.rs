@@ -1,10 +1,12 @@
 use std::{cmp, pin::Pin, sync::Arc};
 
+use fusio_core::{DynWrite, Write};
+
 use super::{MaybeSendFuture, MaybeSendStream};
 use crate::{
     fs::{FileMeta, FileSystemTag, Fs, OpenOptions},
     path::Path,
-    DynRead, DynWrite, Error, IoBuf, IoBufMut, MaybeSend, MaybeSync, Read, Write,
+    DynRead, Error, IoBuf, IoBufMut, MaybeSend, MaybeSync, Read,
 };
 
 pub trait DynFile: DynRead + DynWrite + 'static {}
@@ -12,35 +14,48 @@ pub trait DynFile: DynRead + DynWrite + 'static {}
 impl<F> DynFile for F where F: DynRead + DynWrite + 'static {}
 
 impl<'read> Read for Box<dyn DynFile + 'read> {
-    async fn read_exact_at<B: IoBufMut>(&mut self, buf: B, pos: u64) -> (Result<(), Error>, B) {
+    async fn read_exact_at<B: IoBufMut>(
+        &mut self,
+        buf: B,
+        pos: u64,
+    ) -> (Result<(), fusio_core::Error>, B) {
         let (result, buf) =
             DynRead::read_exact_at(self.as_mut(), unsafe { buf.slice_mut_unchecked(..) }, pos)
                 .await;
-        (result, unsafe { B::recover_from_slice_mut(buf) })
+        (result.map_err(Into::into), unsafe {
+            B::recover_from_slice_mut(buf)
+        })
     }
 
-    async fn read_to_end_at(&mut self, buf: Vec<u8>, pos: u64) -> (Result<(), Error>, Vec<u8>) {
-        DynRead::read_to_end_at(self.as_mut(), buf, pos).await
+    async fn read_to_end_at(
+        &mut self,
+        buf: Vec<u8>,
+        pos: u64,
+    ) -> (Result<(), fusio_core::Error>, Vec<u8>) {
+        let res = DynRead::read_to_end_at(self.as_mut(), buf, pos).await;
+        (res.0.map_err(Into::into), res.1)
     }
 
-    async fn size(&self) -> Result<u64, Error> {
-        DynRead::size(self.as_ref()).await
+    async fn size(&self) -> Result<u64, fusio_core::Error> {
+        DynRead::size(self.as_ref()).await.map_err(Into::into)
     }
 }
 
 impl<'write> Write for Box<dyn DynFile + 'write> {
-    async fn write_all<B: IoBuf>(&mut self, buf: B) -> (Result<(), Error>, B) {
+    async fn write_all<B: IoBuf>(&mut self, buf: B) -> (Result<(), fusio_core::Error>, B) {
         let (result, buf) =
             DynWrite::write_all(self.as_mut(), unsafe { buf.slice_unchecked(..) }).await;
-        (result, unsafe { B::recover_from_slice(buf) })
+        (result.map_err(Into::into), unsafe {
+            B::recover_from_slice(buf)
+        })
     }
 
-    async fn flush(&mut self) -> Result<(), Error> {
-        DynWrite::flush(self.as_mut()).await
+    async fn flush(&mut self) -> Result<(), fusio_core::Error> {
+        DynWrite::flush(self.as_mut()).await.map_err(Into::into)
     }
 
-    async fn close(&mut self) -> Result<(), Error> {
-        DynWrite::close(self.as_mut()).await
+    async fn close(&mut self) -> Result<(), fusio_core::Error> {
+        DynWrite::close(self.as_mut()).await.map_err(Into::into)
     }
 }
 
@@ -206,12 +221,15 @@ pub async fn copy(
 #[cfg(test)]
 mod tests {
 
+    use fusio_core::Write;
+
     #[cfg(all(feature = "tokio", not(feature = "completion-based")))]
     #[tokio::test(flavor = "multi_thread")]
     async fn test_dyn_fs() {
         use tempfile::tempfile;
 
-        use crate::{disk::tokio::TokioFile, Write};
+        use crate::disk::tokio::TokioFile;
+        use fusio_core::Write;
 
         let file = TokioFile::new(tokio::fs::File::from_std(tempfile().unwrap()));
         let mut dyn_file: Box<dyn super::DynFile> = Box::new(file);
@@ -230,7 +248,7 @@ mod tests {
             dynamic::DynFile,
             fs::{Fs, OpenOptions},
             impls::buffered::BufWriter,
-            Read, Write,
+            Read,
         };
 
         let open_options = OpenOptions::default().create(true).write(true).read(true);

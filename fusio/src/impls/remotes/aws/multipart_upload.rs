@@ -80,7 +80,10 @@ impl MultipartUpload {
         Self::check_response(response).await
     }
 
-    pub(crate) async fn upload_once<B>(&self, upload_type: UploadType<B>) -> Result<(), Error>
+    pub(crate) async fn upload_once<B>(
+        &self,
+        upload_type: UploadType<B>,
+    ) -> Result<(), fusio_core::Error>
     where
         B: Body<Data = Bytes> + Clone + Unpin + Send + Sync + 'static,
         B::Error: std::error::Error + Send + Sync + 'static,
@@ -108,8 +111,13 @@ impl MultipartUpload {
         if let Some(size) = size {
             builder = builder.header(CONTENT_LENGTH, size)
         }
-        let request = builder.body(body).map_err(|e| Error::Other(e.into()))?;
-        let _ = self.send_request(request).await?;
+        let request = builder
+            .body(body)
+            .map_err(|e| fusio_core::Error::Other(e.into()))?;
+        let _ = self
+            .send_request(request)
+            .await
+            .map_err(|err| fusio_core::Error::Other(Box::new(err)))?;
 
         Ok(())
     }

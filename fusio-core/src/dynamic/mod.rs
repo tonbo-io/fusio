@@ -47,9 +47,7 @@ impl<W: Write> DynWrite for W {
 }
 
 impl<'write> Write for Box<dyn DynWrite + 'write> {
-    type Error = Error;
-
-    async fn write_all<B: IoBuf>(&mut self, buf: B) -> (Result<(), Self::Error>, B) {
+    async fn write_all<B: IoBuf>(&mut self, buf: B) -> (Result<(), Error>, B) {
         let (result, buf) =
             DynWrite::write_all(self.as_mut(), unsafe { buf.slice_unchecked(..) }).await;
         (result.map_err(Into::into), unsafe {
@@ -57,11 +55,11 @@ impl<'write> Write for Box<dyn DynWrite + 'write> {
         })
     }
 
-    async fn flush(&mut self) -> Result<(), Self::Error> {
+    async fn flush(&mut self) -> Result<(), Error> {
         DynWrite::flush(self.as_mut()).await.map_err(Into::into)
     }
 
-    async fn close(&mut self) -> Result<(), Self::Error> {
+    async fn close(&mut self) -> Result<(), Error> {
         DynWrite::close(self.as_mut()).await.map_err(Into::into)
     }
 }
@@ -117,8 +115,6 @@ where
 }
 
 impl<'read> Read for Box<dyn DynRead + 'read> {
-    type Error = Error;
-
     async fn read_exact_at<B: IoBufMut>(&mut self, buf: B, pos: u64) -> (Result<(), Error>, B) {
         let (result, buf) =
             DynRead::read_exact_at(self.as_mut(), unsafe { buf.slice_mut_unchecked(..) }, pos)
