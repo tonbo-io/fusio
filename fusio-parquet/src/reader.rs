@@ -145,7 +145,7 @@ impl AsyncFileReader for AsyncReader {
                         let buf = &prefetched_footer_slice
                             [(prefetched_footer_length - FOOTER_SIZE)..prefetched_footer_length];
                         debug_assert!(buf.len() == FOOTER_SIZE);
-                        ParquetMetaDataReader::decode_footer(buf.try_into().unwrap()).unwrap()
+                        ParquetMetaDataReader::decode_footer_tail(buf.try_into().unwrap()).unwrap().metadata_length()
                     };
 
                     // Try to read the metadata from the `prefetched_footer_content`.
@@ -204,7 +204,7 @@ impl AsyncFileReader for AsyncReader {
                         let buf = &prefetched_footer_slice
                             [(prefetched_footer_length - FOOTER_SIZE)..prefetched_footer_length];
                         debug_assert!(buf.len() == FOOTER_SIZE);
-                        ParquetMetaDataReader::decode_footer(buf.try_into().unwrap()).unwrap()
+                        ParquetMetaDataReader::decode_footer_tail(buf.try_into().unwrap()).unwrap().metadata_length()
                     };
 
                     // Try to read the metadata from the `prefetched_footer_content`.
@@ -247,7 +247,7 @@ impl AsyncFileReader for AsyncReader {
                         let buf = &prefetched_footer_slice
                             [(prefetched_footer_length - FOOTER_SIZE)..prefetched_footer_length];
                         debug_assert!(buf.len() == FOOTER_SIZE);
-                        ParquetMetaDataReader::decode_footer(buf.try_into().unwrap())?
+                        ParquetMetaDataReader::decode_footer_tail(buf.try_into().unwrap())?.metadata_length()
                     };
 
                     // Try to read the metadata from the `prefetched_footer_content`.
