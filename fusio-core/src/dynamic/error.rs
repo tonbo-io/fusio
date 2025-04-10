@@ -1,5 +1,6 @@
 use alloc::{boxed::Box, string::String};
 use core::fmt::Debug;
+
 use thiserror::Error;
 
 pub type BoxedError = Box<dyn core::error::Error + Send + Sync + 'static>;

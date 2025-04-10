@@ -226,10 +226,10 @@ mod tests {
     #[cfg(all(feature = "tokio", not(feature = "completion-based")))]
     #[tokio::test(flavor = "multi_thread")]
     async fn test_dyn_fs() {
+        use fusio_core::Write;
         use tempfile::tempfile;
 
         use crate::disk::tokio::TokioFile;
-        use fusio_core::Write;
 
         let file = TokioFile::new(tokio::fs::File::from_std(tempfile().unwrap()));
         let mut dyn_file: Box<dyn super::DynFile> = Box::new(file);

@@ -1,3 +1,4 @@
+use fusio::BoxedError;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -21,14 +22,12 @@ pub enum LogError {
     Other(#[from] BoxedError),
 }
 
-pub type BoxedError = Box<dyn std::error::Error + Send + Sync + 'static>;
-
 impl From<fusio::Error> for LogError {
     fn from(err: fusio::Error) -> Self {
         match err {
             fusio::Error::Io(error) => LogError::IO(error),
             #[cfg(feature = "aws")]
-            fusio::Error::S3Error(_) => LogError::S3Error(err),
+            fusio::Error::Remote(_) => LogError::S3Error(err),
             err => LogError::Other(Box::new(err)),
         }
     }
