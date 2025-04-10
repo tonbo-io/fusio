@@ -1,6 +1,8 @@
 use std::cmp;
 
-use crate::{Error, IoBuf, IoBufMut, Read, Write};
+use fusio_core::Write;
+
+use crate::{Error, IoBuf, IoBufMut, Read};
 
 pub struct BufReader<F> {
     inner: F,
@@ -34,7 +36,7 @@ impl<F: Read> Read for BufReader<F> {
         &mut self,
         mut buf: B,
         mut pos: u64,
-    ) -> (Result<(), Error>, B) {
+    ) -> (Result<(), fusio_core::Error>, B) {
         let mut write_pos = 0;
         let buf_slice = buf.as_slice_mut();
 
@@ -56,21 +58,25 @@ impl<F: Read> Read for BufReader<F> {
         (Ok(()), buf)
     }
 
-    async fn read_to_end_at(&mut self, mut buf: Vec<u8>, pos: u64) -> (Result<(), Error>, Vec<u8>) {
+    async fn read_to_end_at(
+        &mut self,
+        mut buf: Vec<u8>,
+        pos: u64,
+    ) -> (Result<(), fusio_core::Error>, Vec<u8>) {
         buf.resize((self.size - pos) as usize, 0u8);
 
         self.read_exact_at(buf, pos).await
     }
 
-    async fn size(&self) -> Result<u64, Error> {
+    async fn size(&self) -> Result<u64, fusio_core::Error> {
         Ok(self.size)
     }
 }
 
 impl<F: Read> BufReader<F> {
-    async fn filling_buf(&mut self, pos: u64) -> Result<(), Error> {
+    async fn filling_buf(&mut self, pos: u64) -> Result<(), fusio_core::Error> {
         if self.size <= pos {
-            return Err(Error::Io(std::io::Error::new(
+            return Err(fusio_core::Error::Io(std::io::Error::new(
                 std::io::ErrorKind::UnexpectedEof,
                 "read unexpected eof",
             )));
@@ -114,7 +120,7 @@ impl<F> BufWriter<F> {
 }
 
 impl<F: Write> Write for BufWriter<F> {
-    async fn write_all<B: IoBuf>(&mut self, buf: B) -> (Result<(), Error>, B) {
+    async fn write_all<B: IoBuf>(&mut self, buf: B) -> (Result<(), fusio_core::Error>, B) {
         let (len, capacity) = {
             let buf = self.buf.as_ref().expect("no buffer available");
             (buf.len(), buf.capacity())
@@ -142,7 +148,7 @@ impl<F: Write> Write for BufWriter<F> {
     }
 
     /// Flush buffer to file
-    async fn flush(&mut self) -> Result<(), Error> {
+    async fn flush(&mut self) -> Result<(), fusio_core::Error> {
         let data = self.buf.take().expect("no buffer available");
         let (result, mut data) = self.inner.write_all(data).await;
         result?;
@@ -154,7 +160,7 @@ impl<F: Write> Write for BufWriter<F> {
         Ok(())
     }
 
-    async fn close(&mut self) -> Result<(), Error> {
+    async fn close(&mut self) -> Result<(), fusio_core::Error> {
         self.flush().await?;
         self.inner.close().await?;
 
@@ -167,18 +173,26 @@ impl<F: Write> Write for BufWriter<F> {
 pub(crate) mod tests {
 
     use super::BufWriter;
-    use crate::{buffered::BufReader, Error, IoBufMut, Read, Write};
+    use crate::{buffered::BufReader, IoBufMut, Read, Write};
 
     impl<F: Read> Read for BufWriter<F> {
-        async fn read_exact_at<B: IoBufMut>(&mut self, buf: B, pos: u64) -> (Result<(), Error>, B) {
+        async fn read_exact_at<B: IoBufMut>(
+            &mut self,
+            buf: B,
+            pos: u64,
+        ) -> (Result<(), fusio_core::Error>, B) {
             self.inner.read_exact_at(buf, pos).await
         }
 
-        async fn read_to_end_at(&mut self, buf: Vec<u8>, pos: u64) -> (Result<(), Error>, Vec<u8>) {
+        async fn read_to_end_at(
+            &mut self,
+            buf: Vec<u8>,
+            pos: u64,
+        ) -> (Result<(), fusio_core::Error>, Vec<u8>) {
             self.inner.read_to_end_at(buf, pos).await
         }
 
-        async fn size(&self) -> Result<u64, Error> {
+        async fn size(&self) -> Result<u64, fusio_core::Error> {
             let size = self.inner.size().await?;
             Ok(size)
         }

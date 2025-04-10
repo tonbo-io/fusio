@@ -56,7 +56,7 @@ impl<O: ObjectStore> Fs for S3Store<O> {
         let mut stream = self.inner.list(Some(&path));
 
         Ok(stream! {
-            while let Some(meta) = stream.next().await.transpose().map_err(BoxedError::from)? {
+            while let Some(meta) = stream.next().await.transpose().map_err(|err| Error::Remote(BoxedError::from(err)))? {
                 yield Ok(FileMeta { path: meta.location.into(), size: meta.size as u64 });
             }
         })
@@ -64,7 +64,10 @@ impl<O: ObjectStore> Fs for S3Store<O> {
 
     async fn remove(&self, path: &Path) -> Result<(), Error> {
         let path = path.clone().into();
-        self.inner.delete(&path).await.map_err(BoxedError::from)?;
+        self.inner
+            .delete(&path)
+            .await
+            .map_err(|err| Error::Remote(BoxedError::from(err)))?;
 
         Ok(())
     }
@@ -76,7 +79,7 @@ impl<O: ObjectStore> Fs for S3Store<O> {
         self.inner
             .copy(&from, &to)
             .await
-            .map_err(BoxedError::from)?;
+            .map_err(|err| Error::Remote(BoxedError::from(err)))?;
 
         Ok(())
     }

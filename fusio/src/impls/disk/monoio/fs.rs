@@ -20,7 +20,7 @@ impl Fs for MonoIoFs {
     }
 
     async fn open_options(&self, path: &Path, options: OpenOptions) -> Result<Self::File, Error> {
-        let local_path = path_to_local(path)?;
+        let local_path = path_to_local(path).map_err(|err| Error::Path(err.into()))?;
         let file = monoio::fs::OpenOptions::new()
             .read(options.read)
             .write(options.write)
@@ -34,7 +34,7 @@ impl Fs for MonoIoFs {
     }
 
     async fn create_dir_all(path: &Path) -> Result<(), Error> {
-        let path = path_to_local(path)?;
+        let path = path_to_local(path).map_err(|err| Error::Path(err.into()))?;
         create_dir_all(path)?;
 
         Ok(())
@@ -44,26 +44,29 @@ impl Fs for MonoIoFs {
         &self,
         path: &Path,
     ) -> Result<impl Stream<Item = Result<FileMeta, Error>>, Error> {
-        let path = path_to_local(path)?;
+        let path = path_to_local(path).map_err(|err| Error::Path(err.into()))?;
         let dir = path.read_dir()?;
 
         Ok(stream! {
             for entry in dir {
                 let entry = entry?;
-                yield Ok(FileMeta { path: Path::from_filesystem_path(entry.path())?, size: entry.metadata()?.len() });
+                yield Ok(FileMeta {
+                    path: Path::from_filesystem_path(entry.path()).map_err(|err| Error::Path(err.into()))?,
+                    size: entry.metadata()?.len()
+                });
             }
         })
     }
 
     async fn remove(&self, path: &Path) -> Result<(), Error> {
-        let path = path_to_local(path)?;
+        let path = path_to_local(path).map_err(|err| Error::Path(err.into()))?;
 
         Ok(fs::remove_file(path)?)
     }
 
     async fn copy(&self, from: &Path, to: &Path) -> Result<(), Error> {
-        let from = path_to_local(from)?;
-        let to = path_to_local(to)?;
+        let from = path_to_local(from).map_err(|err| Error::Path(err.into()))?;
+        let to = path_to_local(to).map_err(|err| Error::Path(err.into()))?;
 
         monoio::spawn(async move { fs::copy(&from, &to) }).await?;
 
@@ -71,8 +74,8 @@ impl Fs for MonoIoFs {
     }
 
     async fn link(&self, from: &Path, to: &Path) -> Result<(), Error> {
-        let from = path_to_local(from)?;
-        let to = path_to_local(to)?;
+        let from = path_to_local(from).map_err(|err| Error::Path(err.into()))?;
+        let to = path_to_local(to).map_err(|err| Error::Path(err.into()))?;
 
         monoio::spawn(async move { fs::hard_link(&from, &to) }).await?;
 

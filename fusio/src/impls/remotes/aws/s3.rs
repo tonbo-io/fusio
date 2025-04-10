@@ -58,7 +58,7 @@ impl Read for S3File {
 
         let mut request = match request {
             Ok(request) => request,
-            Err(e) => return (Err(e.into()), buf),
+            Err(e) => return (Err(Error::Remote(Box::new(e))), buf),
         };
 
         if let Err(e) = request
@@ -66,7 +66,7 @@ impl Read for S3File {
             .await
             .map_err(S3Error::from)
         {
-            return (Err(e.into()), buf);
+            return (Err(Error::Remote(e.into())), buf);
         }
 
         let response = match self
@@ -78,12 +78,12 @@ impl Read for S3File {
             .map_err(S3Error::from)
         {
             Ok(response) => response,
-            Err(e) => return (Err(e.into()), buf),
+            Err(e) => return (Err(Error::Remote(Box::new(e))), buf),
         };
 
         if !response.status().is_success() {
             return (
-                Err(S3Error::from(HttpError::HttpNotSuccess {
+                Err(Error::Remote(Box::new(HttpError::HttpNotSuccess {
                     status: response.status(),
                     body: String::from_utf8_lossy(
                         &response
@@ -94,8 +94,7 @@ impl Read for S3File {
                             .unwrap_or_default(),
                     )
                     .to_string(),
-                })
-                .into()),
+                }))),
                 buf,
             );
         } else {
@@ -108,7 +107,7 @@ impl Read for S3File {
                         return (Err(e.into()), buf);
                     }
                 }
-                Err(e) => return (Err(e.into()), buf),
+                Err(e) => return (Err(Error::Remote(Box::new(e))), buf),
             }
 
             (Ok(()), buf)
@@ -122,7 +121,7 @@ impl Read for S3File {
             .body(Empty::new())
             .map_err(|e| S3Error::from(HttpError::from(e)))
         {
-            Err(e) => return (Err(e.into()), buf),
+            Err(e) => return (Err(Error::Remote(Box::new(e))), buf),
             Ok(request) => request,
         };
 
@@ -131,7 +130,7 @@ impl Read for S3File {
             .await
             .map_err(S3Error::from)
         {
-            return (Err(e.into()), buf);
+            return (Err(Error::Other(Box::new(e))), buf);
         }
 
         let response = match self
@@ -143,12 +142,12 @@ impl Read for S3File {
             .map_err(S3Error::from)
         {
             Ok(response) => response,
-            Err(e) => return (Err(e.into()), buf),
+            Err(e) => return (Err(Error::Remote(Box::new(e))), buf),
         };
 
         if !response.status().is_success() {
             return (
-                Err(S3Error::from(HttpError::HttpNotSuccess {
+                Err(Error::Remote(Box::new(HttpError::HttpNotSuccess {
                     status: response.status(),
                     body: String::from_utf8_lossy(
                         &response
@@ -159,8 +158,7 @@ impl Read for S3File {
                             .unwrap_or_default(),
                     )
                     .to_string(),
-                })
-                .into()),
+                }))),
                 buf,
             );
         } else {
@@ -171,7 +169,7 @@ impl Read for S3File {
                     body.copy_to_slice(&mut buf[..]);
                     (Ok(()), buf)
                 }
-                Err(e) => (Err(e.into()), buf),
+                Err(e) => (Err(Error::Remote(Box::new(e))), buf),
             }
         }
     }
@@ -180,11 +178,11 @@ impl Read for S3File {
         let mut request = self
             .build_request(Method::HEAD)
             .body(Empty::new())
-            .map_err(|e| S3Error::from(HttpError::from(e)))?;
+            .map_err(|e| Error::Remote(Box::new(HttpError::from(e))))?;
         request
             .sign(&self.fs.as_ref().options)
             .await
-            .map_err(S3Error::from)?;
+            .map_err(|err| Error::Remote(Box::new(err)))?;
 
         let response = self
             .fs
@@ -192,31 +190,31 @@ impl Read for S3File {
             .client
             .send_request(request)
             .await
-            .map_err(S3Error::from)?;
+            .map_err(|err| Error::Remote(Box::new(err)))?;
 
         if !response.status().is_success() {
-            Err(S3Error::from(HttpError::HttpNotSuccess {
+            Err(Error::Other(Box::new(HttpError::HttpNotSuccess {
                 status: response.status(),
                 body: String::from_utf8_lossy(
                     &response
                         .into_body()
                         .collect()
                         .await
-                        .map_err(S3Error::from)?
+                        .map_err(|err| Error::Remote(Box::new(err)))?
                         .to_bytes(),
                 )
                 .to_string(),
-            })
-            .into())
+            })))
         } else {
             let size = response
                 .headers()
                 .get(CONTENT_LENGTH)
-                .ok_or_else(|| Error::Other("missing content-length header".into()))?
+                .ok_or_else(|| Error::Other("missing content-length header".into()))
+                .map_err(|err| Error::Other(Box::new(err)))?
                 .to_str()
-                .map_err(|e| Error::Other(e.into()))?
+                .map_err(|e| Error::Remote(e.into()))?
                 .parse::<u64>()
-                .map_err(|e| Error::Other(e.into()))?;
+                .map_err(|e| Error::Remote(e.into()))?;
             Ok(size)
         }
     }

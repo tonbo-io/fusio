@@ -21,7 +21,7 @@ impl Fs for TokioUringFs {
     }
 
     async fn open_options(&self, path: &Path, options: OpenOptions) -> Result<Self::File, Error> {
-        let local_path = path_to_local(path)?;
+        let local_path = path_to_local(path).map_err(|err| Error::Path(err.into()))?;
 
         let file = tokio_uring::fs::OpenOptions::new()
             .read(options.read)
@@ -38,7 +38,7 @@ impl Fs for TokioUringFs {
     }
 
     async fn create_dir_all(path: &Path) -> Result<(), Error> {
-        let path = path_to_local(path)?;
+        let path = path_to_local(path).map_err(|err| Error::Path(err.into()))?;
         create_dir_all(path).await?;
 
         Ok(())
@@ -48,26 +48,29 @@ impl Fs for TokioUringFs {
         &self,
         path: &Path,
     ) -> Result<impl Stream<Item = Result<FileMeta, Error>>, Error> {
-        let path = path_to_local(path)?;
+        let path = path_to_local(path).map_err(|err| Error::Path(err.into()))?;
         let dir = path.read_dir()?;
 
         Ok(stream! {
             for entry in dir {
                 let entry = entry?;
-                yield Ok(FileMeta { path: Path::from_filesystem_path(entry.path())?, size: entry.metadata()?.len() });
+                yield Ok(FileMeta {
+                    path: Path::from_filesystem_path(entry.path()).map_err(|err| Error::Path(err.into()))?,
+                    size: entry.metadata()?.len()
+                });
             }
         })
     }
 
     async fn remove(&self, path: &Path) -> Result<(), Error> {
-        let path = path_to_local(path)?;
+        let path = path_to_local(path).map_err(|err| Error::Path(err.into()))?;
 
         Ok(remove_file(path).await?)
     }
 
     async fn copy(&self, from: &Path, to: &Path) -> Result<(), Error> {
-        let from = path_to_local(from)?;
-        let to = path_to_local(to)?;
+        let from = path_to_local(from).map_err(|err| Error::Path(err.into()))?;
+        let to = path_to_local(to).map_err(|err| Error::Path(err.into()))?;
 
         fs::copy(&from, &to)?;
 
@@ -75,8 +78,8 @@ impl Fs for TokioUringFs {
     }
 
     async fn link(&self, from: &Path, to: &Path) -> Result<(), Error> {
-        let from = path_to_local(from)?;
-        let to = path_to_local(to)?;
+        let from = path_to_local(from).map_err(|err| Error::Path(err.into()))?;
+        let to = path_to_local(to).map_err(|err| Error::Path(err.into()))?;
 
         fs::hard_link(&from, &to)?;
 
