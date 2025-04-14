@@ -85,9 +85,9 @@ http-body = { version = "1", optional = true }
 http-body-util = { version = "0.1", optional = true, default-features = false }
 itertools = { version = "0.13" }
 monoio = { version = "0.2", optional = true, features = ["sync"] }
-monoio-http-client = {version = "0.3.3", optional = true}
-monoio-http = {version = "0.3", optional = true}
-object_store = { version = "0.11", optional = true, features = ["aws"] }
+monoio-http-client = { version = "0.3.3", optional = true }
+monoio-http = { version = "0.3", optional = true }
+object_store = { version = "0.12", optional = true, features = ["aws"] }
 percent-encoding = { version = "2", default-features = false }
 quick-xml = { version = "0.36", features = [
     "overlapped-lists",
@@ -141,7 +141,7 @@ web-sys = { version = "0.3", optional = true, features = [
 tokio-uring = { version = "0.5", default-features = false, optional = true }
 
 [dev-dependencies]
-rand = "0.8"
+rand = "0.9"
 tempfile = "3"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]

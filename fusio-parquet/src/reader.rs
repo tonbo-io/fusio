@@ -5,7 +5,7 @@ use bytes::{Bytes, BytesMut};
 use fusio::{dynamic::DynFile, Read};
 use futures::{future::BoxFuture, FutureExt};
 use parquet::{
-    arrow::async_reader::AsyncFileReader,
+    arrow::{arrow_reader::ArrowReaderOptions, async_reader::AsyncFileReader},
     errors::ParquetError,
     file::{
         metadata::{ParquetMetaData, ParquetMetaDataReader},
@@ -52,14 +52,14 @@ impl AsyncReader {
 }
 
 impl AsyncFileReader for AsyncReader {
-    fn get_bytes(&mut self, range: Range<usize>) -> BoxFuture<'_, parquet::errors::Result<Bytes>> {
+    fn get_bytes(&mut self, range: Range<u64>) -> BoxFuture<'_, parquet::errors::Result<Bytes>> {
         cfg_if::cfg_if! {
             if #[cfg(all(feature = "web", target_arch = "wasm32"))] {
                 let (sender, receiver) = futures::channel::oneshot::channel::<Result<Bytes, ParquetError>>();
 
                 let reader = self.inner.clone();
                 wasm_bindgen_futures::spawn_local(async move {
-                    let len = range.end - range.start;
+                    let len = (range.end - range.start)  as usize;
                     let mut buf = Vec::with_capacity(len);
                     unsafe {
                         buf.set_len(len);
@@ -84,7 +84,7 @@ impl AsyncFileReader for AsyncReader {
             } else if #[cfg(feature = "monoio")] {
                 let reader = self.inner.clone();
                 monoio::spawn(async move {
-                    let len = range.end - range.start;
+                    let len = (range.end - range.start) as usize;
                     let mut buf = Vec::with_capacity(len);
                     unsafe {
                         buf.set_len(len);
@@ -99,7 +99,7 @@ impl AsyncFileReader for AsyncReader {
                 }).boxed()
             } else {
                 async move {
-                    let len = range.end - range.start;
+                    let len = (range.end - range.start)  as usize;
                     let mut buf = Vec::with_capacity(len);
                     unsafe {
                         buf.set_len(len);
@@ -114,7 +114,10 @@ impl AsyncFileReader for AsyncReader {
         }
     }
 
-    fn get_metadata(&mut self) -> BoxFuture<'_, parquet::errors::Result<Arc<ParquetMetaData>>> {
+    fn get_metadata(
+        &mut self,
+        _options: Option<&ArrowReaderOptions>,
+    ) -> BoxFuture<'_, parquet::errors::Result<Arc<ParquetMetaData>>> {
         if self.content_length == 0 {
             return async { Err(ParquetError::EOF("file empty".to_string())) }.boxed();
         }
@@ -293,7 +296,7 @@ mod tests {
         file::properties::WriterProperties,
         format::KeyValue,
     };
-    use rand::{distributions::Alphanumeric, Rng};
+    use rand::{distr::Alphanumeric, Rng};
     use tempfile::tempdir;
 
     use crate::{
@@ -365,7 +368,7 @@ mod tests {
     }
 
     fn gen_fixed_string(size: usize) -> String {
-        rand::thread_rng()
+        rand::rng()
             .sample_iter(&Alphanumeric)
             .take(size)
             .map(char::from)
