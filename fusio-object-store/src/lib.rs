@@ -48,15 +48,15 @@ impl<O: ObjectStore> S3File<O> {
 impl<O: ObjectStore> Read for S3File<O> {
     async fn read_exact_at<B: IoBufMut>(&mut self, buf: B, pos: u64) -> (Result<(), Error>, B) {
         let range = GetRange::Bounded(Range {
-            start: pos as usize,
-            end: pos as usize + buf.bytes_init(),
+            start: pos,
+            end: pos + buf.bytes_init() as u64,
         });
 
         self.read_with_range(range, buf).await
     }
 
     async fn read_to_end_at(&mut self, buf: Vec<u8>, pos: u64) -> (Result<(), Error>, Vec<u8>) {
-        let range = GetRange::Offset(pos as usize);
+        let range = GetRange::Offset(pos);
 
         let (result, buf) = self.read_with_range(range, buf).await;
         match result {

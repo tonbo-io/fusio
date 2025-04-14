@@ -37,7 +37,7 @@ cfg-if = "1.0.0"
 fusio = { version = "0.3.8", path = "../fusio", features = ["bytes", "dyn"] }
 futures = { version = "0.3" }
 monoio = { version = "0.2", optional = true, features = ["sync"] }
-parquet = { version = "54", default-features = false, features = [
+parquet = { version = "55", default-features = false, features = [
     "arrow",
     "async",
 ] }
@@ -50,7 +50,7 @@ tokio = { version = "1.40", optional = true, features = [
 wasm-bindgen-futures = { version = "0.4.45" }
 
 [dev-dependencies]
-arrow = { version = "54" }
+arrow = { version = "55" }
 # only parquet_dal maain brach supports parquet v54.x
 # but opendal does not support depends on git respository
 # therefore, clone it to local and use it as a local package
