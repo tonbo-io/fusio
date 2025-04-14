@@ -6,9 +6,10 @@ use tokio_uring::fs::{create_dir_all, remove_file};
 
 use crate::{
     disk::tokio_uring::TokioUringFile,
+    error::Error,
     fs::{FileMeta, FileSystemTag, Fs, OpenOptions},
     path::{path_to_local, Path},
-    Error, MaybeSend,
+    MaybeSend,
 };
 
 pub struct TokioUringFs;

@@ -10,7 +10,7 @@ version.workspace = true
 alloc = []
 bytes = ["dep:bytes"]
 completion-based = []
-default = ["alloc", "bytes"]
+default = ["alloc", "bytes", "std"]
 no-send = []
 std = []
 

@@ -17,10 +17,9 @@ use super::OPFSFile;
 use crate::disk::OPFSSyncFile;
 use crate::{
     disk::opfs::{promise, storage},
-    error::wasm_err,
+    error::{wasm_err, Error},
     fs::{FileMeta, FileSystemTag, Fs, OpenOptions},
     path::Path,
-    Error,
 };
 
 /// [OPFS](https://developer.mozilla.org/en-US/docs/Web/API/File_System_API/Origin_private_file_system) backend

@@ -10,6 +10,7 @@ use percent_encoding::utf8_percent_encode;
 
 use super::fs::AmazonS3;
 use crate::{
+    error::Error,
     path::Path,
     remotes::{
         aws::{sign::Sign, S3Error, S3ResponseError, STRICT_PATH_ENCODE_SET},
@@ -19,7 +20,6 @@ use crate::{
             InitiateMultipartUploadResult, MultipartPart,
         },
     },
-    Error,
 };
 
 pub(crate) struct MultipartUpload {

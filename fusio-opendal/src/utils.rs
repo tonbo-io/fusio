@@ -1,6 +1,6 @@
 use std::io;
 
-use fusio::Error;
+use fusio::error::Error;
 
 /// Convert an `opendal::Error` into a `fusio::Error`.
 pub fn parse_opendal_error(e: opendal::Error) -> Error {

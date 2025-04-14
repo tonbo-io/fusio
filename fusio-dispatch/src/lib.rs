@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use fusio::{DynFs, Error};
+use fusio::{error::Error, DynFs};
 
 #[derive(Clone)]
 #[non_exhaustive]

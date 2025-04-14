@@ -49,7 +49,7 @@
 
 #[cfg(feature = "dyn")]
 pub mod dynamic;
-mod error;
+pub mod error;
 #[cfg(feature = "fs")]
 pub mod fs;
 pub mod impls;
@@ -57,16 +57,19 @@ pub mod path;
 
 #[cfg(all(feature = "dyn", feature = "fs"))]
 pub use dynamic::fs::DynFs;
-pub use fusio_core::{BoxedError, Error, IoBuf, IoBufMut, MaybeSend, MaybeSync, Read, Write};
+pub use fusio_core::{
+    error::{BoxedError, Error},
+    IoBuf, IoBufMut, MaybeSend, MaybeSync, Read, Write,
+};
 #[cfg(feature = "dyn")]
 pub use fusio_core::{DynRead, DynWrite};
 pub use impls::*;
 
 #[cfg(test)]
 mod tests {
-    use fusio_core::{IoBuf, IoBufMut};
+    use fusio_core::{error::Error, IoBuf, IoBufMut};
 
-    use super::{Error, Read, Write};
+    use super::{Read, Write};
 
     #[allow(unused)]
     struct CountWrite<W> {
@@ -184,7 +187,7 @@ mod tests {
     {
         use std::collections::HashSet;
 
-        use fusio_core::Error;
+        use fusio_core::error::Error;
         use futures_util::StreamExt;
         use tempfile::TempDir;
 

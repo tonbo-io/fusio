@@ -1,6 +1,6 @@
 use thiserror::Error;
 
-use crate::BoxedError;
+use crate::error::BoxedError;
 
 #[non_exhaustive]
 #[derive(Debug, Error)]

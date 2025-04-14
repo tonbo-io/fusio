@@ -9,9 +9,9 @@ use tokio::{
 
 use crate::{
     disk::tokio::TokioFile,
+    error::Error,
     fs::{FileMeta, FileSystemTag, Fs, OpenOptions},
     path::{path_to_local, Path},
-    Error,
 };
 
 pub struct TokioFs;

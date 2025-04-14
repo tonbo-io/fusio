@@ -3,7 +3,10 @@ use std::io;
 use web_sys::{FileSystemFileHandle, FileSystemReadWriteOptions, FileSystemSyncAccessHandle};
 
 use crate::{
-    disk::opfs::promise, error::wasm_err, fs::OpenOptions, Error, IoBuf, IoBufMut, Read, Write,
+    disk::opfs::promise,
+    error::{wasm_err, Error},
+    fs::OpenOptions,
+    IoBuf, IoBufMut, Read, Write,
 };
 
 /// OPFS based on [FileSystemWritableFileStream](https://developer.mozilla.org/en-US/docs/Web/API/FileSystemSyncAccessHandle)

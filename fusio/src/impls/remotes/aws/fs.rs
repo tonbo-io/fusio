@@ -11,6 +11,7 @@ use url::Url;
 
 use super::{credential::AwsCredential, options::S3Options, S3Error, S3File};
 use crate::{
+    error::Error,
     fs::{FileMeta, FileSystemTag, Fs, OpenOptions},
     path::Path,
     remotes::{
@@ -20,7 +21,6 @@ use crate::{
         },
         http::{DynHttpClient, HttpClient, HttpError},
     },
-    Error,
 };
 
 pub struct AmazonS3Builder {

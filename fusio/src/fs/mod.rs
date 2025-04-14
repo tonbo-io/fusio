@@ -8,7 +8,7 @@ use std::future::Future;
 use futures_core::Stream;
 pub use options::*;
 
-use crate::{path::Path, Error, MaybeSend, MaybeSync, Read, Write};
+use crate::{error::Error, path::Path, MaybeSend, MaybeSync, Read, Write};
 
 #[derive(Debug)]
 pub struct FileMeta {
@@ -58,6 +58,8 @@ pub trait Fs: MaybeSend + MaybeSync {
 
 #[cfg(test)]
 mod tests {
+    use crate::error::Error;
+
     #[ignore]
     #[cfg(all(
         feature = "tokio-http",
@@ -66,7 +68,7 @@ mod tests {
         not(feature = "completion-based")
     ))]
     #[tokio::test]
-    async fn test_diff_fs_copy() -> Result<(), crate::Error> {
+    async fn test_diff_fs_copy() -> Result<(), Error> {
         use std::sync::Arc;
 
         use tempfile::TempDir;
@@ -79,7 +81,7 @@ mod tests {
                 aws::{credential::AwsCredential, fs::AmazonS3, options::S3Options, s3::S3File},
                 http::tokio::TokioClient,
             },
-            DynFs, Error, Read, Write,
+            DynFs, Read, Write,
         };
 
         let tmp_dir = TempDir::new()?;

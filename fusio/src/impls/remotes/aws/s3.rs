@@ -11,12 +11,13 @@ use percent_encoding::utf8_percent_encode;
 
 use super::{fs::AmazonS3, sign::Sign, S3Error, STRICT_PATH_ENCODE_SET};
 use crate::{
+    error::Error,
     path::Path,
     remotes::{
         aws::{multipart_upload::MultipartUpload, writer::S3Writer},
         http::{HttpClient, HttpError},
     },
-    Error, IoBuf, IoBufMut, Read, Write,
+    IoBuf, IoBufMut, Read, Write,
 };
 
 pub struct S3File {

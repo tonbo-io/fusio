@@ -1,12 +1,9 @@
-pub mod error;
-
 use alloc::{boxed::Box, vec::Vec};
 use core::pin::Pin;
 
-use error::{BoxedError, Error};
-
 use crate::{
     buf::slice::{Buf, BufMut},
+    error::{BoxedError, Error},
     IoBuf, IoBufMut, MaybeSend, MaybeSendFuture, MaybeSync, Read, Write,
 };
 

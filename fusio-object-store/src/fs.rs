@@ -2,9 +2,9 @@ use std::sync::Arc;
 
 use async_stream::stream;
 use fusio::{
+    error::Error,
     fs::{FileMeta, FileSystemTag, Fs, OpenOptions},
     path::Path,
-    Error,
 };
 use futures_core::Stream;
 use futures_util::stream::StreamExt;

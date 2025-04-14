@@ -32,11 +32,11 @@ use url::Url;
 
 use super::CHECKSUM_HEADER;
 use crate::{
+    error::BoxedError,
     remotes::{
         aws::{STRICT_ENCODE_SET, STRICT_PATH_ENCODE_SET},
         http::HttpClient,
     },
-    BoxedError,
 };
 
 const EMPTY_SHA256_HASH: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";

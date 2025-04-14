@@ -16,7 +16,7 @@ use http::{Request, Response};
 use http_body::Body;
 use http_body_util::BodyExt;
 
-use crate::BoxedError;
+use crate::error::BoxedError;
 
 pub trait HttpClient: MaybeSend + MaybeSync {
     type RespBody: Body<Data: Into<Bytes>, Error: Into<BoxedError>> + Send + MaybeSync + 'static;

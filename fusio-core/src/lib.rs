@@ -6,16 +6,15 @@ extern crate alloc;
 pub mod buf;
 #[cfg(feature = "alloc")]
 mod dynamic;
+pub mod error;
 mod maybe;
 
 use core::future::Future;
 
 pub use buf::{IoBuf, IoBufMut};
 #[cfg(feature = "alloc")]
-pub use dynamic::{
-    error::{BoxedError, Error},
-    DynRead, DynWrite,
-};
+pub use dynamic::{DynRead, DynWrite};
+use error::Error;
 pub use maybe::{MaybeOwned, MaybeSend, MaybeSendFuture, MaybeSync};
 
 pub trait Write: MaybeSend {
@@ -39,10 +38,6 @@ pub trait Write: MaybeSend {
     //! This trait is not dyn compatible.
     //! If you want to use [`Write`] trait in a dynamic way, you could use [`DynWrite`] trait.
 
-    // type Error: core::error::Error + Send + Sync + 'static;
-    // type Error: From<Error> + std::error::Error + Send + Sync + 'static;
-
-    // type Error: From<fusio::Error> + std::error::Error + Send + Sync + 'static;
     fn write_all<B: IoBuf>(
         &mut self,
         buf: B,

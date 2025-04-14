@@ -2,7 +2,7 @@ pub mod fs;
 
 use std::{ops::Range, sync::Arc};
 
-use fusio::{Error, IoBuf, IoBufMut, Read, Write};
+use fusio::{error::Error, IoBuf, IoBufMut, Read, Write};
 use futures_util::lock::Mutex;
 use object_store::{buffered::BufWriter, path::Path, GetOptions, GetRange, ObjectStore};
 use parquet::arrow::async_writer::{AsyncFileWriter, ParquetObjectWriter};

@@ -5,9 +5,9 @@ use futures_core::Stream;
 
 use super::MonoioFile;
 use crate::{
+    error::Error,
     fs::{FileMeta, FileSystemTag, Fs, OpenOptions},
     path::{path_to_local, Path},
-    Error,
 };
 
 pub struct MonoIoFs;

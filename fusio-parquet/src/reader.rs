@@ -34,7 +34,10 @@ fn set_prefetch_footer_size(footer_size: usize, content_size: u64) -> usize {
 }
 
 impl AsyncReader {
-    pub async fn new(reader: Box<dyn DynFile>, content_length: u64) -> Result<Self, fusio::Error> {
+    pub async fn new(
+        reader: Box<dyn DynFile>,
+        content_length: u64,
+    ) -> Result<Self, fusio::error::Error> {
         #[cfg(any(feature = "web", feature = "monoio"))]
         #[allow(clippy::arc_with_non_send_sync)]
         let reader = Arc::new(futures::lock::Mutex::new(reader));

@@ -6,11 +6,12 @@ use futures_util::{stream::FuturesOrdered, StreamExt};
 use http_body_util::Full;
 
 use crate::{
+    error::Error,
     remotes::{
         aws::multipart_upload::{MultipartUpload, UploadType},
         serde::MultipartPart,
     },
-    Error, IoBuf, Write,
+    IoBuf, Write,
 };
 
 const S3_PART_MINIMUM_SIZE: usize = 5 * 1024 * 1024;
