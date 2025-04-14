@@ -296,7 +296,7 @@ mod tests {
         file::properties::WriterProperties,
         format::KeyValue,
     };
-    use rand::{distr::Alphanumeric, Rng};
+    use rand::{distributions::Alphanumeric, Rng};
     use tempfile::tempdir;
 
     use crate::{
@@ -368,7 +368,7 @@ mod tests {
     }
 
     fn gen_fixed_string(size: usize) -> String {
-        rand::rng()
+        rand::thread_rng()
             .sample_iter(&Alphanumeric)
             .take(size)
             .map(char::from)

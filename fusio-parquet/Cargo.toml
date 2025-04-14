@@ -58,7 +58,7 @@ arrow = { version = "55" }
 #     "services-fs",
 # ] }
 # parquet_opendal = { path = "../../opendal/integrations/parquet", package = "parquet_opendal" }
-rand = "0.9"
+rand = "0.8"
 tempfile = "3.12.0"
 tokio = { version = "1.40" }
 
