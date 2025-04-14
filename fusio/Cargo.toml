@@ -108,7 +108,7 @@ tokio = { version = "1", optional = true, default-features = false, features = [
 url = { version = "2.5.3", default-features = false, features = ["std"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-getrandom = { version = "0.3.1", features = ["wasm_js"] }
+getrandom = { version = "0.2", features = ["js"] }
 js-sys = { version = "0.3.72", optional = true }
 wasm-bindgen-futures = { version = "0.4.45", optional = true, features = [
     "futures-core-03-stream",
