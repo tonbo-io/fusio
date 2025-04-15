@@ -43,7 +43,7 @@ impl<W: Write> DynWrite for W {
     }
 }
 
-impl<'write> Write for Box<dyn DynWrite + 'write> {
+impl Write for Box<dyn DynWrite + '_> {
     async fn write_all<B: IoBuf>(&mut self, buf: B) -> (Result<(), Error>, B) {
         let (result, buf) =
             DynWrite::write_all(self.as_mut(), unsafe { buf.slice_unchecked(..) }).await;
@@ -111,7 +111,7 @@ where
     }
 }
 
-impl<'read> Read for Box<dyn DynRead + 'read> {
+impl Read for Box<dyn DynRead + '_> {
     async fn read_exact_at<B: IoBufMut>(&mut self, buf: B, pos: u64) -> (Result<(), Error>, B) {
         let (result, buf) =
             DynRead::read_exact_at(self.as_mut(), unsafe { buf.slice_mut_unchecked(..) }, pos)
