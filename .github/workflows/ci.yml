@@ -130,6 +130,7 @@ jobs:
         with:
           command: test
           args: --package fusio-log --no-default-features --features=aws,bytes,monoio,monoio-http
+
   # 2
   fmt:
     name: Rust fmt
@@ -208,3 +209,21 @@ jobs:
         run: |
           export PATH=$PATH:/tmp/chrome/chrome-linux64/:/tmp/chrome/chromedriver-linux64/
           wasm-pack test --chrome --headless fusio-parquet --features web
+
+  remote:
+    name: Run remote test
+    runs-on: ubuntu-latest
+    environment: dev
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install latest
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+          components: rustfmt, clippy
+      - name: test tokio s3
+        run: cargo test --package fusio --features=tokio,aws,tokio-http
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}

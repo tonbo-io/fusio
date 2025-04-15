@@ -253,7 +253,6 @@ impl Write for S3File {
 #[cfg(test)]
 mod tests {
 
-    #[ignore]
     #[cfg(all(feature = "tokio-http", not(feature = "completion-based")))]
     #[tokio::test]
     async fn write_and_read_s3_file() {
@@ -272,14 +271,24 @@ mod tests {
             Read, Write,
         };
 
-        let key_id = "user".to_string();
-        let secret_key = "password".to_string();
+        if option_env!("AWS_ACCESS_KEY_ID").is_none()
+            || option_env!("AWS_SECRET_ACCESS_KEY").is_none()
+        {
+            eprintln!("can not get `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`");
+            return;
+        }
+        let key_id = std::option_env!("AWS_ACCESS_KEY_ID").unwrap().to_string();
+        let secret_key = std::option_env!("AWS_SECRET_ACCESS_KEY")
+            .unwrap()
+            .to_string();
+
+        dbg!("test write to s3");
 
         let client = TokioClient::new();
         let region = "ap-southeast-1";
         let options = S3Options {
-            endpoint: "http://localhost:9000/data".into(),
-            bucket: "data".to_string(),
+            endpoint: "https://fusio-test.s3.ap-southeast-1.amazonaws.com".into(),
+            bucket: "fusio-test".to_string(),
             credential: Some(AwsCredential {
                 key_id,
                 secret_key,
