@@ -1,4 +1,4 @@
-use fusio::{fs::OpenOptions, Error, IoBuf, IoBufMut, Read, Write};
+use fusio::{error::Error, fs::OpenOptions, IoBuf, IoBufMut, Read, Write};
 use opendal::{Operator, Reader, Writer};
 
 use crate::utils::parse_opendal_error;

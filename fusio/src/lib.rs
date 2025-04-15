@@ -22,7 +22,7 @@
 //!
 //!     let (result, read_buf) = file.read_exact_at(read_buf, 0).await;
 //!     if result.is_err() {
-//!         return (result.map(|_| ()), write_buf, read_buf);
+//!         return (result, write_buf, read_buf);
 //!     }
 //!
 //!     (Ok(()), write_buf, read_buf)
@@ -49,133 +49,27 @@
 
 #[cfg(feature = "dyn")]
 pub mod dynamic;
-mod error;
+pub mod error;
 #[cfg(feature = "fs")]
 pub mod fs;
 pub mod impls;
 pub mod path;
 
-use std::future::Future;
-
 #[cfg(all(feature = "dyn", feature = "fs"))]
 pub use dynamic::fs::DynFs;
+pub use fusio_core::{
+    error::{BoxedError, Error},
+    IoBuf, IoBufMut, MaybeSend, MaybeSync, Read, Write,
+};
 #[cfg(feature = "dyn")]
-pub use dynamic::{DynRead, DynWrite};
-pub use error::Error;
-pub use fusio_core::{IoBuf, IoBufMut, MaybeSend, MaybeSync};
+pub use fusio_core::{DynRead, DynWrite};
 pub use impls::*;
-
-pub trait Write: MaybeSend {
-    //! The core trait for writing data,
-    //! it is similar to [`std::io::Write`], but it takes the ownership of the buffer,
-    //! because completion-based IO requires the buffer to be pinned and should be safe to
-    //! cancellation.
-    //!
-    //! [`Write`] represents "sequential write all and overwrite" semantics,
-    //! which means each buffer will be written to the file sequentially and overwrite the previous
-    //! file when closed.
-    //!
-    //! Contents are not be garanteed to be written to the file until the [`Write::close`] method is
-    //! called, [`Write::flush`] may be used to flush the data to the file in some
-    //! implementations, but not all implementations will do so.
-    //!
-    //! Whether the operation is successful or not, the buffer will be returned,
-    //! fusio promises that the returned buffer will be the same as the input buffer.
-    //!
-    //! # Dyn Compatibility
-    //! This trait is not dyn compatible.
-    //! If you want to use [`Write`] trait in a dynamic way, you could use [`DynWrite`] trait.
-
-    fn write_all<B: IoBuf>(
-        &mut self,
-        buf: B,
-    ) -> impl Future<Output = (Result<(), Error>, B)> + MaybeSend;
-
-    fn flush(&mut self) -> impl Future<Output = Result<(), Error>> + MaybeSend;
-
-    fn close(&mut self) -> impl Future<Output = Result<(), Error>> + MaybeSend;
-}
-
-pub trait Read: MaybeSend + MaybeSync {
-    //! The core trait for reading data,
-    //! it is similar to [`std::io::Read`],
-    //! but it takes the ownership of the buffer,
-    //! because completion-based IO requires the buffer to be pinned and should be safe to
-    //! cancellation.
-    //!
-    //! [`Read`] represents "random exactly read" semantics,
-    //! which means the read operation will start at the specified position, and the buffer will be
-    //! exactly filled with the data read.
-    //!
-    //! The buffer will be returned with the result, whether the operation is successful or not,
-    //! fusio promises that the returned buffer will be the same as the input buffer.
-    //!
-    //! If you want sequential reading, try [`SeqRead`].
-    //!
-    //! # Dyn Compatibility
-    //! This trait is not dyn compatible.
-    //! If you want to use [`Read`] trait in a dynamic way, you could use [`DynRead`] trait.
-
-    fn read_exact_at<B: IoBufMut>(
-        &mut self,
-        buf: B,
-        pos: u64,
-    ) -> impl Future<Output = (Result<(), Error>, B)> + MaybeSend;
-
-    fn read_to_end_at(
-        &mut self,
-        buf: Vec<u8>,
-        pos: u64,
-    ) -> impl Future<Output = (Result<(), Error>, Vec<u8>)> + MaybeSend;
-
-    fn size(&self) -> impl Future<Output = Result<u64, Error>> + MaybeSend;
-}
-
-impl<R: Read> Read for &mut R {
-    fn read_exact_at<B: IoBufMut>(
-        &mut self,
-        buf: B,
-        pos: u64,
-    ) -> impl Future<Output = (Result<(), Error>, B)> + MaybeSend {
-        R::read_exact_at(self, buf, pos)
-    }
-
-    fn read_to_end_at(
-        &mut self,
-        buf: Vec<u8>,
-        pos: u64,
-    ) -> impl Future<Output = (Result<(), Error>, Vec<u8>)> + MaybeSend {
-        R::read_to_end_at(self, buf, pos)
-    }
-
-    fn size(&self) -> impl Future<Output = Result<u64, Error>> + MaybeSend {
-        R::size(self)
-    }
-}
-
-impl<W: Write> Write for &mut W {
-    fn write_all<B: IoBuf>(
-        &mut self,
-        buf: B,
-    ) -> impl Future<Output = (Result<(), Error>, B)> + MaybeSend {
-        W::write_all(self, buf)
-    }
-
-    fn flush(&mut self) -> impl Future<Output = Result<(), Error>> + MaybeSend {
-        W::flush(self)
-    }
-
-    fn close(&mut self) -> impl Future<Output = Result<(), Error>> + MaybeSend {
-        W::close(self)
-    }
-}
 
 #[cfg(test)]
 mod tests {
-    use fusio_core::{IoBuf, IoBufMut};
+    use fusio_core::{error::Error, IoBuf, IoBufMut};
 
     use super::{Read, Write};
-    use crate::Error;
 
     #[allow(unused)]
     struct CountWrite<W> {
@@ -200,7 +94,7 @@ mod tests {
         }
 
         async fn flush(&mut self) -> Result<(), Error> {
-            self.w.flush().await
+            self.w.flush().await.map(Into::into)
         }
 
         async fn close(&mut self) -> Result<(), Error> {
@@ -293,6 +187,7 @@ mod tests {
     {
         use std::collections::HashSet;
 
+        use fusio_core::error::Error;
         use futures_util::StreamExt;
         use tempfile::TempDir;
 
@@ -302,13 +197,16 @@ mod tests {
         let work_dir_path = tmp_dir.path().join("work");
         let work_file_path = work_dir_path.join("test.file");
 
-        fs.create_dir_all(&Path::from_absolute_path(&work_dir_path)?)
-            .await?;
+        fs.create_dir_all(
+            &Path::from_absolute_path(&work_dir_path).map_err(|err| Error::Path(Box::new(err)))?,
+        )
+        .await?;
 
         assert!(work_dir_path.exists());
         assert!(fs
             .open_options(
-                &Path::from_absolute_path(&work_file_path)?,
+                &Path::from_absolute_path(&work_file_path)
+                    .map_err(|err| Error::Path(Box::new(err)))?,
                 OpenOptions::default()
             )
             .await
@@ -316,7 +214,8 @@ mod tests {
         {
             let _ = fs
                 .open_options(
-                    &Path::from_absolute_path(&work_file_path)?,
+                    &Path::from_absolute_path(&work_file_path)
+                        .map_err(|err| Error::Path(Box::new(err)))?,
                     OpenOptions::default().create(true).write(true),
                 )
                 .await?;
@@ -325,14 +224,16 @@ mod tests {
         {
             let mut file = fs
                 .open_options(
-                    &Path::from_absolute_path(&work_file_path)?,
+                    &Path::from_absolute_path(&work_file_path)
+                        .map_err(|err| Error::Path(Box::new(err)))?,
                     OpenOptions::default().write(true),
                 )
                 .await?;
             file.write_all("Hello! fusio".as_bytes()).await.0?;
             let mut file = fs
                 .open_options(
-                    &Path::from_absolute_path(&work_file_path)?,
+                    &Path::from_absolute_path(&work_file_path)
+                        .map_err(|err| Error::Path(Box::new(err)))?,
                     OpenOptions::default().write(true),
                 )
                 .await?;
@@ -342,7 +243,8 @@ mod tests {
 
             let mut file = fs
                 .open_options(
-                    &Path::from_absolute_path(&work_file_path)?,
+                    &Path::from_absolute_path(&work_file_path)
+                        .map_err(|err| Error::Path(Box::new(err)))?,
                     OpenOptions::default().read(true),
                 )
                 .await?;
@@ -375,19 +277,24 @@ mod tests {
         let dst_file_path = work_dir_path.join("dst_test.file");
 
         src_fs
-            .create_dir_all(&Path::from_absolute_path(&work_dir_path)?)
+            .create_dir_all(
+                &Path::from_absolute_path(&work_dir_path)
+                    .map_err(|err| Error::Path(Box::new(err)))?,
+            )
             .await?;
 
         // create files
         let _ = src_fs
             .open_options(
-                &Path::from_absolute_path(&src_file_path)?,
+                &Path::from_absolute_path(&src_file_path)
+                    .map_err(|err| Error::Path(Box::new(err)))?,
                 OpenOptions::default().create(true),
             )
             .await?;
         let _ = src_fs
             .open_options(
-                &Path::from_absolute_path(&dst_file_path)?,
+                &Path::from_absolute_path(&dst_file_path)
+                    .map_err(|err| Error::Path(Box::new(err)))?,
                 OpenOptions::default().create(true),
             )
             .await?;
@@ -395,7 +302,8 @@ mod tests {
         {
             let mut src_file = src_fs
                 .open_options(
-                    &Path::from_absolute_path(&src_file_path)?,
+                    &Path::from_absolute_path(&src_file_path)
+                        .map_err(|err| Error::Path(Box::new(err)))?,
                     OpenOptions::default().write(true),
                 )
                 .await?;
@@ -404,14 +312,17 @@ mod tests {
 
             src_fs
                 .copy(
-                    &Path::from_absolute_path(&src_file_path)?,
-                    &Path::from_absolute_path(&dst_file_path)?,
+                    &Path::from_absolute_path(&src_file_path)
+                        .map_err(|err| Error::Path(Box::new(err)))?,
+                    &Path::from_absolute_path(&dst_file_path)
+                        .map_err(|err| Error::Path(Box::new(err)))?,
                 )
                 .await?;
 
             let mut src_file = src_fs
                 .open_options(
-                    &Path::from_absolute_path(&src_file_path)?,
+                    &Path::from_absolute_path(&src_file_path)
+                        .map_err(|err| Error::Path(Box::new(err)))?,
                     OpenOptions::default().write(true).read(true),
                 )
                 .await?;
@@ -421,7 +332,8 @@ mod tests {
 
             let mut src_file = src_fs
                 .open_options(
-                    &Path::from_absolute_path(&src_file_path)?,
+                    &Path::from_absolute_path(&src_file_path)
+                        .map_err(|err| Error::Path(Box::new(err)))?,
                     OpenOptions::default().write(true).read(true),
                 )
                 .await?;
@@ -435,7 +347,8 @@ mod tests {
 
             let mut dst_file = src_fs
                 .open_options(
-                    &Path::from_absolute_path(&dst_file_path)?,
+                    &Path::from_absolute_path(&dst_file_path)
+                        .map_err(|err| Error::Path(Box::new(err)))?,
                     OpenOptions::default().read(true),
                 )
                 .await?;
@@ -446,13 +359,17 @@ mod tests {
         }
 
         src_fs
-            .remove(&Path::from_absolute_path(&dst_file_path)?)
+            .remove(
+                &Path::from_absolute_path(&dst_file_path)
+                    .map_err(|err| Error::Path(Box::new(err)))?,
+            )
             .await?;
         // link
         {
             let mut src_file = src_fs
                 .open_options(
-                    &Path::from_absolute_path(&src_file_path)?,
+                    &Path::from_absolute_path(&src_file_path)
+                        .map_err(|err| Error::Path(Box::new(err)))?,
                     OpenOptions::default().write(true),
                 )
                 .await?;
@@ -461,14 +378,17 @@ mod tests {
 
             src_fs
                 .link(
-                    &Path::from_absolute_path(&src_file_path)?,
-                    &Path::from_absolute_path(&dst_file_path)?,
+                    &Path::from_absolute_path(&src_file_path)
+                        .map_err(|err| Error::Path(Box::new(err)))?,
+                    &Path::from_absolute_path(&dst_file_path)
+                        .map_err(|err| Error::Path(Box::new(err)))?,
                 )
                 .await?;
 
             let mut src_file = src_fs
                 .open_options(
-                    &Path::from_absolute_path(&src_file_path)?,
+                    &Path::from_absolute_path(&src_file_path)
+                        .map_err(|err| Error::Path(Box::new(err)))?,
                     OpenOptions::default().write(true).read(true),
                 )
                 .await?;
@@ -478,7 +398,8 @@ mod tests {
 
             let mut src_file = src_fs
                 .open_options(
-                    &Path::from_absolute_path(&src_file_path)?,
+                    &Path::from_absolute_path(&src_file_path)
+                        .map_err(|err| Error::Path(Box::new(err)))?,
                     OpenOptions::default().write(true).read(true),
                 )
                 .await?;
@@ -491,7 +412,8 @@ mod tests {
 
             let mut dst_file = src_fs
                 .open_options(
-                    &Path::from_absolute_path(&dst_file_path)?,
+                    &Path::from_absolute_path(&dst_file_path)
+                        .map_err(|err| Error::Path(Box::new(err)))?,
                     OpenOptions::default().read(true),
                 )
                 .await?;

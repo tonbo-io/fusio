@@ -6,7 +6,7 @@ pub mod fs;
 pub use fs::TokioUringFs;
 use tokio_uring::fs::File;
 
-use crate::{Error, IoBuf, IoBufMut, Read, Write};
+use crate::{error::Error, IoBuf, IoBufMut, Read, Write};
 
 #[repr(transparent)]
 struct TokioUringBuf<B> {

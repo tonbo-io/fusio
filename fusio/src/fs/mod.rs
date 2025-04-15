@@ -8,7 +8,7 @@ use std::future::Future;
 use futures_core::Stream;
 pub use options::*;
 
-use crate::{path::Path, Error, MaybeSend, MaybeSync, Read, Write};
+use crate::{error::Error, path::Path, MaybeSend, MaybeSync, Read, Write};
 
 #[derive(Debug)]
 pub struct FileMeta {
@@ -58,6 +58,8 @@ pub trait Fs: MaybeSend + MaybeSync {
 
 #[cfg(test)]
 mod tests {
+    use crate::error::Error;
+
     #[ignore]
     #[cfg(all(
         feature = "tokio-http",
@@ -66,7 +68,7 @@ mod tests {
         not(feature = "completion-based")
     ))]
     #[tokio::test]
-    async fn test_diff_fs_copy() -> Result<(), crate::Error> {
+    async fn test_diff_fs_copy() -> Result<(), Error> {
         use std::sync::Arc;
 
         use tempfile::TempDir;
@@ -83,7 +85,8 @@ mod tests {
         };
 
         let tmp_dir = TempDir::new()?;
-        let local_path = Path::from_absolute_path(&tmp_dir.as_ref().join("test.file"))?;
+        let local_path = Path::from_absolute_path(&tmp_dir.as_ref().join("test.file"))
+            .map_err(|err| Error::Path(Box::new(err)))?;
         let s3_path: Path = "s3_copy_test.file".into();
 
         let key_id = "user".to_string();

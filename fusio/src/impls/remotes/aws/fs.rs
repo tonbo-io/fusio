@@ -11,6 +11,7 @@ use url::Url;
 
 use super::{credential::AwsCredential, options::S3Options, S3Error, S3File};
 use crate::{
+    error::Error,
     fs::{FileMeta, FileSystemTag, Fs, OpenOptions},
     path::Path,
     remotes::{
@@ -20,7 +21,6 @@ use crate::{
         },
         http::{DynHttpClient, HttpClient, HttpError},
     },
-    Error,
 };
 
 pub struct AmazonS3Builder {
@@ -175,7 +175,9 @@ impl Fs for AmazonS3 {
                     query.push(("continuation-token", token.as_str()));
                 }
 
-                let mut url = Url::from_str(self.as_ref().options.endpoint.as_str()).map_err(|e| S3Error::from(HttpError::from(e)))?;
+                let mut url = Url::from_str(self.as_ref().options.endpoint.as_str())
+                    .map_err(|e| S3Error::from(HttpError::from(e)))
+                    .map_err(|err| Error::Remote(Box::new(err)))?;
                 let result = {
                     let mut pairs = url.query_pairs_mut();
                     let serializer = serde_urlencoded::Serializer::new(&mut pairs);
@@ -183,22 +185,32 @@ impl Fs for AmazonS3 {
                         .serialize(serializer)
                         .map(|_| ())
                 };
-                result.map_err(|e| S3Error::from(HttpError::from(e)))?;
+                result.map_err(|e| S3Error::from(HttpError::from(e))).map_err(|err| Error::Remote(Box::new(err)))?;
 
                 let mut request = Request::builder()
                     .method(Method::GET)
                     .uri(url.as_str())
-                    .body(Empty::<Bytes>::new()).map_err(|e| S3Error::from(HttpError::from(e)))?;
-                request.sign(&self.as_ref().options).await.map_err(S3Error::from)?;
-                let response = self.as_ref().client.send_request(request).await.map_err(S3Error::from)?;
+                    .body(Empty::<Bytes>::new())
+                    .map_err(|e| S3Error::from(HttpError::from(e)))
+                    .map_err(|err| Error::Remote(Box::new(err)))?;
+                request.sign(&self.as_ref().options).await
+                    .map_err(S3Error::from)
+                    .map_err(|err| Error::Path(Box::new(err)))?;
+                let response = self.as_ref().client.send_request(request).await
+                    .map_err(S3Error::from)
+                    .map_err(|err| Error::Path(Box::new(err)))?;
 
                 if !response.status().is_success() {
-                    yield Err(S3Error::from(HttpError::HttpNotSuccess { status: response.status(), body: String::from_utf8_lossy(
-                        &response
-                        .collect()
-                        .await
-                        .map_err(|e| Error::Other(e.into()))?.to_bytes()).to_string()
-                    }).into());
+                    yield Err(Error::Other(Box::new(HttpError::HttpNotSuccess {
+                        status: response.status(),
+                        body: String::from_utf8_lossy(
+                            &response
+                                .collect()
+                                .await
+                                .map_err(|e| Error::Remote(e.into()))?
+                                .to_bytes()
+                        ).to_string()
+                    })));
                     return;
                 }
 
@@ -206,15 +218,15 @@ impl Fs for AmazonS3 {
                     response
                     .collect()
                     .await
-                    .map_err(S3Error::from)?
+                    .map_err(|e| Error::Remote(e.into()))?
                     .aggregate().reader()
-                ).map_err(S3Error::from)?;
+                ).map_err(|err| Error::Remote(err.into()))?;
 
                 next_token = response.next_continuation_token.take();
 
                 for content in &response.contents {
                     yield Ok(FileMeta {
-                        path: Path::parse(&content.key)?,
+                        path: Path::parse(&content.key).map_err(|err| Error::Path(Box::new(err)))?,
                         size: content.size as u64
                     });
                 }
@@ -228,40 +240,43 @@ impl Fs for AmazonS3 {
 
     async fn remove(&self, path: &Path) -> Result<(), Error> {
         let mut url = Url::from_str(self.as_ref().options.endpoint.as_str())
-            .map_err(|e| S3Error::from(HttpError::from(e)))?;
+            .map_err(|e| S3Error::from(HttpError::from(e)))
+            .map_err(|e| Error::Remote(e.into()))?;
         url = url
             .join(path.as_ref())
-            .map_err(|e| S3Error::from(HttpError::from(e)))?;
+            .map_err(|e| Error::Remote(HttpError::from(e).into()))?;
 
         let mut request = Request::builder()
             .method(Method::DELETE)
             .uri(url.as_str())
             .body(Empty::<Bytes>::new())
-            .map_err(|e| S3Error::from(HttpError::from(e)))?;
+            .map_err(|e| Error::Remote(HttpError::from(e).into()))?;
         request
             .sign(&self.as_ref().options)
             .await
-            .map_err(S3Error::from)?;
+            .map_err(|err| Error::Remote(err.into()))?;
         let response = self
             .as_ref()
             .client
             .send_request(request)
             .await
-            .map_err(S3Error::from)?;
+            .map_err(|err| Error::Remote(err.into()))?;
 
         if !response.status().is_success() {
-            return Err(S3Error::from(HttpError::HttpNotSuccess {
-                status: response.status(),
-                body: String::from_utf8_lossy(
-                    &response
-                        .collect()
-                        .await
-                        .map_err(|e| Error::Other(e.into()))?
-                        .to_bytes(),
-                )
-                .to_string(),
-            })
-            .into());
+            return Err(Error::Remote(
+                HttpError::HttpNotSuccess {
+                    status: response.status(),
+                    body: String::from_utf8_lossy(
+                        &response
+                            .collect()
+                            .await
+                            .map_err(|e| Error::Remote(e.into()))?
+                            .to_bytes(),
+                    )
+                    .to_string(),
+                }
+                .into(),
+            ));
         }
 
         Ok(())

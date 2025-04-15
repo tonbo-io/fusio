@@ -6,11 +6,12 @@ use futures_util::{stream::FuturesOrdered, StreamExt};
 use http_body_util::Full;
 
 use crate::{
+    error::Error,
     remotes::{
         aws::multipart_upload::{MultipartUpload, UploadType},
         serde::MultipartPart,
     },
-    Error, IoBuf, Write,
+    IoBuf, Write,
 };
 
 const S3_PART_MINIMUM_SIZE: usize = 5 * 1024 * 1024;
@@ -43,7 +44,12 @@ impl S3Writer {
     {
         let upload_id = match self.upload_id.clone() {
             None => {
-                let upload_id = Arc::new(self.inner.initiate().await?);
+                let upload_id = Arc::new(
+                    self.inner
+                        .initiate()
+                        .await
+                        .map_err(|err| Error::Remote(Box::new(err)))?,
+                );
                 self.upload_id = Some(upload_id.clone());
                 upload_id
             }
@@ -106,10 +112,13 @@ impl Write for S3Writer {
         }
         let mut parts = Vec::with_capacity(self.handlers.len());
         while let Some(handle) = self.handlers.next().await {
-            parts.push(handle?);
+            parts.push(handle.map_err(|err| Error::Remote(Box::new(err)))?);
         }
         assert_eq!(self.next_part_numer, parts.len());
-        self.inner.complete_part(&upload_id, &parts).await?;
+        self.inner
+            .complete_part(&upload_id, &parts)
+            .await
+            .map_err(|err| Error::Remote(Box::new(err)))?;
 
         Ok(())
     }

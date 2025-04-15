@@ -12,7 +12,7 @@ use std::os::unix::fs::FileExt;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio::{fs::File, io::AsyncWriteExt, task::block_in_place};
 
-use crate::{Error, IoBuf, IoBufMut, Read, Write};
+use crate::{error::Error, IoBuf, IoBufMut, Read, Write};
 
 pub struct TokioFile {
     file: File,
@@ -55,7 +55,7 @@ impl Write for TokioFile {
             (
                 AsyncWriteExt::write_all(&mut self.file, buf.as_slice())
                     .await
-                    .map_err(Error::from),
+                    .map_err(fusio_core::Error::from),
                 buf,
             )
         }
@@ -91,11 +91,11 @@ impl Read for TokioFile {
         {
             // TODO: Use pread instead of seek + read_exact
             if let Err(e) = AsyncSeekExt::seek(&mut self.file, SeekFrom::Start(pos)).await {
-                return (Err(Error::Io(e)), buf);
+                return (Err(fusio_core::Error::Io(e)), buf);
             }
             match AsyncReadExt::read_exact(&mut self.file, buf.as_slice_mut()).await {
                 Ok(_) => (Ok(()), buf),
-                Err(e) => (Err(Error::Io(e)), buf),
+                Err(e) => (Err(fusio_core::Error::Io(e)), buf),
             }
         }
     }
@@ -127,11 +127,11 @@ impl Read for TokioFile {
         {
             // TODO: Use pread instead of seek + read_exact
             if let Err(e) = AsyncSeekExt::seek(&mut self.file, SeekFrom::Start(pos)).await {
-                return (Err(Error::Io(e)), buf);
+                return (Err(fusio_core::Error::Io(e)), buf);
             }
             match AsyncReadExt::read_exact(&mut self.file, &mut buf).await {
                 Ok(_) => (Ok(()), buf),
-                Err(e) => (Err(Error::Io(e)), buf),
+                Err(e) => (Err(fusio_core::Error::Io(e)), buf),
             }
         }
     }

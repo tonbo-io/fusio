@@ -14,7 +14,11 @@ use web_sys::{
     ReadableStreamReadResult, WorkerGlobalScope,
 };
 
-use crate::{error::wasm_err, fs::OpenOptions, Error, IoBuf, IoBufMut, Read, Write};
+use crate::{
+    error::{wasm_err, Error},
+    fs::OpenOptions,
+    IoBuf, IoBufMut, Read, Write,
+};
 
 pub(crate) async fn promise<T>(promise: js_sys::Promise) -> Result<T, Error>
 where

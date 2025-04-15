@@ -1,6 +1,8 @@
 use std::cmp;
 
-use crate::{Error, IoBuf, IoBufMut, Read, Write};
+use fusio_core::Write;
+
+use crate::{error::Error, IoBuf, IoBufMut, Read};
 
 pub struct BufReader<F> {
     inner: F,
@@ -167,7 +169,7 @@ impl<F: Write> Write for BufWriter<F> {
 pub(crate) mod tests {
 
     use super::BufWriter;
-    use crate::{buffered::BufReader, Error, IoBufMut, Read, Write};
+    use crate::{buffered::BufReader, error::Error, IoBufMut, Read, Write};
 
     impl<F: Read> Read for BufWriter<F> {
         async fn read_exact_at<B: IoBufMut>(&mut self, buf: B, pos: u64) -> (Result<(), Error>, B) {

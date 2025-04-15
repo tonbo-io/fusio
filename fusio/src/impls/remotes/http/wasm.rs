@@ -6,7 +6,7 @@ use http_body::Body;
 use http_body_util::BodyExt;
 
 use super::{HttpClient, HttpError};
-use crate::{error::BoxedError, MaybeSync};
+use crate::{BoxedError, MaybeSync};
 
 #[derive(Default)]
 pub struct WasmClient;

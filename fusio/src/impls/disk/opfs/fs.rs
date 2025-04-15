@@ -17,10 +17,9 @@ use super::OPFSFile;
 use crate::disk::OPFSSyncFile;
 use crate::{
     disk::opfs::{promise, storage},
-    error::wasm_err,
+    error::{wasm_err, Error},
     fs::{FileMeta, FileSystemTag, Fs, OpenOptions},
     path::Path,
-    Error,
 };
 
 /// [OPFS](https://developer.mozilla.org/en-US/docs/Web/API/File_System_API/Origin_private_file_system) backend
@@ -45,9 +44,9 @@ impl Fs for OPFS {
         let segments: Vec<&str> = path.as_ref().trim_matches('/').split("/").collect();
 
         if segments.len() == 1 && segments[0].is_empty() {
-            return Err(Error::PathError(crate::path::Error::EmptySegment {
+            return Err(Error::Path(Box::new(crate::path::Error::EmptySegment {
                 path: path.to_string(),
-            }));
+            })));
         }
 
         let dir_options = FileSystemGetDirectoryOptions::new();
@@ -150,9 +149,9 @@ impl OPFS {
         }
         for segment in segments {
             if segment.is_empty() {
-                return Err(Error::PathError(crate::path::Error::EmptySegment {
+                return Err(Error::Path(Box::new(crate::path::Error::EmptySegment {
                     path: path.to_string(),
-                }));
+                })));
             }
             parent = promise::<FileSystemDirectoryHandle>(
                 parent.get_directory_handle_with_options(segment.as_ref(), options),
@@ -177,9 +176,9 @@ impl OPFS {
         }
         for segment in &segments[0..part_len - 1] {
             if segment.is_empty() {
-                return Err(Error::PathError(crate::path::Error::EmptySegment {
+                return Err(Error::Path(Box::new(crate::path::Error::EmptySegment {
                     path: path.to_string(),
-                }));
+                })));
             }
             parent = promise::<FileSystemDirectoryHandle>(
                 parent.get_directory_handle_with_options(segment.as_ref(), options),

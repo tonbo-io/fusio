@@ -1,12 +1,9 @@
-pub mod error;
-
 use alloc::{boxed::Box, vec::Vec};
 use core::pin::Pin;
 
-use error::{BoxedError, Error};
-
 use crate::{
     buf::slice::{Buf, BufMut},
+    error::{BoxedError, Error},
     IoBuf, IoBufMut, MaybeSend, MaybeSendFuture, MaybeSync, Read, Write,
 };
 
@@ -47,22 +44,20 @@ impl<W: Write> DynWrite for W {
 }
 
 impl<'write> Write for Box<dyn DynWrite + 'write> {
-    type Error = Error;
-
-    async fn write_all<B: IoBuf>(&mut self, buf: B) -> (Result<(), Self::Error>, B) {
+    async fn write_all<B: IoBuf>(&mut self, buf: B) -> (Result<(), Error>, B) {
         let (result, buf) =
             DynWrite::write_all(self.as_mut(), unsafe { buf.slice_unchecked(..) }).await;
-        (result.map_err(Into::into), unsafe {
+        (result.map_err(Error::Other), unsafe {
             B::recover_from_slice(buf)
         })
     }
 
-    async fn flush(&mut self) -> Result<(), Self::Error> {
-        DynWrite::flush(self.as_mut()).await.map_err(Into::into)
+    async fn flush(&mut self) -> Result<(), Error> {
+        DynWrite::flush(self.as_mut()).await.map_err(Error::Other)
     }
 
-    async fn close(&mut self) -> Result<(), Self::Error> {
-        DynWrite::close(self.as_mut()).await.map_err(Into::into)
+    async fn close(&mut self) -> Result<(), Error> {
+        DynWrite::close(self.as_mut()).await.map_err(Error::Other)
     }
 }
 
@@ -117,23 +112,21 @@ where
 }
 
 impl<'read> Read for Box<dyn DynRead + 'read> {
-    type Error = Error;
-
     async fn read_exact_at<B: IoBufMut>(&mut self, buf: B, pos: u64) -> (Result<(), Error>, B) {
         let (result, buf) =
             DynRead::read_exact_at(self.as_mut(), unsafe { buf.slice_mut_unchecked(..) }, pos)
                 .await;
-        (result.map_err(Into::into), unsafe {
+        (result.map_err(Error::Other), unsafe {
             B::recover_from_slice_mut(buf)
         })
     }
 
     async fn read_to_end_at(&mut self, buf: Vec<u8>, pos: u64) -> (Result<(), Error>, Vec<u8>) {
         let (result, buf) = DynRead::read_to_end_at(self.as_mut(), buf, pos).await;
-        (result.map_err(Into::into), buf)
+        (result.map_err(Error::Other), buf)
     }
 
     async fn size(&self) -> Result<u64, Error> {
-        DynRead::size(self.as_ref()).await.map_err(Into::into)
+        DynRead::size(self.as_ref()).await.map_err(Error::Other)
     }
 }

@@ -25,7 +25,7 @@ impl HttpClient for MonoioClient {
     where
         B: Body + Send + crate::MaybeSync + 'static,
         B::Data: Into<bytes::Bytes>,
-        B::Error: Into<crate::error::BoxedError>,
+        B::Error: Into<crate::BoxedError>,
     {
         let uri = request.uri().clone();
         let (parts, body) = request.into_parts();
