@@ -272,20 +272,30 @@ mod tests {
             Read, Write,
         };
 
-        let key_id = "user".to_string();
-        let secret_key = "password".to_string();
+        if option_env!("AWS_ACCESS_KEY_ID").is_none()
+            || option_env!("AWS_SECRET_ACCESS_KEY").is_none()
+        {
+            eprintln!("can not get `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`");
+            return;
+        }
+        let key_id = std::option_env!("AWS_ACCESS_KEY_ID").unwrap().to_string();
+        let secret_key = std::option_env!("AWS_SECRET_ACCESS_KEY")
+            .unwrap()
+            .to_string();
 
         let client = TokioClient::new();
-        let region = "ap-southeast-1";
+        let bucket = std::option_env!("BUCKET_NAME").unwrap().to_string();
+        let region = std::option_env!("AWS_REGION").unwrap().to_string();
+
         let options = S3Options {
-            endpoint: "http://localhost:9000/data".into(),
-            bucket: "data".to_string(),
+            endpoint: format!("https://{}.s3.{}.amazonaws.com", &bucket, &region),
+            bucket,
             credential: Some(AwsCredential {
                 key_id,
                 secret_key,
                 token: None,
             }),
-            region: region.into(),
+            region,
             sign_payload: true,
             checksum: false,
         };
@@ -336,13 +346,15 @@ mod tests {
             .unwrap()
             .to_string();
 
-        let s3 = AmazonS3Builder::new("fusio-test".into())
+        let bucket = std::option_env!("BUCKET_NAME").unwrap().to_string();
+        let region = std::option_env!("AWS_REGION").unwrap().to_string();
+        let s3 = AmazonS3Builder::new(bucket)
             .credential(AwsCredential {
                 key_id,
                 secret_key,
                 token: None,
             })
-            .region("ap-southeast-1".into())
+            .region(region)
             .sign_payload(true)
             .build();
 

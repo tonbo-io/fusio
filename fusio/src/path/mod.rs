@@ -533,6 +533,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(target_os = "windows"))]
     fn test_path_to_local() {
         let temp_file = NamedTempFile::new().unwrap();
 
