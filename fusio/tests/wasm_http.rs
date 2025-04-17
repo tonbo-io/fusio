@@ -4,7 +4,6 @@ pub(crate) mod tests {
     wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
     use wasm_bindgen_test::wasm_bindgen_test;
 
-    #[ignore]
     #[cfg(feature = "aws")]
     #[wasm_bindgen_test]
     async fn test_read_write_s3_wasm() {
@@ -20,20 +19,28 @@ pub(crate) mod tests {
         let key_id = option_env!("AWS_ACCESS_KEY_ID").unwrap().to_string();
         let secret_key = option_env!("AWS_SECRET_ACCESS_KEY").unwrap().to_string();
 
-        let s3 = AmazonS3Builder::new("tonbo-test".into())
+        let bucket = std::option_env!("BUCKET_NAME")
+            .expect("expected bucket not to be empty")
+            .to_string();
+        let region = std::option_env!("AWS_REGION")
+            .expect("expected region not to be empty")
+            .to_string();
+        let token = std::option_env!("AWS_SESSION_TOKEN").map(|v| v.to_string());
+
+        let s3 = AmazonS3Builder::new(bucket)
             .credential(AwsCredential {
                 key_id,
                 secret_key,
-                token: None,
+                token,
             })
-            .region("ap-southeast-1".into())
+            .region(region)
             .sign_payload(true)
             .build();
 
         {
             let mut s3_file = s3
                 .open_options(
-                    &"read-write.txt".into(),
+                    &"wasm/read-write.txt".into(),
                     OpenOptions::default().write(true).truncate(true),
                 )
                 .await
