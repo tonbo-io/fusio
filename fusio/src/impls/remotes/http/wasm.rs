@@ -82,7 +82,6 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
     }
 
-    #[ignore]
     #[cfg(all(feature = "wasm-http", feature = "aws"))]
     #[wasm_bindgen_test]
     async fn list_and_remove_wasm() {
@@ -91,9 +90,10 @@ mod tests {
         use futures_util::StreamExt;
 
         use crate::{
-            fs::Fs,
+            fs::{Fs, OpenOptions},
             path::Path,
             remotes::aws::{fs::AmazonS3Builder, AwsCredential},
+            Write,
         };
 
         if option_env!("AWS_ACCESS_KEY_ID").is_none() {
@@ -103,18 +103,37 @@ mod tests {
         let key_id = option_env!("AWS_ACCESS_KEY_ID").unwrap().to_string();
         let secret_key = option_env!("AWS_SECRET_ACCESS_KEY").unwrap().to_string();
 
-        let s3 = AmazonS3Builder::new("fusio-test".into())
+        let bucket = std::option_env!("BUCKET_NAME")
+            .expect("expected bucket not to be empty")
+            .to_string();
+        let region = std::option_env!("AWS_REGION")
+            .expect("expected region not to be empty")
+            .to_string();
+        let token = std::option_env!("AWS_SESSION_TOKEN").map(|v| v.to_string());
+
+        let s3 = AmazonS3Builder::new(bucket)
             .credential(AwsCredential {
                 key_id,
                 secret_key,
-                token: None,
+                token,
             })
-            .region("ap-southeast-1".into())
+            .region(region)
             .sign_payload(true)
             .build();
 
-        let path = Path::parse("test").unwrap();
-        let mut stream = pin!(s3.list(&path).await.unwrap());
+        let dir = Path::parse("wasm/list").unwrap();
+        {
+            let file_path = dir.child("file");
+            let mut file = s3
+                .open_options(
+                    &file_path,
+                    OpenOptions::default().create(true).truncate(true),
+                )
+                .await
+                .unwrap();
+            file.close().await.unwrap();
+        }
+        let mut stream = pin!(s3.list(&dir).await.unwrap());
         while let Some(meta) = stream.next().await {
             let meta = meta.unwrap();
             s3.remove(&meta.path).await.unwrap();

@@ -374,16 +374,23 @@ mod tests {
         let secret_key = std::option_env!("AWS_SECRET_ACCESS_KEY")
             .unwrap()
             .to_string();
+        let bucket = std::option_env!("BUCKET_NAME")
+            .expect("expected bucket not to be empty")
+            .to_string();
+        let region = std::option_env!("AWS_REGION")
+            .expect("expected region not to be empty")
+            .to_string();
+        let token = std::option_env!("AWS_SESSION_TOKEN").map(|v| v.to_string());
 
         let option = Options::new(path).truncate(true).fs(FsOptions::S3 {
-            bucket: "fusio-test".to_string(),
+            bucket,
             credential: Some(AwsCredential {
                 key_id,
                 secret_key,
-                token: None,
+                token,
             }),
             endpoint: None,
-            region: Some("ap-southeast-1".to_string()),
+            region: Some(region),
             sign_payload: None,
             checksum: None,
         });
@@ -425,7 +432,6 @@ mod tests {
         }
     }
 
-    #[ignore = "s3"]
     #[cfg(all(feature = "tokio-http", feature = "aws"))]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_tokio_write_s3() {

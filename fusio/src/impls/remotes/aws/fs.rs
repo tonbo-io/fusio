@@ -343,6 +343,7 @@ mod tests {
     async fn list_and_remove() {
         use std::{env, pin::pin};
 
+        use fusio_core::Write;
         use futures_util::StreamExt;
 
         use super::*;
@@ -353,19 +354,37 @@ mod tests {
         }
         let key_id = env::var("AWS_ACCESS_KEY_ID").unwrap();
         let secret_key = env::var("AWS_SECRET_ACCESS_KEY").unwrap();
+        let bucket = std::option_env!("BUCKET_NAME")
+            .expect("expected bucket not to be empty")
+            .to_string();
+        let region = std::option_env!("AWS_REGION")
+            .expect("expected region not to be empty")
+            .to_string();
+        let token = std::option_env!("AWS_SESSION_TOKEN").map(|v| v.to_string());
 
-        let s3 = AmazonS3Builder::new("fusio-test".into())
+        let s3 = AmazonS3Builder::new(bucket)
             .credential(AwsCredential {
                 key_id,
                 secret_key,
-                token: None,
+                token,
             })
-            .region("ap-southeast-1".into())
+            .region(region)
             .sign_payload(true)
             .build();
 
-        let path = Path::parse("test").unwrap();
-        let mut stream = pin!(s3.list(&path).await.unwrap());
+        let dir = Path::parse("list").unwrap();
+        {
+            let file_path = dir.child("file");
+            let mut file = s3
+                .open_options(
+                    &file_path,
+                    OpenOptions::default().create(true).truncate(true),
+                )
+                .await
+                .unwrap();
+            file.close().await.unwrap();
+        }
+        let mut stream = pin!(s3.list(&dir).await.unwrap());
         while let Some(meta) = stream.next().await {
             let meta = meta.unwrap();
             s3.remove(&meta.path).await.unwrap();

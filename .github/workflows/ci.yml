@@ -8,11 +8,15 @@ on:
 env:
   CARGO_TERM_COLOR: always
   CARGO_REGISTRIES_MY_REGISTRY_INDEX: https://github.com/rust-lang/crates.io-index
+  BUCKET_NAME: fusio-test
 
 jobs:
   # 1
   check:
     name: Rust project check
+    permissions:
+      id-token: write
+      contents: read
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
@@ -95,6 +99,17 @@ jobs:
           command: build
           args: --package fusio-log --no-default-features --features=aws,bytes,monoio,monoio-http
 
+      - name: Configure aws credentials
+        if: ${{ (github.event_name == 'push' && github.ref_name == 'main') || startsWith(github.ref, 'refs/tags/') }}
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.ROLE_TO_ASSUME }}
+          role-session-name: fusio_session
+          aws-region: ${{ env.AWS_REGION }}
+        env:
+          AWS_REGION: ap-southeast-1
+          ROLE_TO_ASSUME: arn:aws:iam::232814779190:role/github
+
       - name: Run cargo test on tokio
         uses: actions-rs/cargo@v1
         with:
@@ -164,6 +179,9 @@ jobs:
           args: -- --check
   wasm:
     name: WASM
+    permissions:
+      id-token: write
+      contents: read
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -209,6 +227,17 @@ jobs:
       - name: Setup wasm-pack
         run: |
           cargo install wasm-pack
+
+      - name: Configure aws credentials
+        if: ${{ (github.event_name == 'push' && github.ref_name == 'main') || startsWith(github.ref, 'refs/tags/') }}
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.ROLE_TO_ASSUME }}
+          role-session-name: samplerolesession
+          aws-region: ${{ env.AWS_REGION }}
+        env:
+          AWS_REGION: ap-southeast-1
+          ROLE_TO_ASSUME: arn:aws:iam::232814779190:role/github
 
       - name: Run wasm-pack test on fusion
         run: |
