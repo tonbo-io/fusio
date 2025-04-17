@@ -129,7 +129,7 @@ mod tests {
             crate::dynamic::fs::copy(&local_fs, &local_path, &s3_fs, &s3_path).await?;
         }
 
-        let mut s3 = S3File::new(Arc::into_inner(s3_fs).unwrap(), s3_path.clone());
+        let mut s3 = S3File::new(Arc::into_inner(s3_fs).unwrap(), s3_path.clone(), false);
 
         let size = s3.size().await.unwrap();
         assert_eq!(size, 31);

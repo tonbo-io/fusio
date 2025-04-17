@@ -27,11 +27,12 @@ pub struct S3File {
 }
 
 impl S3File {
-    pub(crate) fn new(fs: AmazonS3, path: Path) -> Self {
+    pub(crate) fn new(fs: AmazonS3, path: Path, create: bool) -> Self {
         Self {
+            writer: create
+                .then(|| S3Writer::new(Arc::new(MultipartUpload::new(fs.clone(), path.clone())))),
             fs,
             path,
-            writer: None,
         }
     }
 
@@ -224,13 +225,8 @@ impl Read for S3File {
 impl Write for S3File {
     async fn write_all<B: IoBuf>(&mut self, buf: B) -> (Result<(), Error>, B) {
         self.writer
-            .get_or_insert_with(|| {
-                #[allow(clippy::arc_with_non_send_sync)]
-                S3Writer::new(Arc::new(MultipartUpload::new(
-                    self.fs.clone(),
-                    self.path.clone(),
-                )))
-            })
+            .as_mut()
+            .expect("write file after closed")
             .write_all(buf)
             .await
     }
@@ -286,6 +282,7 @@ mod tests {
         let client = TokioClient::new();
         let bucket = std::option_env!("BUCKET_NAME").unwrap().to_string();
         let region = std::option_env!("AWS_REGION").unwrap().to_string();
+        let token = std::option_env!("AWS_SESSION_TOKEN").map(|v| v.to_string());
 
         let options = S3Options {
             endpoint: format!("https://{}.s3.{}.amazonaws.com", &bucket, &region),
@@ -293,7 +290,7 @@ mod tests {
             credential: Some(AwsCredential {
                 key_id,
                 secret_key,
-                token: None,
+                token,
             }),
             region,
             sign_payload: true,
@@ -308,7 +305,7 @@ mod tests {
         };
 
         {
-            let mut s3 = S3File::new(s3.clone(), "read-write.txt".into());
+            let mut s3 = S3File::new(s3.clone(), "read-write.txt".into(), false);
 
             let (result, _) = s3
                 .write_all(&b"The answer of life, universe and everthing"[..])
@@ -316,7 +313,7 @@ mod tests {
             result.unwrap();
             s3.close().await.unwrap();
         }
-        let mut s3 = S3File::new(s3, "read-write.txt".into());
+        let mut s3 = S3File::new(s3, "read-write.txt".into(), false);
 
         let size = s3.size().await.unwrap();
         assert_eq!(size, 42);
@@ -348,11 +345,12 @@ mod tests {
 
         let bucket = std::option_env!("BUCKET_NAME").unwrap().to_string();
         let region = std::option_env!("AWS_REGION").unwrap().to_string();
+        let token = std::option_env!("AWS_SESSION_TOKEN").map(|v| v.to_string());
         let s3 = AmazonS3Builder::new(bucket)
             .credential(AwsCredential {
                 key_id,
                 secret_key,
-                token: None,
+                token,
             })
             .region(region)
             .sign_payload(true)

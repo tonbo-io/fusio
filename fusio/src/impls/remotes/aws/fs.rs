@@ -155,7 +155,11 @@ impl Fs for AmazonS3 {
                 message: "Only truncate is supported in S3".to_string(),
             });
         }
-        Ok(S3File::new(self.clone(), path.clone()))
+        Ok(S3File::new(
+            self.clone(),
+            path.clone(),
+            options.create || options.write,
+        ))
     }
 
     async fn create_dir_all(_path: &Path) -> Result<(), Error> {
@@ -415,7 +419,7 @@ mod tests {
         let from_path: Path = "read-write.txt".into();
         let to_path: Path = "read-write-copy.txt".into();
         {
-            let mut s3 = S3File::new(s3.clone(), from_path.clone());
+            let mut s3 = S3File::new(s3.clone(), from_path.clone(), false);
 
             let (result, _) = s3
                 .write_all(&b"The answer of life, universe and everthing"[..])
@@ -424,7 +428,7 @@ mod tests {
             s3.close().await.unwrap();
         }
         s3.copy(&from_path, &to_path).await.unwrap();
-        let mut s3 = S3File::new(s3, to_path.clone());
+        let mut s3 = S3File::new(s3, to_path.clone(), false);
 
         let size = s3.size().await.unwrap();
         assert_eq!(size, 42);
