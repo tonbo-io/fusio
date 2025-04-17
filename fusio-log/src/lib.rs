@@ -426,13 +426,14 @@ mod tests {
     }
 
     #[ignore = "s3"]
+    #[cfg(all(feature = "tokio-http", feature = "aws"))]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_tokio_write_s3() {
         write_s3().await;
     }
 
     #[ignore = "s3"]
-    #[cfg(feature = "monoio")]
+    #[cfg(all(feature = "monoio-http", feature = "aws"))]
     #[monoio::test(enable_timer = true)]
     async fn test_monoio_write_s3() {
         write_s3().await;

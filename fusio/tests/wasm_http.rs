@@ -9,7 +9,7 @@ pub(crate) mod tests {
     #[wasm_bindgen_test]
     async fn test_read_write_s3_wasm() {
         use fusio::{
-            fs::Fs,
+            fs::{Fs, OpenOptions},
             remotes::aws::{fs::AmazonS3Builder, AwsCredential},
             Read, Write,
         };
@@ -20,18 +20,24 @@ pub(crate) mod tests {
         let key_id = option_env!("AWS_ACCESS_KEY_ID").unwrap().to_string();
         let secret_key = option_env!("AWS_SECRET_ACCESS_KEY").unwrap().to_string();
 
-        let s3 = AmazonS3Builder::new("wasm-data".into())
+        let s3 = AmazonS3Builder::new("tonbo-test".into())
             .credential(AwsCredential {
                 key_id,
                 secret_key,
                 token: None,
             })
-            .region("ap-southeast-2".into())
+            .region("ap-southeast-1".into())
             .sign_payload(true)
             .build();
 
         {
-            let mut s3_file = s3.open(&"read-write.txt".into()).await.unwrap();
+            let mut s3_file = s3
+                .open_options(
+                    &"read-write.txt".into(),
+                    OpenOptions::default().write(true).truncate(true),
+                )
+                .await
+                .unwrap();
 
             let (result, _) = s3_file
                 .write_all(&b"The answer of life, universe and everthing"[..])
