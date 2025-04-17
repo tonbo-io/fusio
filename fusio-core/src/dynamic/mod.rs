@@ -7,11 +7,21 @@ use crate::{
     IoBuf, IoBufMut, MaybeSend, MaybeSendFuture, MaybeSync, Read, Write,
 };
 
-pub trait DynWrite: MaybeSend {
+mod seal {
+    pub trait Sealed {}
+
+    impl<T> Sealed for T {}
+}
+
+pub unsafe trait DynWrite: MaybeSend + seal::Sealed {
     //! Dyn compatible(object safety) version of [`Write`].
     //! All implementations of [`Write`] has already implemented this trait.
     //! Also, all implementations of [`DynWrite`] has already implemented [`Write`].
     //! User should not use this trait directly.
+    //!
+    //! # Safety
+    //! Do not implement it directly, all implementations of [`Write`] has already implemented this
+    //! trait.
 
     fn write_all(
         &mut self,
@@ -23,7 +33,7 @@ pub trait DynWrite: MaybeSend {
     fn close(&mut self) -> Pin<Box<dyn MaybeSendFuture<Output = Result<(), BoxedError>> + '_>>;
 }
 
-impl<W: Write> DynWrite for W {
+unsafe impl<W: Write> DynWrite for W {
     fn write_all(
         &mut self,
         buf: Buf,
@@ -61,9 +71,13 @@ impl Write for Box<dyn DynWrite + '_> {
     }
 }
 
-pub trait DynRead: MaybeSend + MaybeSync {
+pub unsafe trait DynRead: MaybeSend + MaybeSync + seal::Sealed {
     //! Dyn compatible(object safety) version of [`Read`].
     //! Same as [`DynWrite`].
+    //!
+    //! # Safety
+    //! Do not implement it directly, all implementations of [`Read`] has already implemented this
+    //! trait.
 
     fn read_exact_at(
         &mut self,
@@ -80,7 +94,7 @@ pub trait DynRead: MaybeSend + MaybeSync {
     fn size(&self) -> Pin<Box<dyn MaybeSendFuture<Output = Result<u64, BoxedError>> + '_>>;
 }
 
-impl<R> DynRead for R
+unsafe impl<R> DynRead for R
 where
     R: Read,
 {
