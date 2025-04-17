@@ -18,6 +18,8 @@ jobs:
       matrix:
         os:
           - ubuntu-latest
+          - macos-latest
+          - windows-latest
     steps:
       - uses: actions/checkout@v4
       - name: Install latest
@@ -36,12 +38,14 @@ jobs:
           args: --package fusio --features=tokio,aws,tokio-http
 
       - name: Run cargo build on monoio
+        if: runner.os != 'Windows'
         uses: actions-rs/cargo@v1
         with:
           command: build
           args: --package fusio --features=monoio
 
       - name: Run cargo build on tokio-uring
+        if: runner.os == 'Linux'
         uses: actions-rs/cargo@v1
         with:
           command: build
@@ -72,6 +76,7 @@ jobs:
           args: --package fusio-parquet --features=tokio
 
       - name: Run cargo build on fusio-parquet monoio
+        if: runner.os != 'Windows'
         uses: actions-rs/cargo@v1
         with:
           command: build
@@ -84,6 +89,7 @@ jobs:
           args: --package fusio-log
 
       - name: Run cargo build on fusio-log monoio
+        if: runner.os != 'Windows'
         uses: actions-rs/cargo@v1
         with:
           command: build
@@ -96,12 +102,14 @@ jobs:
           args: --package fusio --features=tokio,aws,tokio-http
 
       - name: Run cargo test on monoio
+        if: runner.os != 'Windows'
         uses: actions-rs/cargo@v1
         with:
           command: test
           args: --package fusio --features=monoio,monoio-http
 
       - name: Run cargo test on tokio-uring
+        if: runner.os == 'Linux'
         uses: actions-rs/cargo@v1
         with:
           command: test
@@ -114,6 +122,7 @@ jobs:
           args: --package fusio-parquet --features=tokio
 
       - name: Run cargo test on fusio-parquet monoio
+        if: runner.os != 'Windows'
         uses: actions-rs/cargo@v1
         with:
           command: test
@@ -126,10 +135,12 @@ jobs:
           args: --package fusio-log --features=tokio
 
       - name: Run cargo test on fusio-log monoio
+        if: runner.os != 'Windows'
         uses: actions-rs/cargo@v1
         with:
           command: test
           args: --package fusio-log --no-default-features --features=aws,bytes,monoio,monoio-http
+
   # 2
   fmt:
     name: Rust fmt
