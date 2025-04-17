@@ -19,18 +19,16 @@ impl<'read> Read for Box<dyn DynFile + 'read> {
         let (result, buf) =
             DynRead::read_exact_at(self.as_mut(), unsafe { buf.slice_mut_unchecked(..) }, pos)
                 .await;
-        (result.map_err(Error::Other), unsafe {
-            B::recover_from_slice_mut(buf)
-        })
+        (result, unsafe { B::recover_from_slice_mut(buf) })
     }
 
     async fn read_to_end_at(&mut self, buf: Vec<u8>, pos: u64) -> (Result<(), Error>, Vec<u8>) {
         let res = DynRead::read_to_end_at(self.as_mut(), buf, pos).await;
-        (res.0.map_err(Error::Other), res.1)
+        (res.0, res.1)
     }
 
     async fn size(&self) -> Result<u64, Error> {
-        DynRead::size(self.as_ref()).await.map_err(Error::Other)
+        DynRead::size(self.as_ref()).await
     }
 }
 
@@ -38,17 +36,15 @@ impl<'write> Write for Box<dyn DynFile + 'write> {
     async fn write_all<B: IoBuf>(&mut self, buf: B) -> (Result<(), Error>, B) {
         let (result, buf) =
             DynWrite::write_all(self.as_mut(), unsafe { buf.slice_unchecked(..) }).await;
-        (result.map_err(Error::Other), unsafe {
-            B::recover_from_slice(buf)
-        })
+        (result, unsafe { B::recover_from_slice(buf) })
     }
 
     async fn flush(&mut self) -> Result<(), Error> {
-        DynWrite::flush(self.as_mut()).await.map_err(Error::Other)
+        DynWrite::flush(self.as_mut()).await
     }
 
     async fn close(&mut self) -> Result<(), Error> {
-        DynWrite::close(self.as_mut()).await.map_err(Error::Other)
+        DynWrite::close(self.as_mut()).await
     }
 }
 
@@ -187,7 +183,7 @@ pub async fn copy(
     let mut from_file = from_fs
         .open_options(from, OpenOptions::default().read(true))
         .await?;
-    let from_file_size = DynRead::size(&from_file).await.map_err(Error::Other)? as usize;
+    let from_file_size = DynRead::size(&from_file).await? as usize;
 
     let mut to_file = to_fs
         .open_options(to, OpenOptions::default().create(true).write(true))
@@ -206,7 +202,7 @@ pub async fn copy(
         result?;
         buf = Some(tmp);
     }
-    DynWrite::close(&mut to_file).await.map_err(Error::Other)?;
+    DynWrite::close(&mut to_file).await?;
 
     Ok(())
 }
