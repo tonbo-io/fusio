@@ -305,7 +305,7 @@ mod tests {
         };
 
         {
-            let mut s3 = S3File::new(s3.clone(), "read-write.txt".into(), false);
+            let mut s3 = S3File::new(s3.clone(), "read-write.txt".into(), true);
 
             let (result, _) = s3
                 .write_all(&b"The answer of life, universe and everthing"[..])

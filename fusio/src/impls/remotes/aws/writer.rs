@@ -95,16 +95,14 @@ impl Write for S3Writer {
 
     async fn close(&mut self) -> Result<(), Error> {
         let Some(upload_id) = self.upload_id.clone() else {
-            if !self.buf.is_empty() {
-                let bytes = mem::replace(&mut self.buf, BytesMut::new()).freeze();
+            let bytes = mem::replace(&mut self.buf, BytesMut::new()).freeze();
 
-                self.inner
-                    .upload_once(UploadType::Write {
-                        size: bytes.len(),
-                        body: Full::new(bytes),
-                    })
-                    .await?;
-            }
+            self.inner
+                .upload_once(UploadType::Write {
+                    size: bytes.len(),
+                    body: Full::new(bytes),
+                })
+                .await?;
             return Ok(());
         };
         if !self.buf.is_empty() {
