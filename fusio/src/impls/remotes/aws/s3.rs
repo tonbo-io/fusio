@@ -27,11 +27,12 @@ pub struct S3File {
 }
 
 impl S3File {
-    pub(crate) fn new(fs: AmazonS3, path: Path) -> Self {
+    pub(crate) fn new(fs: AmazonS3, path: Path, create: bool) -> Self {
         Self {
+            writer: create
+                .then(|| S3Writer::new(Arc::new(MultipartUpload::new(fs.clone(), path.clone())))),
             fs,
             path,
-            writer: None,
         }
     }
 
@@ -224,13 +225,8 @@ impl Read for S3File {
 impl Write for S3File {
     async fn write_all<B: IoBuf>(&mut self, buf: B) -> (Result<(), Error>, B) {
         self.writer
-            .get_or_insert_with(|| {
-                #[allow(clippy::arc_with_non_send_sync)]
-                S3Writer::new(Arc::new(MultipartUpload::new(
-                    self.fs.clone(),
-                    self.path.clone(),
-                )))
-            })
+            .as_mut()
+            .expect("write file after closed")
             .write_all(buf)
             .await
     }
@@ -272,20 +268,31 @@ mod tests {
             Read, Write,
         };
 
-        let key_id = "user".to_string();
-        let secret_key = "password".to_string();
+        if option_env!("AWS_ACCESS_KEY_ID").is_none()
+            || option_env!("AWS_SECRET_ACCESS_KEY").is_none()
+        {
+            eprintln!("can not get `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`");
+            return;
+        }
+        let key_id = std::option_env!("AWS_ACCESS_KEY_ID").unwrap().to_string();
+        let secret_key = std::option_env!("AWS_SECRET_ACCESS_KEY")
+            .unwrap()
+            .to_string();
 
         let client = TokioClient::new();
-        let region = "ap-southeast-1";
+        let bucket = std::option_env!("BUCKET_NAME").unwrap().to_string();
+        let region = std::option_env!("AWS_REGION").unwrap().to_string();
+        let token = std::option_env!("AWS_SESSION_TOKEN").map(|v| v.to_string());
+
         let options = S3Options {
-            endpoint: "http://localhost:9000/data".into(),
-            bucket: "data".to_string(),
+            endpoint: format!("https://{}.s3.{}.amazonaws.com", &bucket, &region),
+            bucket,
             credential: Some(AwsCredential {
                 key_id,
                 secret_key,
-                token: None,
+                token,
             }),
-            region: region.into(),
+            region,
             sign_payload: true,
             checksum: false,
         };
@@ -298,7 +305,7 @@ mod tests {
         };
 
         {
-            let mut s3 = S3File::new(s3.clone(), "read-write.txt".into());
+            let mut s3 = S3File::new(s3.clone(), "read-write.txt".into(), false);
 
             let (result, _) = s3
                 .write_all(&b"The answer of life, universe and everthing"[..])
@@ -306,7 +313,7 @@ mod tests {
             result.unwrap();
             s3.close().await.unwrap();
         }
-        let mut s3 = S3File::new(s3, "read-write.txt".into());
+        let mut s3 = S3File::new(s3, "read-write.txt".into(), false);
 
         let size = s3.size().await.unwrap();
         assert_eq!(size, 42);
@@ -336,13 +343,16 @@ mod tests {
             .unwrap()
             .to_string();
 
-        let s3 = AmazonS3Builder::new("fusio-test".into())
+        let bucket = std::option_env!("BUCKET_NAME").unwrap().to_string();
+        let region = std::option_env!("AWS_REGION").unwrap().to_string();
+        let token = std::option_env!("AWS_SESSION_TOKEN").map(|v| v.to_string());
+        let s3 = AmazonS3Builder::new(bucket)
             .credential(AwsCredential {
                 key_id,
                 secret_key,
-                token: None,
+                token,
             })
-            .region("ap-southeast-1".into())
+            .region(region)
             .sign_payload(true)
             .build();
 
