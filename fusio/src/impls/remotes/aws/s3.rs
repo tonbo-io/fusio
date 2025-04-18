@@ -249,7 +249,6 @@ impl Write for S3File {
 #[cfg(test)]
 mod tests {
 
-    #[ignore]
     #[cfg(all(feature = "tokio-http", not(feature = "completion-based")))]
     #[tokio::test]
     async fn write_and_read_s3_file() {
@@ -280,8 +279,12 @@ mod tests {
             .to_string();
 
         let client = TokioClient::new();
-        let bucket = std::option_env!("BUCKET_NAME").unwrap().to_string();
-        let region = std::option_env!("AWS_REGION").unwrap().to_string();
+        let bucket = std::option_env!("BUCKET_NAME")
+            .expect("expected bucket not to be empty")
+            .to_string();
+        let region = std::option_env!("AWS_REGION")
+            .expect("expected region not to be empty")
+            .to_string();
         let token = std::option_env!("AWS_SESSION_TOKEN").map(|v| v.to_string());
 
         let options = S3Options {
@@ -343,8 +346,12 @@ mod tests {
             .unwrap()
             .to_string();
 
-        let bucket = std::option_env!("BUCKET_NAME").unwrap().to_string();
-        let region = std::option_env!("AWS_REGION").unwrap().to_string();
+        let bucket = std::option_env!("BUCKET_NAME")
+            .expect("expected bucket not to be empty")
+            .to_string();
+        let region = std::option_env!("AWS_REGION")
+            .expect("expected region not to be empty")
+            .to_string();
         let token = std::option_env!("AWS_SESSION_TOKEN").map(|v| v.to_string());
         let s3 = AmazonS3Builder::new(bucket)
             .credential(AwsCredential {
@@ -357,7 +364,7 @@ mod tests {
             .build();
 
         {
-            let mut s3 = S3File::new(s3.clone(), "read-write.txt".into());
+            let mut s3 = S3File::new(s3.clone(), "read-write.txt".into(), true);
 
             let (result, _) = s3
                 .write_all(&b"The answer of life, universe and everthing"[..])
@@ -365,7 +372,7 @@ mod tests {
             result.unwrap();
             s3.close().await.unwrap();
         }
-        let mut s3 = S3File::new(s3, "read-write.txt".into());
+        let mut s3 = S3File::new(s3, "read-write.txt".into(), false);
 
         let size = s3.size().await.unwrap();
         assert_eq!(size, 42);
