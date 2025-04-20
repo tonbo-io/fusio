@@ -52,24 +52,89 @@ impl AsyncReader {
         self.prefetch_footer_size = set_prefetch_footer_size(footer_size, self.content_length);
         self
     }
+
+    async fn load_metadata<F: Read>(
+        content_length: u64,
+        prefetch_footer_size: usize,
+        file: &mut F,
+    ) -> Result<ParquetMetaData, ParquetError> {
+        let mut buf = Vec::with_capacity(prefetch_footer_size);
+        buf.resize(prefetch_footer_size, 0);
+
+        #[cfg(not(any(feature = "web", feature = "monoio")))]
+        let buf = &mut buf[..];
+
+        let (result, prefetched_footer_content) = file
+            .read_exact_at(buf, content_length - prefetch_footer_size as u64)
+            .await;
+        result.map_err(|err| ParquetError::External(Box::new(err)))?;
+
+        let prefetched_footer_slice = &prefetched_footer_content[..];
+        let prefetched_footer_length = prefetched_footer_slice.len();
+
+        // Decode the metadata length from the last 8 bytes of the file.
+        let metadata_length = {
+            let buf = &prefetched_footer_slice
+                [(prefetched_footer_length - FOOTER_SIZE)..prefetched_footer_length];
+            debug_assert!(buf.len() == FOOTER_SIZE);
+            ParquetMetaDataReader::decode_footer_tail(
+                buf.try_into()
+                    .expect("it must convert footer buffer to fixed-size array"),
+            )?
+            .metadata_length()
+        };
+
+        // Try to read the metadata from the `prefetched_footer_content`.
+        // Otherwise, fetch exact metadata from the remote.
+        if prefetched_footer_length >= metadata_length + FOOTER_SIZE {
+            let buf =
+                &prefetched_footer_slice[(prefetched_footer_length - metadata_length - FOOTER_SIZE)
+                    ..(prefetched_footer_length - FOOTER_SIZE)];
+
+            ParquetMetaDataReader::decode_metadata(buf)
+        } else {
+            let mut buf = BytesMut::with_capacity(metadata_length);
+            buf.resize(metadata_length, 0);
+
+            let (result, bytes) = file
+                .read_exact_at(
+                    buf,
+                    content_length - metadata_length as u64 - FOOTER_SIZE as u64,
+                )
+                .await;
+            result.map_err(|err| ParquetError::External(Box::new(err)))?;
+
+            ParquetMetaDataReader::decode_metadata(&bytes)
+        }
+    }
+
+    async fn load_bytes<F: Read + ?Sized>(
+        file: &mut F,
+        range: Range<u64>,
+    ) -> Result<Bytes, ParquetError> {
+        let len = (range.end - range.start) as usize;
+        let mut buf = Vec::with_capacity(len);
+        buf.resize(len, 0);
+
+        #[cfg(not(any(feature = "web", feature = "monoio")))]
+        let b = &mut buf[..];
+        #[cfg(any(feature = "web", feature = "monoio"))]
+        let b = buf;
+
+        let (result, _b) = file.read_exact_at(b, range.start as u64).await;
+        result.map_err(|err| ParquetError::External(Box::new(err)))?;
+
+        #[cfg(not(any(feature = "web", feature = "monoio")))]
+        return Ok(buf.into());
+        #[cfg(any(feature = "web", feature = "monoio"))]
+        return Ok(_b.into());
+    }
 }
 
 impl AsyncFileReader for AsyncReader {
     #[cfg(not(any(feature = "web", feature = "monoio")))]
     fn get_bytes(&mut self, range: Range<u64>) -> BoxFuture<'_, parquet::errors::Result<Bytes>> {
-        async move {
-            let len = (range.end - range.start) as usize;
-            let mut buf = Vec::with_capacity(len);
-            buf.resize(len, 0);
-
-            let (result, _) = self
-                .inner
-                .read_exact_at(&mut buf[..], range.start as u64)
-                .await;
-            result.map_err(|err| ParquetError::External(Box::new(err)))?;
-            Ok(buf.into())
-        }
-        .boxed()
+        Self::load_bytes(&mut self.inner, range).boxed()
     }
 
     #[cfg(any(feature = "web", feature = "monoio"))]
@@ -77,7 +142,6 @@ impl AsyncFileReader for AsyncReader {
         use futures::channel::oneshot;
 
         let (sender, receiver) = oneshot::channel::<Result<Bytes, ParquetError>>();
-
         let reader = self.inner.clone();
 
         #[cfg(feature = "web")]
@@ -86,19 +150,8 @@ impl AsyncFileReader for AsyncReader {
         let spawner = monoio::spawn;
 
         spawner(async move {
-            let len = (range.end - range.start) as usize;
-            let mut buf = Vec::with_capacity(len);
-            buf.resize(len, 0);
-
-            let result = {
-                let mut guard = reader.lock().await;
-                let (result, buf) = guard.read_exact_at(buf, range.start as u64).await;
-                match result {
-                    Ok(_) => Ok(buf.into()),
-                    Err(err) => Err(ParquetError::External(Box::new(err))),
-                }
-            };
-
+            let mut guard = reader.lock().await;
+            let result = Self::load_bytes(&mut *guard, range).await;
             let _ = sender.send(result);
         });
 
@@ -113,52 +166,16 @@ impl AsyncFileReader for AsyncReader {
         if self.content_length == 0 {
             return async { Err(ParquetError::EOF("file empty".to_string())) }.boxed();
         }
-        let footer_size = self.prefetch_footer_size;
-        let content_length = self.content_length;
 
         async move {
-            let mut buf = BytesMut::with_capacity(footer_size);
-            buf.resize(footer_size, 0);
-            let (result, prefetched_footer_content) = self
-                .inner
-                .read_exact_at(buf, content_length - footer_size as u64)
-                .await;
-            result.map_err(|err| ParquetError::External(Box::new(err)))?;
-            let prefetched_footer_slice = prefetched_footer_content.as_ref();
-            let prefetched_footer_length = prefetched_footer_slice.len();
-
-            // Decode the metadata length from the last 8 bytes of the file.
-            let metadata_length = {
-                let buf = &prefetched_footer_slice
-                    [(prefetched_footer_length - FOOTER_SIZE)..prefetched_footer_length];
-                debug_assert!(buf.len() == FOOTER_SIZE);
-                ParquetMetaDataReader::decode_footer_tail(buf.try_into().unwrap())?
-                    .metadata_length()
-            };
-
-            // Try to read the metadata from the `prefetched_footer_content`.
-            // Otherwise, fetch exact metadata from the remote.
-            if prefetched_footer_length >= metadata_length + FOOTER_SIZE {
-                let buf = &prefetched_footer_slice[(prefetched_footer_length
-                    - metadata_length
-                    - FOOTER_SIZE)
-                    ..(prefetched_footer_length - FOOTER_SIZE)];
-                Ok(Arc::new(ParquetMetaDataReader::decode_metadata(buf)?))
-            } else {
-                let mut buf = BytesMut::with_capacity(metadata_length);
-                buf.resize(metadata_length, 0);
-
-                let (result, bytes) = self
-                    .inner
-                    .read_exact_at(
-                        buf,
-                        content_length - metadata_length as u64 - FOOTER_SIZE as u64,
-                    )
-                    .await;
-                result.map_err(|err| ParquetError::External(Box::new(err)))?;
-
-                Ok(Arc::new(ParquetMetaDataReader::decode_metadata(&bytes)?))
-            }
+            Self::load_metadata(
+                self.content_length,
+                self.prefetch_footer_size,
+                &mut self.inner,
+            )
+            .await
+            .map(Arc::from)
+            .map_err(|err| ParquetError::External(Box::new(err)))
         }
         .boxed()
     }
@@ -173,13 +190,8 @@ impl AsyncFileReader for AsyncReader {
         if self.content_length == 0 {
             return async { Err(ParquetError::EOF("file empty".to_string())) }.boxed();
         }
-        let footer_size = self.prefetch_footer_size;
-        let content_length = self.content_length;
 
-        let mut buf = BytesMut::with_capacity(footer_size);
-        buf.resize(footer_size, 0);
         let (sender, receiver) = oneshot::channel::<Result<Arc<ParquetMetaData>, ParquetError>>();
-
         let reader = self.inner.clone();
 
         #[cfg(feature = "web")]
@@ -187,62 +199,15 @@ impl AsyncFileReader for AsyncReader {
         #[cfg(feature = "monoio")]
         let spawner = monoio::spawn;
 
+        let content_length = self.content_length;
+        let prefetch_footer_size = self.prefetch_footer_size;
         spawner(async move {
             let mut guard = reader.lock().await;
-            let (result, prefetched_footer_content) = guard
-                .read_exact_at(buf, content_length - footer_size as u64)
-                .await;
-            if let Err(err) = result {
-                drop(guard);
-                let _ = sender.send(Err(ParquetError::External(Box::new(err))));
-                return;
-            }
-            let prefetched_footer_slice = prefetched_footer_content.as_ref();
-            let prefetched_footer_length = prefetched_footer_slice.len();
-
-            // Decode the metadata length from the last 8 bytes of the file.
-            let metadata_length = {
-                let buf = &prefetched_footer_slice
-                    [(prefetched_footer_length - FOOTER_SIZE)..prefetched_footer_length];
-                debug_assert!(buf.len() == FOOTER_SIZE);
-                ParquetMetaDataReader::decode_footer_tail(buf.try_into().unwrap())
-                    .unwrap()
-                    .metadata_length()
-            };
-
-            // Try to read the metadata from the `prefetched_footer_content`.
-            // Otherwise, fetch exact metadata from the remote.
-            if prefetched_footer_length >= metadata_length + FOOTER_SIZE {
-                let buf = &prefetched_footer_slice[(prefetched_footer_length
-                    - metadata_length
-                    - FOOTER_SIZE)
-                    ..(prefetched_footer_length - FOOTER_SIZE)];
-
-                drop(guard);
-                let _ = sender
-                    .send(ParquetMetaDataReader::decode_metadata(buf).map(|meta| Arc::new(meta)));
-            } else {
-                let mut buf = BytesMut::with_capacity(metadata_length);
-                buf.resize(metadata_length, 0);
-
-                let (result, bytes) = guard
-                    .read_exact_at(
-                        buf,
-                        content_length - metadata_length as u64 - FOOTER_SIZE as u64,
-                    )
-                    .await;
-
-                drop(guard);
-
-                if let Err(err) = result {
-                    let _ = sender.send(Err(ParquetError::External(Box::new(err))));
-                    return;
-                }
-
-                let _ = sender.send(
-                    ParquetMetaDataReader::decode_metadata(&bytes).map(|meta| Arc::new(meta)),
-                );
-            }
+            let result = Self::load_metadata(content_length, prefetch_footer_size, &mut *guard)
+                .await
+                .map(Arc::from)
+                .map_err(|err| ParquetError::External(Box::new(err)));
+            let _ = sender.send(result);
         });
 
         async move { receiver.await.unwrap() }.boxed()
