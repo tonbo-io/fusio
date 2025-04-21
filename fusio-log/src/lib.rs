@@ -136,8 +136,15 @@ where
         option: Options,
     ) -> Result<impl TryStream<Ok = Vec<T>, Error = LogError> + Unpin, LogError> {
         let fs = option.fs_option.parse()?;
+        Self::recover_with_fs(&option.path, fs).await
+    }
+
+    pub(crate) async fn recover_with_fs(
+        path: &Path,
+        fs: Arc<dyn DynFs>,
+    ) -> Result<impl TryStream<Ok = Vec<T>, Error = LogError> + Unpin, LogError> {
         let file = BufReader::new(
-            fs.open_options(&option.path, OpenOptions::default().create(false))
+            fs.open_options(&path, OpenOptions::default().create(false))
                 .await?,
             DEFAULT_BUF_SIZE,
         )
