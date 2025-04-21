@@ -107,4 +107,15 @@ impl Options {
     {
         Logger::<T>::recover(self).await
     }
+
+    /// Recover the log from the given [`DynFs`] and [`Options`]. Return a stream of log entries.
+    pub async fn recover_with_fs<T>(
+        self,
+        fs: Arc<dyn DynFs>,
+    ) -> Result<impl TryStream<Ok = Vec<T>, Error = LogError> + Unpin, LogError>
+    where
+        T: Decode,
+    {
+        Logger::<T>::recover_with_fs(&self.path, fs).await
+    }
 }
