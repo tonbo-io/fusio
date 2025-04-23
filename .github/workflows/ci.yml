@@ -244,7 +244,17 @@ jobs:
           export PATH=$PATH:/tmp/chrome/chrome-linux64/:/tmp/chrome/chromedriver-linux64/
           wasm-pack test --chrome --headless fusio --features aws,opfs,wasm-http
 
+      - name: Run wasm-pack test on fusion using FileSystemSyncAccessHandle
+        run: |
+          export PATH=$PATH:/tmp/chrome/chrome-linux64/:/tmp/chrome/chromedriver-linux64/
+          wasm-pack test --chrome --headless fusio --features aws,opfs,wasm-http,sync
+
       - name: Run wasm-pack test on fusion-parquet
         run: |
           export PATH=$PATH:/tmp/chrome/chrome-linux64/:/tmp/chrome/chromedriver-linux64/
           wasm-pack test --chrome --headless fusio-parquet --features web
+
+      - name: Run wasm-pack test on fusion-parquet using FileSystemSyncAccessHandle
+        run: |
+          export PATH=$PATH:/tmp/chrome/chrome-linux64/:/tmp/chrome/chromedriver-linux64/
+          wasm-pack test --chrome --headless fusio-parquet --features web,sync
