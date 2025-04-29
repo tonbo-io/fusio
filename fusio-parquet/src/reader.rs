@@ -5,7 +5,10 @@ use bytes::{Bytes, BytesMut};
 use fusio::{dynamic::DynFile, Read};
 use futures::{future::BoxFuture, FutureExt};
 use parquet::{
-    arrow::{arrow_reader::ArrowReaderOptions, async_reader::AsyncFileReader},
+    arrow::{
+        arrow_reader::ArrowReaderOptions,
+        async_reader::{AsyncFileReader, MetadataFetch},
+    },
     errors::ParquetError,
     file::{
         metadata::{ParquetMetaData, ParquetMetaDataReader},
@@ -108,6 +111,15 @@ impl AsyncReader {
         }
     }
 
+    async fn load_page_indexes<F: MetadataFetch>(
+        metadata: ParquetMetaData,
+        fetch: F,
+    ) -> Result<ParquetMetaData, ParquetError> {
+        let mut reader = ParquetMetaDataReader::new_with_metadata(metadata).with_page_indexes(true);
+        reader.load_page_index(fetch).await?;
+        reader.finish()
+    }
+
     async fn load_bytes<F: Read + ?Sized>(
         file: &mut F,
         range: Range<u64>,
@@ -161,21 +173,25 @@ impl AsyncFileReader for AsyncReader {
     #[cfg(not(any(feature = "web", feature = "monoio")))]
     fn get_metadata(
         &mut self,
-        _options: Option<&ArrowReaderOptions>,
+        options: Option<&ArrowReaderOptions>,
     ) -> BoxFuture<'_, parquet::errors::Result<Arc<ParquetMetaData>>> {
         if self.content_length == 0 {
             return async { Err(ParquetError::EOF("file empty".to_string())) }.boxed();
         }
 
         async move {
-            Self::load_metadata(
+            let metadata = Self::load_metadata(
                 self.content_length,
                 self.prefetch_footer_size,
                 &mut self.inner,
             )
             .await
-            .map(Arc::from)
-            .map_err(|err| ParquetError::External(Box::new(err)))
+            .map_err(|err| ParquetError::External(Box::new(err)))?;
+
+            Self::load_page_indexes(metadata, self)
+                .await
+                .map(Arc::from)
+                .map_err(|err| ParquetError::External(Box::new(err)))
         }
         .boxed()
     }
@@ -191,7 +207,7 @@ impl AsyncFileReader for AsyncReader {
             return async { Err(ParquetError::EOF("file empty".to_string())) }.boxed();
         }
 
-        let (sender, receiver) = oneshot::channel::<Result<Arc<ParquetMetaData>, ParquetError>>();
+        let (sender, receiver) = oneshot::channel::<Result<ParquetMetaData, ParquetError>>();
         let reader = self.inner.clone();
 
         #[cfg(feature = "web")]
@@ -203,14 +219,19 @@ impl AsyncFileReader for AsyncReader {
         let prefetch_footer_size = self.prefetch_footer_size;
         spawner(async move {
             let mut guard = reader.lock().await;
-            let result = Self::load_metadata(content_length, prefetch_footer_size, &mut *guard)
-                .await
-                .map(Arc::from)
-                .map_err(|err| ParquetError::External(Box::new(err)));
-            let _ = sender.send(result);
+            let result =
+                Self::load_metadata(content_length, prefetch_footer_size, &mut *guard).await;
+            sender.send(result);
         });
 
-        async move { receiver.await.unwrap() }.boxed()
+        async move {
+            let metadata = receiver.await.unwrap()?;
+            Self::load_page_indexes(metadata, self)
+                .await
+                .map(Arc::from)
+                .map_err(|err| ParquetError::External(Box::new(err)))
+        }
+        .boxed()
     }
 }
 
@@ -396,5 +417,61 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_tokio_async_reader_with_large_metadata() {
         async_reader_with_large_metadata().await;
+    }
+
+    #[cfg(feature = "tokio")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_async_reader_metadata_with_page_index() {
+        use parquet::{
+            arrow::arrow_reader::ArrowReaderOptions, file::properties::EnabledStatistics,
+        };
+
+        let tmp_dir = tempdir().unwrap();
+        let fs = LocalFs {};
+        let path = Path::from_filesystem_path(tmp_dir.path())
+            .unwrap()
+            .child("reader");
+        let options = OpenOptions::default().create(true).write(true);
+
+        let writer = AsyncWriter::new(Box::new(fs.open_options(&path, options).await.unwrap()));
+
+        let col = Arc::new(Int64Array::from_iter_values([1, 2, 3])) as ArrayRef;
+        let to_write = RecordBatch::try_from_iter([("col", col)]).unwrap();
+        let mut writer = AsyncArrowWriter::try_new(
+            writer,
+            to_write.schema(),
+            Some(
+                WriterProperties::builder()
+                    .set_key_value_metadata(Some(vec![KeyValue {
+                        key: "__metadata".to_string(),
+                        value: Some(gen_fixed_string(20)),
+                    }]))
+                    .set_statistics_enabled(EnabledStatistics::Page)
+                    .build(),
+            ),
+        )
+        .unwrap();
+
+        writer.write(&to_write).await.unwrap();
+        writer.close().await.unwrap();
+
+        {
+            let file = fs
+                .open_options(&path, OpenOptions::default())
+                .await
+                .unwrap();
+            let size = file.size().await.unwrap();
+            let mut reader = AsyncReader::new(Box::new(file), size).await.unwrap();
+
+            let mut builder = ParquetRecordBatchStreamBuilder::new_with_options(
+                reader,
+                ArrowReaderOptions::default().with_page_index(true),
+            )
+            .await
+            .unwrap();
+            let metadata = builder.metadata();
+            assert!(metadata.offset_index().is_some());
+            assert!(metadata.column_index().is_some());
+        }
     }
 }
