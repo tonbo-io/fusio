@@ -179,6 +179,8 @@ impl AsyncFileReader for AsyncReader {
             return async { Err(ParquetError::EOF("file empty".to_string())) }.boxed();
         }
 
+        let page_index = options.map(|options| options.page_index()).unwrap_or(false);
+
         async move {
             let metadata = Self::load_metadata(
                 self.content_length,
@@ -188,10 +190,14 @@ impl AsyncFileReader for AsyncReader {
             .await
             .map_err(|err| ParquetError::External(Box::new(err)))?;
 
-            Self::load_page_indexes(metadata, self)
-                .await
-                .map(Arc::from)
-                .map_err(|err| ParquetError::External(Box::new(err)))
+            if page_index {
+                Self::load_page_indexes(metadata, self)
+                    .await
+                    .map(Arc::from)
+                    .map_err(|err| ParquetError::External(Box::new(err)))
+            } else {
+                Ok(Arc::new(metadata))
+            }
         }
         .boxed()
     }
@@ -199,7 +205,7 @@ impl AsyncFileReader for AsyncReader {
     #[cfg(any(feature = "web", feature = "monoio"))]
     fn get_metadata(
         &mut self,
-        _options: Option<&ArrowReaderOptions>,
+        options: Option<&ArrowReaderOptions>,
     ) -> BoxFuture<'_, parquet::errors::Result<Arc<ParquetMetaData>>> {
         use futures::channel::oneshot;
 
@@ -224,12 +230,17 @@ impl AsyncFileReader for AsyncReader {
             sender.send(result);
         });
 
+        let page_index = options.map(|options| options.page_index()).unwrap_or(false);
         async move {
             let metadata = receiver.await.unwrap()?;
-            Self::load_page_indexes(metadata, self)
-                .await
-                .map(Arc::from)
-                .map_err(|err| ParquetError::External(Box::new(err)))
+            if page_index {
+                Self::load_page_indexes(metadata, self)
+                    .await
+                    .map(Arc::from)
+                    .map_err(|err| ParquetError::External(Box::new(err)))
+            } else {
+                Ok(Arc::new(metadata))
+            }
         }
         .boxed()
     }
@@ -463,7 +474,7 @@ mod tests {
             let size = file.size().await.unwrap();
             let mut reader = AsyncReader::new(Box::new(file), size).await.unwrap();
 
-            let mut builder = ParquetRecordBatchStreamBuilder::new_with_options(
+            let builder = ParquetRecordBatchStreamBuilder::new_with_options(
                 reader,
                 ArrowReaderOptions::default().with_page_index(true),
             )
