@@ -77,9 +77,9 @@ chrono = { version = "0.4", optional = true, default-features = false, features 
     "std",
     "wasmbind",
 ] }
-fusio-core = { path = "../fusio-core", version = "0.3.8", features = ["std"]  }
-futures-core = { version = "0.3" }
-futures-util = { version = "0.3" }
+fusio-core = { path = "../fusio-core", version = "0.3.8", features = ["std"] }
+futures-core = { workspace = true }
+futures-util = { workspace = true }
 http = { version = "1", optional = true, default-features = false }
 http-body = { version = "1", optional = true }
 http-body-util = { version = "0.1", optional = true, default-features = false }

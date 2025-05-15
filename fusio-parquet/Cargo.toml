@@ -37,7 +37,7 @@ cfg-if = "1.0.0"
 fusio = { version = "0.3.8", path = "../fusio", features = ["bytes", "dyn"] }
 futures = { version = "0.3" }
 monoio = { version = "0.2", optional = true, features = ["sync"] }
-parquet = { version = "55.1.0", default-features = false, features = [
+parquet = { workspace = true, features = [
     "arrow",
     "async",
 ] }
