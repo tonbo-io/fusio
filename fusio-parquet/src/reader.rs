@@ -472,7 +472,7 @@ mod tests {
                 .await
                 .unwrap();
             let size = file.size().await.unwrap();
-            let mut reader = AsyncReader::new(Box::new(file), size).await.unwrap();
+            let reader = AsyncReader::new(Box::new(file), size).await.unwrap();
 
             let builder = ParquetRecordBatchStreamBuilder::new_with_options(
                 reader,

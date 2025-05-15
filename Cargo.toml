@@ -20,6 +20,9 @@ version = "0.3.8"
 
 [workspace.dependencies]
 bytes = { version = "1.7" }
+futures-core = { version = "0.3" }
+futures-util = { version = "0.3" }
+parquet = { version = "55.1.0", default-features = false }
 
 [profile.bench]
 codegen-units = 1
