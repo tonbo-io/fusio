@@ -21,6 +21,10 @@ impl Fs for MonoIoFs {
 
     async fn open_options(&self, path: &Path, options: OpenOptions) -> Result<Self::File, Error> {
         let local_path = path_to_local(path).map_err(|err| Error::Path(err.into()))?;
+        if options.create && !local_path.exists() {
+            monoio::fs::File::create(&local_path).await?;
+        }
+
         let file = monoio::fs::OpenOptions::new()
             .read(options.read)
             .write(options.write)

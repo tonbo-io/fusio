@@ -25,7 +25,7 @@ impl Fs for TokioFs {
 
     async fn open_options(&self, path: &Path, options: OpenOptions) -> Result<Self::File, Error> {
         let local_path = path_to_local(path).map_err(|err| Error::Path(Box::new(err)))?;
-        if !tokio::fs::try_exists(&local_path).await? {
+        if options.create && !local_path.exists() {
             tokio::fs::File::create(&local_path).await?;
         }
 

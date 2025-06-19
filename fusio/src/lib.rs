@@ -202,7 +202,7 @@ mod tests {
         )
         .await?;
         assert!(work_dir_path.exists());
-        assert!(!fs
+        assert!(fs
             .open_options(
                 &Path::from_absolute_path(&work_file_path)
                     .map_err(|err| Error::Path(Box::new(err)))?,
