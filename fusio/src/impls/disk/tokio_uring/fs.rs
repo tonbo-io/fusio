@@ -24,6 +24,10 @@ impl Fs for TokioUringFs {
     async fn open_options(&self, path: &Path, options: OpenOptions) -> Result<Self::File, Error> {
         let local_path = path_to_local(path).map_err(|err| Error::Path(err.into()))?;
 
+        if !tokio_uring::fs::try_exists(&local_path).await? {
+            tokio_uring::fs::File::create(&local_path).await?;
+        }
+
         let file = tokio_uring::fs::OpenOptions::new()
             .read(options.read)
             .write(options.write)
