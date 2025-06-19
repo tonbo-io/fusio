@@ -531,4 +531,90 @@ mod tests {
             .await;
         });
     }
+
+    #[cfg(all(feature = "tokio", feature = "aws", feature = "tokio-http"))]
+    #[tokio::test]
+    async fn test_read_non_exist_file() {
+        use futures_util::StreamExt;
+
+        use crate::{
+            fs::{Fs, OpenOptions},
+            path::Path,
+            remotes::aws::{credential::AwsCredential, fs::AmazonS3Builder},
+        };
+
+        if option_env!("AWS_ACCESS_KEY_ID").is_none()
+            || option_env!("AWS_SECRET_ACCESS_KEY").is_none()
+        {
+            eprintln!("can not get `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`");
+            return;
+        }
+        let key_id = std::option_env!("AWS_ACCESS_KEY_ID").unwrap().to_string();
+        let secret_key = std::option_env!("AWS_SECRET_ACCESS_KEY")
+            .unwrap()
+            .to_string();
+
+        let bucket = std::option_env!("BUCKET_NAME")
+            .expect("expected bucket not to be empty")
+            .to_string();
+        let region = std::option_env!("AWS_REGION")
+            .expect("expected region not to be empty")
+            .to_string();
+        let token = std::option_env!("AWS_SESSION_TOKEN").map(|v| v.to_string());
+
+        let s3_fs = AmazonS3Builder::new(bucket.clone())
+            .credential(AwsCredential {
+                key_id,
+                secret_key,
+                token,
+            })
+            .region(region)
+            .sign_payload(false)
+            .checksum(false)
+            .build();
+        let base_path = Path::from_url_path("abcd").unwrap();
+        let stream = s3_fs.list(&base_path).await.unwrap();
+        let file_cnt = stream.count().await;
+
+        {
+            let mut file = s3_fs
+                .open_options(&base_path.child("not_exists_file1"), OpenOptions::default())
+                .await
+                .unwrap();
+            file.close().await.unwrap();
+            let stream = s3_fs.list(&base_path).await.unwrap();
+            // file is not created in read only mode
+            assert_eq!(stream.count().await, file_cnt);
+        }
+        {
+            let mut file = s3_fs
+                .open_options(&base_path.child("not_exists_file2"), OpenOptions::default())
+                .await
+                .unwrap();
+            // we can not read from file that does not exist
+            let result = file.read_to_end_at(vec![], 0).await;
+            assert!(result.0.is_err());
+        }
+        {
+            let mut file = s3_fs
+                .open_options(
+                    &base_path.child("not_exists_file3"),
+                    OpenOptions::default().write(true).truncate(true),
+                )
+                .await
+                .unwrap();
+            file.close().await.unwrap();
+            let stream = s3_fs.list(&base_path).await.unwrap();
+            // file is created in truncate mode
+            assert_eq!(stream.count().await, file_cnt + 1);
+        }
+
+        {
+            let fs = crate::disk::TokioFs {};
+            let result = fs
+                .open_options(&"not_exists_file".into(), OpenOptions::default())
+                .await;
+            assert!(result.is_err());
+        }
+    }
 }
