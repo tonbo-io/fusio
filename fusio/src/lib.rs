@@ -201,7 +201,6 @@ mod tests {
             &Path::from_absolute_path(&work_dir_path).map_err(|err| Error::Path(Box::new(err)))?,
         )
         .await?;
-
         assert!(work_dir_path.exists());
         assert!(fs
             .open_options(
