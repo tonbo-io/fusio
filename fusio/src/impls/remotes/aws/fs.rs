@@ -162,6 +162,10 @@ impl Fs for AmazonS3 {
         ))
     }
 
+    async fn create_file(_path: &Path) -> Result<(), Error> {
+        Ok(())
+    }
+
     async fn create_dir_all(_path: &Path) -> Result<(), Error> {
         Ok(())
     }

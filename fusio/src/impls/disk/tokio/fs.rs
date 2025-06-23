@@ -26,7 +26,7 @@ impl Fs for TokioFs {
     async fn open_options(&self, path: &Path, options: OpenOptions) -> Result<Self::File, Error> {
         let local_path = path_to_local(path).map_err(|err| Error::Path(Box::new(err)))?;
         if options.create && !local_path.exists() {
-            tokio::fs::File::create(&local_path).await?;
+            Self::create_file(&path).await?;
         }
 
         let file = tokio::fs::OpenOptions::new()
@@ -39,6 +39,17 @@ impl Fs for TokioFs {
             .await?;
 
         Ok(TokioFile::new(file))
+    }
+
+    async fn create_file(path: &Path) -> Result<(), Error> {
+        let local_path = path_to_local(path).map_err(|err| Error::Path(Box::new(err)))?;
+        if let Some(parent) = local_path.parent() {
+            let parent_path = Path::from_filesystem_path(parent).map_err(|err| Error::Path(Box::new(err)))?;
+            Self::create_dir_all(&parent_path).await?;
+        }
+
+        tokio::fs::File::create(&local_path).await?;
+        Ok(())   
     }
 
     async fn create_dir_all(path: &Path) -> Result<(), Error> {

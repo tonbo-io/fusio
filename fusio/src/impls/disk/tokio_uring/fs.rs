@@ -24,7 +24,7 @@ impl Fs for TokioUringFs {
     async fn open_options(&self, path: &Path, options: OpenOptions) -> Result<Self::File, Error> {
         let local_path = path_to_local(path).map_err(|err| Error::Path(err.into()))?;
         if options.create && !local_path.exists() {
-            tokio_uring::fs::File::create(&local_path).await?;
+            Self::create_file(&path).await?;
         }
 
         let file = tokio_uring::fs::OpenOptions::new()
@@ -39,6 +39,17 @@ impl Fs for TokioUringFs {
             file: Some(file),
             pos: stat.stx_size,
         })
+    }
+
+    async fn create_file(&self, path: &Path) -> Result<(), Error> {
+        let local_path = path_to_local(path).map_err(|err| Error::Path(err.into()))?;
+        if let Some(parent) = local_path.parent() {
+            let parent_path = Path::from_filesystem_path(parent).map_err(|err| Error::Path(err.into()))?;
+            Self::create_dir_all(&parent_path).await?;
+        }
+
+        tokio_uring::fs::File::create(&local_path).await?;
+        Ok(())
     }
 
     async fn create_dir_all(path: &Path) -> Result<(), Error> {

@@ -43,6 +43,8 @@ pub trait Fs: MaybeSend + MaybeSync {
 
     fn create_dir_all(path: &Path) -> impl Future<Output = Result<(), Error>> + MaybeSend;
 
+    fn create_file(path: &Path) -> impl Future<Output = Result<(), Error>> + MaybeSend;
+
     fn list(
         &self,
         path: &Path,
