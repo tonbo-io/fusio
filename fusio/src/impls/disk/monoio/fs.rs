@@ -40,7 +40,8 @@ impl Fs for MonoIoFs {
     async fn create_file(path: &Path) -> Result<(), Error> {
         let local_path = path_to_local(path).map_err(|err| Error::Path(err.into()))?;
         if let Some(parent) = local_path.parent() {
-            let parent_path = Path::from_filesystem_path(parent).map_err(|err| Error::Path(err.into()))?;
+            let parent_path =
+                Path::from_filesystem_path(parent).map_err(|err| Error::Path(err.into()))?;
             Self::create_dir_all(&parent_path).await?;
         }
 
