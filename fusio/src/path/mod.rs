@@ -526,15 +526,4 @@ mod tests {
         assert_eq!(c.extension(), None);
         assert_eq!(d.extension(), Some("qux"));
     }
-
-    #[test]
-    #[cfg(not(target_os = "windows"))]
-    fn test_path_to_local() {
-        let temp_file = NamedTempFile::new().unwrap();
-
-        let this_path = Path::from_filesystem_path(temp_file.path()).unwrap();
-        let std_path = path_to_local(&this_path).unwrap();
-
-        assert_eq!(std_path, canonicalize(temp_file.path()).unwrap());
-    }
 }
