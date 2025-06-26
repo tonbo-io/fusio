@@ -1,21 +1,19 @@
-use fusio::{SeqRead, Write};
+use fusio::{Error, SeqRead, Write};
 
-use super::{Decode, DecodeError, Encode, EncodeError};
+use super::{Decode, Encode};
 
 impl<T> Decode for Vec<T>
 where
     T: Decode + Send + Sync,
 {
-    type Error = DecodeError<T::Error>;
-
-    async fn decode<R>(reader: &mut R) -> Result<Self, Self::Error>
+    async fn decode<R>(reader: &mut R) -> Result<Self, Error>
     where
         R: SeqRead,
     {
         let len = u32::decode(reader).await? as usize;
         let mut data = Vec::with_capacity(len);
         for _ in 0..len {
-            data.push(T::decode(reader).await.map_err(DecodeError::Inner)?);
+            data.push(T::decode(reader).await?);
         }
         Ok(data)
     }
@@ -25,15 +23,13 @@ impl<T> Encode for Vec<T>
 where
     T: Encode + Send + Sync,
 {
-    type Error = EncodeError<T::Error>;
-
-    async fn encode<W>(&self, writer: &mut W) -> Result<(), Self::Error>
+    async fn encode<W>(&self, writer: &mut W) -> Result<(), Error>
     where
         W: Write,
     {
         (self.len() as u32).encode(writer).await?;
         for item in self.iter() {
-            item.encode(writer).await.map_err(EncodeError::Inner)?;
+            item.encode(writer).await?;
         }
 
         Ok(())

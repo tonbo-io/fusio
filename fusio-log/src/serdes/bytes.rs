@@ -1,12 +1,10 @@
 use bytes::Bytes;
-use fusio::{IoBuf, SeqRead, Write};
+use fusio::{Error, IoBuf, SeqRead, Write};
 
 use crate::serdes::{Decode, Encode};
 
 impl Encode for &[u8] {
-    type Error = fusio::Error;
-
-    async fn encode<W: Write>(&self, writer: &mut W) -> Result<(), Self::Error> {
+    async fn encode<W: Write>(&self, writer: &mut W) -> Result<(), Error> {
         (self.len() as u32).encode(writer).await?;
         #[cfg(feature = "monoio")]
         let (result, _) = writer.write_all(self.to_vec()).await;
@@ -23,9 +21,7 @@ impl Encode for &[u8] {
 }
 
 impl Encode for Bytes {
-    type Error = fusio::Error;
-
-    async fn encode<W: Write>(&self, writer: &mut W) -> Result<(), Self::Error> {
+    async fn encode<W: Write>(&self, writer: &mut W) -> Result<(), Error> {
         (self.len() as u32).encode(writer).await?;
         #[cfg(feature = "monoio")]
         let (result, _) = writer.write_all(self.as_bytes()).await;
@@ -42,9 +38,7 @@ impl Encode for Bytes {
 }
 
 impl Decode for Bytes {
-    type Error = fusio::Error;
-
-    async fn decode<R: SeqRead>(reader: &mut R) -> Result<Self, Self::Error> {
+    async fn decode<R: SeqRead>(reader: &mut R) -> Result<Self, Error> {
         let len = u32::decode(reader).await?;
         let (result, buf) = reader.read_exact(vec![0u8; len as usize]).await;
         result?;

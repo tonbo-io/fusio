@@ -1,13 +1,11 @@
 use std::mem::size_of;
 
-use fusio::{SeqRead, Write};
+use fusio::{Error, SeqRead, Write};
 
 use super::{Decode, Encode};
 
 impl Encode for &str {
-    type Error = fusio::Error;
-
-    async fn encode<W>(&self, writer: &mut W) -> Result<(), Self::Error>
+    async fn encode<W>(&self, writer: &mut W) -> Result<(), Error>
     where
         W: Write,
     {
@@ -27,9 +25,7 @@ impl Encode for &str {
 }
 
 impl Encode for String {
-    type Error = fusio::Error;
-
-    async fn encode<W>(&self, writer: &mut W) -> Result<(), Self::Error>
+    async fn encode<W>(&self, writer: &mut W) -> Result<(), Error>
     where
         W: Write,
     {
@@ -42,9 +38,7 @@ impl Encode for String {
 }
 
 impl Decode for String {
-    type Error = fusio::Error;
-
-    async fn decode<R: SeqRead>(reader: &mut R) -> Result<Self, Self::Error> {
+    async fn decode<R: SeqRead>(reader: &mut R) -> Result<Self, Error> {
         let len = u16::decode(reader).await?;
         let (result, buf) = reader.read_exact(vec![0u8; len as usize]).await;
         result?;

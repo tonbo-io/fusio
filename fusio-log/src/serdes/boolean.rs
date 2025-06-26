@@ -1,13 +1,11 @@
 use std::mem::size_of;
 
-use fusio::{SeqRead, Write};
+use fusio::{Error, SeqRead, Write};
 
 use crate::serdes::{Decode, Encode};
 
 impl Encode for bool {
-    type Error = fusio::Error;
-
-    async fn encode<W: Write>(&self, writer: &mut W) -> Result<(), Self::Error> {
+    async fn encode<W: Write>(&self, writer: &mut W) -> Result<(), Error> {
         if *self { 1u8 } else { 0u8 }.encode(writer).await
     }
 
@@ -17,9 +15,7 @@ impl Encode for bool {
 }
 
 impl Decode for bool {
-    type Error = fusio::Error;
-
-    async fn decode<R: SeqRead>(reader: &mut R) -> Result<Self, Self::Error> {
+    async fn decode<R: SeqRead>(reader: &mut R) -> Result<Self, Error> {
         Ok(u8::decode(reader).await? == 1u8)
     }
 }

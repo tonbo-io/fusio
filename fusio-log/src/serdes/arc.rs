@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use fusio::{SeqRead, Write};
+use fusio::{Error, SeqRead, Write};
 
 use super::{Decode, Encode};
 
@@ -8,9 +8,7 @@ impl<T> Decode for Arc<T>
 where
     T: Decode,
 {
-    type Error = T::Error;
-
-    async fn decode<R>(reader: &mut R) -> Result<Self, Self::Error>
+    async fn decode<R>(reader: &mut R) -> Result<Self, Error>
     where
         R: SeqRead,
     {
@@ -22,9 +20,7 @@ impl<T> Encode for Arc<T>
 where
     T: Encode + Send + Sync,
 {
-    type Error = T::Error;
-
-    async fn encode<W>(&self, writer: &mut W) -> Result<(), Self::Error>
+    async fn encode<W>(&self, writer: &mut W) -> Result<(), Error>
     where
         W: Write,
     {

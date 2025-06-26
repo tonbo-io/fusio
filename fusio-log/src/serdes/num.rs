@@ -1,6 +1,6 @@
 use std::mem::size_of;
 
-use fusio::{SeqRead, Write};
+use fusio::{Error, SeqRead, Write};
 
 use super::{Decode, Encode};
 
@@ -8,9 +8,7 @@ use super::{Decode, Encode};
 macro_rules! implement_encode_decode {
     ($struct_name:ident) => {
         impl Encode for $struct_name {
-            type Error = fusio::Error;
-
-            async fn encode<W: Write>(&self, writer: &mut W) -> Result<(), Self::Error> {
+            async fn encode<W: Write>(&self, writer: &mut W) -> Result<(), Error> {
                 #[cfg(feature = "monoio")]
                 let (result, _) = writer.write_all(self.to_le_bytes().to_vec()).await;
                 #[cfg(not(feature = "monoio"))]
@@ -26,9 +24,7 @@ macro_rules! implement_encode_decode {
         }
 
         impl Decode for $struct_name {
-            type Error = fusio::Error;
-
-            async fn decode<R: SeqRead>(reader: &mut R) -> Result<Self, Self::Error> {
+            async fn decode<R: SeqRead>(reader: &mut R) -> Result<Self, Error> {
                 #[cfg(feature = "monoio")]
                 let data = {
                     let (result, buf) = reader.read_exact(vec![0u8; size_of::<Self>()]).await;

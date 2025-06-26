@@ -199,6 +199,7 @@ mod tests {
 
     use std::pin::pin;
 
+    use fusio::Error;
     use futures_util::{StreamExt, TryStreamExt};
     use tempfile::TempDir;
 
@@ -215,9 +216,7 @@ mod tests {
     }
 
     impl Encode for TestStruct {
-        type Error = fusio::Error;
-
-        async fn encode<W>(&self, writer: &mut W) -> Result<(), Self::Error>
+        async fn encode<W>(&self, writer: &mut W) -> Result<(), Error>
         where
             W: Write,
         {
@@ -233,9 +232,7 @@ mod tests {
     }
 
     impl Decode for TestStruct {
-        type Error = fusio::Error;
-
-        async fn decode<R>(reader: &mut R) -> Result<Self, Self::Error>
+        async fn decode<R>(reader: &mut R) -> Result<Self, Error>
         where
             R: SeqRead,
         {
