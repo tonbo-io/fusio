@@ -1,13 +1,12 @@
 use fusio::{SeqRead, Write};
 
-use super::{Decode, Encode};
+use super::{Decode, DecodeError, Encode, EncodeError};
 
 impl<T> Decode for Vec<T>
 where
     T: Decode + Send + Sync,
-    fusio::Error: From<<T as Decode>::Error>,
 {
-    type Error = fusio::Error;
+    type Error = DecodeError<T::Error>;
 
     async fn decode<R>(reader: &mut R) -> Result<Self, Self::Error>
     where
@@ -16,7 +15,7 @@ where
         let len = u32::decode(reader).await? as usize;
         let mut data = Vec::with_capacity(len);
         for _ in 0..len {
-            data.push(T::decode(reader).await?);
+            data.push(T::decode(reader).await.map_err(DecodeError::Inner)?);
         }
         Ok(data)
     }
@@ -25,9 +24,8 @@ where
 impl<T> Encode for Vec<T>
 where
     T: Encode + Send + Sync,
-    fusio::Error: From<<T as Encode>::Error>,
 {
-    type Error = fusio::Error;
+    type Error = EncodeError<T::Error>;
 
     async fn encode<W>(&self, writer: &mut W) -> Result<(), Self::Error>
     where
@@ -35,7 +33,7 @@ where
     {
         (self.len() as u32).encode(writer).await?;
         for item in self.iter() {
-            item.encode(writer).await?;
+            item.encode(writer).await.map_err(EncodeError::Inner)?;
         }
 
         Ok(())
@@ -149,6 +147,62 @@ mod tests {
             let decoded = Vec::<String>::decode(&mut cursor).await.unwrap();
 
             assert_eq!(source, decoded);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_list_encode_decode() {
+        let source = vec![
+            vec![1_u32],
+            vec![1237654, 123],
+            vec![456, 1, 3, 5],
+            vec![123456789],
+        ];
+
+        let mut bytes = Vec::new();
+        let mut cursor = Cursor::new(&mut bytes);
+
+        source.encode(&mut cursor).await.unwrap();
+
+        cursor.seek(std::io::SeekFrom::Start(0)).await.unwrap();
+        let decoded = Vec::<Vec<u32>>::decode(&mut cursor).await.unwrap();
+
+        assert_eq!(source, decoded);
+    }
+
+    #[tokio::test]
+    async fn test_list_opt_encode_decode() {
+        {
+            let source = vec![Some(1_i64), Some(1237654), None, Some(123456789)];
+
+            let mut bytes = Vec::new();
+            let mut cursor = Cursor::new(&mut bytes);
+
+            source.encode(&mut cursor).await.unwrap();
+
+            cursor.seek(std::io::SeekFrom::Start(0)).await.unwrap();
+            let decoded = Vec::<Option<i64>>::decode(&mut cursor).await.unwrap();
+
+            assert_eq!(source, decoded);
+        }
+        {
+            let source = vec![Some("hello"), Some(""), None, None, Some("!! @tonbo.io")];
+
+            let mut bytes = Vec::new();
+            let mut cursor = Cursor::new(&mut bytes);
+
+            source.encode(&mut cursor).await.unwrap();
+
+            cursor.seek(std::io::SeekFrom::Start(0)).await.unwrap();
+            let decoded = Vec::<Option<String>>::decode(&mut cursor).await.unwrap();
+
+            assert_eq!(
+                source,
+                decoded
+                    .iter()
+                    .map(|v| v.as_deref())
+                    .collect::<Vec<Option<&str>>>()
+            );
         }
     }
 
