@@ -21,23 +21,31 @@ impl Fs for MonoIoFs {
 
     async fn open_options(&self, path: &Path, options: OpenOptions) -> Result<Self::File, Error> {
         let local_path = path_to_local(path).map_err(|err| Error::Path(err.into()))?;
-        if options.create && !local_path.exists() {
+        if !local_path.exists() {
+            if options.create {
             if let Some(parent) = local_path.parent() {
                 let parent_path =
                     Path::from_filesystem_path(parent).map_err(|err| Error::Path(err.into()))?;
                 Self::create_dir_all(&parent_path).await?;
-            }
+                }
 
-            monoio::fs::File::create(&local_path).await?;
+                monoio::fs::File::create(&local_path).await?;
+            } else {
+                return Err(Error::Path(Box::new(io::Error::new(
+                    io::ErrorKind::NotFound,
+                    "Path not found and option.create is false",
+                ))));
+            }
         }
 
+        let absolute_path = std::fs::canonicalize(&local_path).unwrap();
         let file = monoio::fs::OpenOptions::new()
             .read(options.read)
             .write(options.write)
             .create(options.create)
             .truncate(options.truncate)
             .append(!options.truncate)
-            .open(&local_path)
+            .open(&absolute_path)
             .await?;
         let metadata = file.metadata().await?;
         Ok(MonoioFile::new(file, metadata.len()))

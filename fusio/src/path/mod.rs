@@ -3,7 +3,6 @@
 use std::{fmt::Formatter, path::PathBuf};
 
 use itertools::Itertools;
-use path_absolutize::*;
 use percent_encoding::percent_decode;
 use thiserror::Error;
 use url::Url;
@@ -51,9 +50,7 @@ pub struct Path {
 #[cfg(not(target_arch = "wasm32"))]
 impl Path {
     pub fn from_filesystem_path(path: impl AsRef<std::path::Path>) -> Result<Self, Error> {
-        let absolute = path.as_ref().absolutize().unwrap();
-
-        Self::from_absolute_path(absolute)
+        Self::from_absolute_path(path)
     }
 
     pub fn from_absolute_path(path: impl AsRef<std::path::Path>) -> Result<Self, Error> {
