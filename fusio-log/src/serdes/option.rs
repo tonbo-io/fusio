@@ -1,14 +1,12 @@
-use fusio::{SeqRead, Write};
+use fusio::{Error, SeqRead, Write};
 
-use super::{Decode, DecodeError, Encode, EncodeError};
+use super::{Decode, Encode};
 
 impl<V> Encode for Option<V>
 where
     V: Encode + Sync,
 {
-    type Error = EncodeError<V::Error>;
-
-    async fn encode<W>(&self, writer: &mut W) -> Result<(), Self::Error>
+    async fn encode<W>(&self, writer: &mut W) -> Result<(), Error>
     where
         W: Write,
     {
@@ -16,7 +14,7 @@ where
             None => 0u8.encode(writer).await?,
             Some(v) => {
                 1u8.encode(writer).await?;
-                v.encode(writer).await.map_err(EncodeError::Inner)?;
+                v.encode(writer).await?;
             }
         }
         Ok(())
@@ -34,12 +32,10 @@ impl<V> Decode for Option<V>
 where
     V: Decode,
 {
-    type Error = DecodeError<V::Error>;
-
-    async fn decode<R: SeqRead>(reader: &mut R) -> Result<Self, Self::Error> {
+    async fn decode<R: SeqRead>(reader: &mut R) -> Result<Self, Error> {
         match u8::decode(reader).await? {
             0 => Ok(None),
-            1 => Ok(Some(V::decode(reader).await.map_err(DecodeError::Inner)?)),
+            1 => Ok(Some(V::decode(reader).await?)),
             _ => panic!("invalid option tag"),
         }
     }

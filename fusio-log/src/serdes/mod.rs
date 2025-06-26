@@ -9,17 +9,13 @@ mod string;
 
 use std::future::Future;
 
-use thiserror::Error;
-
 use crate::fs::{MaybeSend, SeqRead, Write};
 
 pub trait Encode {
-    type Error: From<fusio::Error> + std::error::Error + Send + Sync + 'static;
-
     fn encode<W>(
         &self,
         writer: &mut W,
-    ) -> impl Future<Output = Result<(), Self::Error>> + MaybeSend
+    ) -> impl Future<Output = Result<(), fusio::Error>> + MaybeSend
     where
         W: Write;
 
@@ -27,9 +23,7 @@ pub trait Encode {
 }
 
 impl<T: Encode + Sync> Encode for &T {
-    type Error = T::Error;
-
-    async fn encode<W>(&self, writer: &mut W) -> Result<(), Self::Error>
+    async fn encode<W>(&self, writer: &mut W) -> Result<(), fusio::Error>
     where
         W: Write,
     {
@@ -42,39 +36,9 @@ impl<T: Encode + Sync> Encode for &T {
 }
 
 pub trait Decode: Sized {
-    type Error: From<fusio::Error> + std::error::Error + Send + Sync + 'static;
-
-    fn decode<R>(reader: &mut R) -> impl Future<Output = Result<Self, Self::Error>> + MaybeSend
+    fn decode<R>(reader: &mut R) -> impl Future<Output = Result<Self, fusio::Error>> + MaybeSend
     where
         R: SeqRead;
-}
-
-#[derive(Debug, Error)]
-#[error("encode error")]
-pub enum EncodeError<E>
-where
-    E: std::error::Error,
-{
-    #[error("io error: {0}")]
-    Io(#[from] std::io::Error),
-    #[error("fusio error: {0}")]
-    Fusio(#[from] fusio::Error),
-    #[error("inner error: {0}")]
-    Inner(#[source] E),
-}
-
-#[derive(Debug, Error)]
-#[error("decode error")]
-pub enum DecodeError<E>
-where
-    E: std::error::Error,
-{
-    #[error("io error: {0}")]
-    Io(#[from] std::io::Error),
-    #[error("fusio error: {0}")]
-    Fusio(#[from] fusio::Error),
-    #[error("inner error: {0}")]
-    Inner(#[source] E),
 }
 
 #[cfg(test)]
@@ -91,9 +55,7 @@ mod tests {
         struct TestStruct(u32);
 
         impl Encode for TestStruct {
-            type Error = fusio::Error;
-
-            async fn encode<W>(&self, writer: &mut W) -> Result<(), Self::Error>
+            async fn encode<W>(&self, writer: &mut W) -> Result<(), fusio::Error>
             where
                 W: Write,
             {
@@ -108,9 +70,7 @@ mod tests {
         }
 
         impl Decode for TestStruct {
-            type Error = fusio::Error;
-
-            async fn decode<R>(reader: &mut R) -> Result<Self, Self::Error>
+            async fn decode<R>(reader: &mut R) -> Result<Self, fusio::Error>
             where
                 R: SeqRead,
             {
