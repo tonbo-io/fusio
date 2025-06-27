@@ -27,10 +27,8 @@ impl Fs for TokioFs {
         let local_path = path_to_local(path).map_err(|err| Error::Path(Box::new(err)))?;
         if !local_path.exists() {
             if options.create {
-                if let Some(parent) = local_path.parent() {
-                    let parent_path = Path::from_filesystem_path(parent)
-                        .map_err(|err| Error::Path(Box::new(err)))?;
-                    Self::create_dir_all(&parent_path).await?;
+                if let Some(parent_path) = local_path.parent() {
+                    create_dir_all(parent_path).await?;
                 }
 
                 tokio::fs::File::create(&local_path).await?;

@@ -23,10 +23,8 @@ impl Fs for MonoIoFs {
         let local_path = path_to_local(path).map_err(|err| Error::Path(err.into()))?;
         if !local_path.exists() {
             if options.create {
-                if let Some(parent) = local_path.parent() {
-                    let parent_path = Path::from_filesystem_path(parent)
-                        .map_err(|err| Error::Path(err.into()))?;
-                    Self::create_dir_all(&parent_path).await?;
+                if let Some(parent_path) = local_path.parent() {
+                    create_dir_all(parent_path)?;
                 }
 
                 monoio::fs::File::create(&local_path).await?;
