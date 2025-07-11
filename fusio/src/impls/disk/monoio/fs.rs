@@ -1,4 +1,4 @@
-use std::{fs, fs::create_dir_all};
+use std::{fs, fs::create_dir_all, io::ErrorKind};
 
 use async_stream::stream;
 use futures_core::Stream;
@@ -21,13 +21,29 @@ impl Fs for MonoIoFs {
 
     async fn open_options(&self, path: &Path, options: OpenOptions) -> Result<Self::File, Error> {
         let local_path = path_to_local(path).map_err(|err| Error::Path(err.into()))?;
+        if !local_path.exists() {
+            if options.create {
+                if let Some(parent_path) = local_path.parent() {
+                    create_dir_all(parent_path)?;
+                }
+
+                monoio::fs::File::create(&local_path).await?;
+            } else {
+                return Err(Error::Path(Box::new(std::io::Error::new(
+                    ErrorKind::NotFound,
+                    "Path not found and option.create is false",
+                ))));
+            }
+        }
+
+        let absolute_path = std::fs::canonicalize(&local_path).unwrap();
         let file = monoio::fs::OpenOptions::new()
             .read(options.read)
             .write(options.write)
             .create(options.create)
             .truncate(options.truncate)
             .append(!options.truncate)
-            .open(&local_path)
+            .open(&absolute_path)
             .await?;
         let metadata = file.metadata().await?;
         Ok(MonoioFile::new(file, metadata.len()))
