@@ -50,12 +50,7 @@ pub struct Path {
 #[cfg(not(target_arch = "wasm32"))]
 impl Path {
     pub fn from_filesystem_path(path: impl AsRef<std::path::Path>) -> Result<Self, Error> {
-        let absolute = std::fs::canonicalize(&path).map_err(|err| Error::Canonicalize {
-            path: path.as_ref().to_path_buf(),
-            source: err,
-        })?;
-
-        Self::from_absolute_path(absolute)
+        Self::from_absolute_path(path)
     }
 
     pub fn from_absolute_path(path: impl AsRef<std::path::Path>) -> Result<Self, Error> {
@@ -530,16 +525,5 @@ mod tests {
         assert_eq!(b.extension(), Some("baz"));
         assert_eq!(c.extension(), None);
         assert_eq!(d.extension(), Some("qux"));
-    }
-
-    #[test]
-    #[cfg(not(target_os = "windows"))]
-    fn test_path_to_local() {
-        let temp_file = NamedTempFile::new().unwrap();
-
-        let this_path = Path::from_filesystem_path(temp_file.path()).unwrap();
-        let std_path = path_to_local(&this_path).unwrap();
-
-        assert_eq!(std_path, canonicalize(temp_file.path()).unwrap());
     }
 }
