@@ -8,14 +8,28 @@ use slice::{Buf, BufLayout, BufMut, BufMutLayout};
 
 use crate::{maybe::MaybeOwned, MaybeSend};
 
+/// A poll-based I/O and completion-based I/O compatible buffer.
+///
+/// The [`IoBuf`] trait is implemented by buffer types that can be used with [`crate::Read`].
+/// Fusio has already implemented this trait for common buffer types
+/// like `Vec<u8>`, `&[u8]`, `&mut [u8]`, `bytes::Bytes`, `bytes::BytesMut`. Not every buffer type
+/// may be able to be used in all async runtimes; fusio provides compile-time safety to
+/// ensure which buffer types are compatible with the async runtime.
+///
+/// # Examples
+///
+/// ```no_run
+/// use fusio_core::IoBuf;
+///
+/// fn inspect_buffer<B: IoBuf>(buf: &B) {
+///     println!("Buffer has {} bytes", buf.bytes_init());
+///     println!(
+///         "First 10 bytes: {:?}",
+///         &buf.as_slice()[..10.min(buf.bytes_init())]
+///     );
+/// }
+/// ```
 pub trait IoBuf: Unpin + Sized + MaybeOwned + MaybeSend {
-    //! A poll-based I/O and completion-based I/O buffer compatible buffer.
-    //! The [`IoBuf`] trait is implemented by buffer types that can be used with [`crate::Read`].
-    //! Fusio has already implemented this trait for common buffer types
-    //! like `Vec<u8>`, `&[u8]`, `&mut [u8]`, `bytes::Bytes`, `bytes::BytesMut`, every buffer type
-    //! may be not be able to be used in all async runtimes, fusio provides compile-time safety to
-    //! ensure which buffer types are compatible with the async runtime.
-
     fn as_ptr(&self) -> *const u8;
 
     fn bytes_init(&self) -> usize;
@@ -30,12 +44,24 @@ pub trait IoBuf: Unpin + Sized + MaybeOwned + MaybeSend {
         bytes::Bytes::copy_from_slice(self.as_slice())
     }
 
+    /// Slice the buffer without bounds checking.
+    ///
     /// # Safety
-    /// The buffer must be recovered from the same type of buffer before it drops.
+    ///
+    /// The caller must ensure that:
+    /// - The range is within the bounds of the buffer
+    /// - The buffer will be recovered using [`IoBuf::recover_from_slice`] before it drops
+    /// - The buffer is not accessed through any other means while sliced
     unsafe fn slice_unchecked(self, range: impl RangeBounds<usize>) -> Buf;
 
+    /// Recover the original buffer from a sliced buffer.
+    ///
     /// # Safety
-    /// The buffer must be recovered from the same type.
+    ///
+    /// The caller must ensure that:
+    /// - The `buf` was created from the same buffer type using `slice_unchecked`
+    /// - The `buf` has not been modified in an incompatible way
+    /// - This is called exactly once for each `slice_unchecked` call
     unsafe fn recover_from_slice(buf: Buf) -> Self;
 
     fn calculate_bounds<R: RangeBounds<usize>>(&self, range: R) -> (usize, usize) {
@@ -53,9 +79,8 @@ pub trait IoBuf: Unpin + Sized + MaybeOwned + MaybeSend {
     }
 }
 
+/// Mutable version of [`IoBuf`] which is used with [`crate::Write`].
 pub trait IoBufMut: IoBuf {
-    //! Mutable version of [`IoBuf`] which is used with [`crate::Write`].
-
     fn as_mut_ptr(&mut self) -> *mut u8;
 
     fn as_slice_mut(&mut self) -> &mut [u8] {
@@ -63,12 +88,24 @@ pub trait IoBufMut: IoBuf {
         unsafe { core::slice::from_raw_parts_mut(self.as_mut_ptr(), self.bytes_init()) }
     }
 
+    /// Slice the mutable buffer without bounds checking.
+    ///
     /// # Safety
-    /// The buffer must be recovered from the same type of buffer before it drops.
+    ///
+    /// The caller must ensure that:
+    /// - The range is within the bounds of the buffer
+    /// - The buffer will be recovered using [`IoBufMut::recover_from_slice_mut`] before it drops
+    /// - The buffer is not accessed through any other means while sliced
     unsafe fn slice_mut_unchecked(self, range: impl RangeBounds<usize>) -> BufMut;
 
+    /// Recover the original mutable buffer from a sliced buffer.
+    ///
     /// # Safety
-    /// The buffer must be recovered from the same type.
+    ///
+    /// The caller must ensure that:
+    /// - The `buf` was created from the same buffer type using `slice_mut_unchecked`
+    /// - The `buf` has not been modified in an incompatible way
+    /// - This is called exactly once for each `slice_mut_unchecked` call
     unsafe fn recover_from_slice_mut(buf: BufMut) -> Self;
 }
 

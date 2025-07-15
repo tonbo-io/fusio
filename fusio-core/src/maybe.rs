@@ -1,19 +1,26 @@
 use core::future::Future;
 
-#[cfg(not(feature = "no-send"))]
-pub unsafe trait MaybeSend: Send {
-    //! Considering lots of runtimes does not require [`std::marker::Send`] for
-    //! [`std::future::Future`] and [`futures_core::stream::Stream`], we provide a trait to
-    //! represent the future or stream that may not require [`std::marker::Send`]. Users could
-    //! switch the feature `no-send` at compile-time to disable the [`std::marker::Send`] bound
-    //! for [`std::future::Future`] and [`futures_core::stream::Stream`].
-    //!
-    //! # Safety
-    //! Do not implement it directly.
-}
-
+/// A trait representing types that may or may not require [`Send`].
+///
+/// Many async runtimes do not require [`Send`] for futures and streams. This trait
+/// provides a way to represent types that may not require [`Send`]. Users can
+/// switch the feature `no-send` at compile-time to disable the [`Send`] bound.
+///
 /// # Safety
-/// Do not implement it directly
+///
+/// Do not implement this trait directly. It is automatically implemented for all
+/// types based on the feature flags.
+#[cfg(not(feature = "no-send"))]
+pub unsafe trait MaybeSend: Send {}
+
+/// A trait representing types that may or may not require [`Send`].
+///
+/// When the `no-send` feature is enabled, this trait has no `Send` bound,
+/// allowing use with single-threaded async runtimes.
+///
+/// # Safety
+///
+/// Do not implement this trait directly. It is automatically implemented for all types.
 #[cfg(feature = "no-send")]
 pub unsafe trait MaybeSend {}
 

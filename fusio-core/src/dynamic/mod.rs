@@ -13,16 +13,17 @@ mod seal {
     impl<T> Sealed for T {}
 }
 
+/// Dyn compatible (object safe) version of [`Write`].
+///
+/// All implementations of [`Write`] automatically implement this trait.
+/// Also, all implementations of [`DynWrite`] automatically implement [`Write`].
+/// Users should not use this trait directly.
+///
+/// # Safety
+///
+/// Do not implement this trait directly. All implementations of [`Write`] automatically
+/// implement this trait.
 pub unsafe trait DynWrite: MaybeSend + seal::Sealed {
-    //! Dyn compatible(object safety) version of [`Write`].
-    //! All implementations of [`Write`] has already implemented this trait.
-    //! Also, all implementations of [`DynWrite`] has already implemented [`Write`].
-    //! User should not use this trait directly.
-    //!
-    //! # Safety
-    //! Do not implement it directly, all implementations of [`Write`] has already implemented this
-    //! trait.
-
     fn write_all(
         &mut self,
         buf: Buf,
@@ -69,14 +70,16 @@ impl Write for Box<dyn DynWrite + '_> {
     }
 }
 
+/// Dyn compatible (object safe) version of [`Read`].
+///
+/// Similar to [`DynWrite`], all implementations of [`Read`] automatically implement this trait.
+/// Users should not use this trait directly.
+///
+/// # Safety
+///
+/// Do not implement this trait directly. All implementations of [`Read`] automatically
+/// implement this trait.
 pub unsafe trait DynRead: MaybeSend + MaybeSync + seal::Sealed {
-    //! Dyn compatible(object safety) version of [`Read`].
-    //! Same as [`DynWrite`].
-    //!
-    //! # Safety
-    //! Do not implement it directly, all implementations of [`Read`] has already implemented this
-    //! trait.
-
     fn read_exact_at(
         &mut self,
         buf: BufMut,
