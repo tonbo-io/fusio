@@ -17,3 +17,7 @@ std = []
 [dependencies]
 bytes = { version = "1", optional = true, default-features = false }
 thiserror = { version = "2", default-features = false }
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
