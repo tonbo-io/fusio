@@ -3,6 +3,7 @@ description = "Provides core trait for Fusio library."
 edition.workspace = true
 license.workspace = true
 name = "fusio-core"
+readme = "../README.md"
 repository.workspace = true
 version.workspace = true
 
