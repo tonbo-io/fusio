@@ -34,13 +34,10 @@ required-features = ["bench", "tokio"]
 [dependencies]
 bytes = { workspace = true }
 cfg-if = "1.0.0"
-fusio = { version = "0.3.8", path = "../fusio", features = ["bytes", "dyn"] }
+fusio = { version = "0.4.0", path = "../fusio", features = ["bytes", "dyn"] }
 futures = { version = "0.3" }
 monoio = { version = "0.2", optional = true, features = ["sync"] }
-parquet = { workspace = true, features = [
-    "arrow",
-    "async",
-] }
+parquet = { workspace = true, features = ["arrow", "async"] }
 tokio = { version = "1.40", optional = true, features = [
     "fs",
     "rt-multi-thread",

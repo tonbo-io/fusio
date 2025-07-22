@@ -8,7 +8,7 @@ version.workspace = true
 
 [dependencies]
 async-stream = { version = "0.3" }
-fusio = { version = "0.3.8", path = "../fusio", features = [
+fusio = { version = "0.4.0", path = "../fusio", features = [
     "bytes",
     "dyn",
     "object_store",
@@ -17,7 +17,11 @@ fusio = { version = "0.3.8", path = "../fusio", features = [
 futures-core = { workspace = true }
 futures-util = { workspace = true }
 object_store = { version = "0.12" }
-parquet = { version = "55.1.0", default-features = false, features = ["arrow", "async", "object_store"] }
+parquet = { version = "55.1.0", default-features = false, features = [
+    "arrow",
+    "async",
+    "object_store",
+] }
 tokio = { version = "1", features = ["full"] }
 
 [dev-dependencies]
