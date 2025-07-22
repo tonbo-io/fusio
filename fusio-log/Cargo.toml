@@ -12,10 +12,7 @@ bytes = ["dep:bytes"]
 default = ["aws", "bytes", "tokio", "tokio-http"]
 monoio = ["fusio-dispatch/monoio", "fusio/monoio"]
 monoio-http = ["fusio/monoio-http"]
-tokio = [
-    "fusio-dispatch/tokio",
-    "fusio/tokio",
-]
+tokio = ["fusio-dispatch/tokio", "fusio/tokio"]
 tokio-http = ["fusio/tokio-http"]
 web = ["fusio-dispatch/opfs", "fusio/opfs"]
 web-http = ["fusio/wasm-http"]
@@ -23,12 +20,12 @@ web-http = ["fusio/wasm-http"]
 [dependencies]
 bytes = { workspace = true, optional = true }
 crc32fast = "1"
-fusio = { version = "0.3.8", path = "../fusio", features = [
+fusio = { version = "0.4.0", path = "../fusio", features = [
     "dyn",
     "fs",
     "bytes",
 ] }
-fusio-dispatch = { version = "0.3.8", path = "../fusio-dispatch" }
+fusio-dispatch = { version = "0.4.0", path = "../fusio-dispatch" }
 futures-core = { workspace = true }
 futures-util = { workspace = true }
 thiserror = "2.0.12"
