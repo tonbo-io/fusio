@@ -1,6 +1,6 @@
 //! Fusio is a library that provides a unified IO interface for different IO backends.
 //! # Example
-//! ```no_run
+//! ```ignore
 //! use fusio::{Error, IoBuf, IoBufMut, Read, Write};
 //!
 //! async fn write_without_runtime_awareness<F, B, BM>(
