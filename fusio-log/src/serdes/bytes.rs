@@ -16,7 +16,7 @@ impl Encode for &[u8] {
     }
 
     fn size(&self) -> usize {
-        self.len()
+        self.len() + 4
     }
 }
 
@@ -33,7 +33,7 @@ impl Encode for Bytes {
     }
 
     fn size(&self) -> usize {
-        self.len()
+        self.len() + 4
     }
 }
 
@@ -56,18 +56,63 @@ mod tests {
 
     use crate::serdes::{Decode, Encode};
 
-    #[tokio::test]
-    async fn test_encode_decode() {
+    async fn encode_decode_bytes() {
         let source = Bytes::from_static(b"hello! Tonbo");
 
         let mut bytes = Vec::new();
         let mut cursor = Cursor::new(&mut bytes);
 
+        let before = cursor.position();
         source.encode(&mut cursor).await.unwrap();
+        let after = cursor.position();
+
+        assert_eq!(source.size(), (after - before) as usize);
 
         cursor.seek(std::io::SeekFrom::Start(0)).await.unwrap();
         let decoded = Bytes::decode(&mut cursor).await.unwrap();
 
         assert_eq!(source, decoded);
+    }
+
+    async fn encode_u8_slice_decode_bytes() {
+        let source = b"hello! Tonbo".as_slice();
+
+        let mut bytes = Vec::new();
+        let mut cursor = Cursor::new(&mut bytes);
+
+        let before = cursor.position();
+        source.encode(&mut cursor).await.unwrap();
+        let after = cursor.position();
+
+        assert_eq!(source.size(), (after - before) as usize);
+
+        cursor.seek(std::io::SeekFrom::Start(0)).await.unwrap();
+        let decoded = Bytes::decode(&mut cursor).await.unwrap();
+
+        assert_eq!(source, decoded);
+    }
+
+    #[cfg(feature = "tokio")]
+    #[tokio::test]
+    async fn test_tokio_encode_decode_bytes() {
+        encode_decode_bytes().await;
+    }
+
+    #[cfg(feature = "monoio")]
+    #[monoio::test]
+    async fn test_monoio_encode_decode() {
+        encode_decode_bytes().await;
+    }
+
+    #[cfg(feature = "tokio")]
+    #[tokio::test]
+    async fn test_tokio_encode_decode_u8_slice() {
+        encode_u8_slice_decode_bytes().await;
+    }
+
+    #[cfg(feature = "monoio")]
+    #[monoio::test]
+    async fn test_monoio_encode_decode_u8_slice() {
+        encode_u8_slice_decode_bytes().await;
     }
 }
