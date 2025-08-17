@@ -15,6 +15,6 @@ opfs = ["fusio/opfs"]
 tokio = ["fusio/tokio"]
 
 [dependencies]
-fusio = { version = "0.4.0", path = "../fusio" }
-fusio-object-store = { version = "0.4.0", path = "../fusio-object-store", optional = true }
+fusio = { version = "0.4.1", path = "../fusio" }
+fusio-object-store = { version = "0.4.1", path = "../fusio-object-store", optional = true }
 object_store = { version = "0.12", optional = true }
