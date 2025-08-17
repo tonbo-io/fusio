@@ -8,12 +8,12 @@ version = "0.1.0"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-arrow = "55"
+arrow = { workspace = true }
 fusio = { path = "../../fusio", features = ["opfs"] }
 fusio-dispatch = { path = "../../fusio-dispatch", features = ["opfs"] }
 fusio-parquet = { path = "../../fusio-parquet", features = ["web"] }
 futures = { version = "0.3" }
-parquet = { version = "55", default-features = false, features = [
+parquet = { workspace = true, default-features = false, features = [
     "arrow",
     "async",
 ] }

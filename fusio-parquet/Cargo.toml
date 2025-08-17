@@ -47,7 +47,7 @@ tokio = { version = "1.40", optional = true, features = [
 wasm-bindgen-futures = { version = "0.4.45" }
 
 [dev-dependencies]
-arrow = { version = "55.1.0" }
+arrow = { workspace = true }
 # only parquet_dal maain brach supports parquet v54.x
 # but opendal does not support depends on git respository
 # therefore, clone it to local and use it as a local package
