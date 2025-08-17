@@ -17,7 +17,7 @@ fusio = { version = "0.4.0", path = "../fusio", features = [
 futures-core = { workspace = true }
 futures-util = { workspace = true }
 object_store = { version = "0.12" }
-parquet = { version = "55.1.0", default-features = false, features = [
+parquet = { workspace = true, default-features = false, features = [
     "arrow",
     "async",
     "object_store",
