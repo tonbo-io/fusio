@@ -6,7 +6,11 @@ pub mod fs;
 pub use fs::TokioUringFs;
 use tokio_uring::fs::File;
 
-use crate::{error::Error, IoBuf, IoBufMut, Read, Write};
+use crate::{
+    durability::{Commit, FileSync},
+    error::Error,
+    IoBuf, IoBufMut, Read, Write,
+};
 
 #[repr(transparent)]
 struct TokioUringBuf<B> {
@@ -79,6 +83,38 @@ impl Write for TokioUringFile {
     async fn close(&mut self) -> Result<(), Error> {
         File::close(self.file.take().expect("close file twice")).await?;
         Ok(())
+    }
+}
+
+impl FileSync for TokioUringFile {
+    async fn sync_data(&mut self) -> Result<(), Error> {
+        self.file
+            .as_ref()
+            .expect("sync file after closed")
+            .sync_data()
+            .await
+            .map_err(Error::from)
+    }
+
+    async fn sync_all(&mut self) -> Result<(), Error> {
+        self.file
+            .as_ref()
+            .expect("sync file after closed")
+            .sync_all()
+            .await
+            .map_err(Error::from)
+    }
+
+    async fn sync_range(&mut self, _offset: u64, _len: u64) -> Result<(), Error> {
+        self.sync_data().await
+    }
+}
+
+impl Commit for TokioUringFile {
+    async fn commit(&mut self) -> Result<(), Error> {
+        Err(Error::Unsupported {
+            message: "commit not applicable for local files".to_string(),
+        })
     }
 }
 

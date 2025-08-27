@@ -47,6 +47,7 @@
 //! }
 //! ```
 
+pub mod durability;
 #[cfg(feature = "dyn")]
 pub mod dynamic;
 pub mod error;
@@ -55,11 +56,12 @@ pub mod fs;
 pub mod impls;
 pub mod path;
 
+pub use durability::{Commit, DirSync, FileSync, SupportsDurability};
 #[cfg(all(feature = "dyn", feature = "fs"))]
 pub use dynamic::fs::DynFs;
 pub use fusio_core::{
     error::{BoxedError, Error},
-    IoBuf, IoBufMut, MaybeSend, MaybeSync, Read, Write,
+    Capability, DurabilityLevel, DurabilityOp, IoBuf, IoBufMut, MaybeSend, MaybeSync, Read, Write,
 };
 #[cfg(feature = "dyn")]
 pub use fusio_core::{DynRead, DynWrite};
