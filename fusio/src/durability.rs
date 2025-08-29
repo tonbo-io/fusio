@@ -201,7 +201,7 @@ impl SupportsDurability for crate::impls::remotes::aws::s3::S3File {
 }
 
 // Filesystem handles that provide directory sync
-#[cfg(all(feature = "tokio", feature = "fs"))]
+#[cfg(all(feature = "tokio", feature = "fs", not(target_os = "windows")))]
 impl SupportsDurability for crate::impls::disk::tokio::fs::TokioFs {
     fn supports(&self, op: DurabilityOp) -> bool {
         matches!(op, DurabilityOp::DirSync)
@@ -210,6 +210,13 @@ impl SupportsDurability for crate::impls::disk::tokio::fs::TokioFs {
     fn capabilities(&self) -> &'static [Capability] {
         const CAPS: &[Capability] = &[Capability::DirSync];
         CAPS
+    }
+}
+
+#[cfg(all(feature = "tokio", feature = "fs", target_os = "windows"))]
+impl SupportsDurability for crate::impls::disk::tokio::fs::TokioFs {
+    fn supports(&self, _op: DurabilityOp) -> bool {
+        false
     }
 }
 

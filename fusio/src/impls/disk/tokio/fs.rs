@@ -109,6 +109,7 @@ impl Fs for TokioFs {
     }
 }
 
+#[cfg(not(target_os = "windows"))]
 impl DirSync for TokioFs {
     async fn sync_parent(&self, path: &Path) -> Result<(), Error> {
         let p = path_to_local(path).map_err(|err| Error::Path(Box::new(err)))?;
@@ -125,5 +126,15 @@ impl DirSync for TokioFs {
         .await
         .map_err(std::io::Error::from)??;
         Ok(())
+    }
+}
+
+#[cfg(target_os = "windows")]
+impl DirSync for TokioFs {
+    async fn sync_parent(&self, _path: &Path) -> Result<(), Error> {
+        // Windows lacks a direct, stable way to fsync directories via std APIs.
+        Err(Error::Unsupported {
+            message: "DirSync is not supported on Windows".into(),
+        })
     }
 }
