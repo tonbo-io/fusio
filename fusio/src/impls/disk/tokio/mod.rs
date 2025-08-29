@@ -12,7 +12,11 @@ use std::os::unix::fs::FileExt;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio::{fs::File, io::AsyncWriteExt, task::block_in_place};
 
-use crate::{error::Error, IoBuf, IoBufMut, Read, Write};
+use crate::{
+    durability::{Commit, FileSync},
+    error::Error,
+    IoBuf, IoBufMut, Read, Write,
+};
 
 pub struct TokioFile {
     file: Option<File>,
@@ -72,6 +76,39 @@ impl Write for TokioFile {
         let file = self.file.as_mut().expect("close file after closed");
         File::shutdown(file).await?;
         Ok(())
+    }
+}
+
+impl FileSync for TokioFile {
+    async fn sync_data(&mut self) -> Result<(), Error> {
+        self.file
+            .as_ref()
+            .expect("sync file after closed")
+            .sync_data()
+            .await
+            .map_err(Error::from)
+    }
+
+    async fn sync_all(&mut self) -> Result<(), Error> {
+        self.file
+            .as_ref()
+            .expect("sync file after closed")
+            .sync_all()
+            .await
+            .map_err(Error::from)
+    }
+
+    async fn sync_range(&mut self, _offset: u64, _len: u64) -> Result<(), Error> {
+        // no dedicated range sync primitive; fall back to data sync
+        self.sync_data().await
+    }
+}
+
+impl Commit for TokioFile {
+    async fn commit(&mut self) -> Result<(), Error> {
+        Err(Error::Unsupported {
+            message: "commit not applicable for local files".to_string(),
+        })
     }
 }
 

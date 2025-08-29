@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use fusio::DynFs;
+use fusio::{DurabilityLevel, DynFs};
 pub use fusio_dispatch::FsOptions;
 use futures_core::TryStream;
 
@@ -28,6 +28,8 @@ pub struct Options {
     pub(crate) buf_size: usize,
     pub(crate) fs_option: FsOptions,
     pub(crate) truncate: bool,
+    pub(crate) bytes_per_sync: Option<u64>,
+    pub(crate) sync_on_close: Option<DurabilityLevel>,
 }
 
 impl Options {
@@ -39,6 +41,8 @@ impl Options {
             buf_size: DEFAULT_BUF_SIZE,
             fs_option: FsOptions::Local,
             truncate: false,
+            bytes_per_sync: None,
+            sync_on_close: None,
         }
     }
 
@@ -51,6 +55,8 @@ impl Options {
             buf_size: DEFAULT_BUF_SIZE,
             fs_option,
             truncate: false,
+            bytes_per_sync: None,
+            sync_on_close: None,
         }
     }
 
@@ -78,6 +84,23 @@ impl Options {
     /// Open log file with truncate option.
     pub fn truncate(self, truncate: bool) -> Self {
         Self { truncate, ..self }
+    }
+
+    /// Set bytes-per-sync policy. When accumulated written bytes exceed this threshold,
+    /// the writer will flush and issue a data sync.
+    pub fn bytes_per_sync(self, n: u64) -> Self {
+        Self {
+            bytes_per_sync: Some(n),
+            ..self
+        }
+    }
+
+    /// Set a durability level to apply on close (e.g., Data or All).
+    pub fn sync_on_close(self, level: DurabilityLevel) -> Self {
+        Self {
+            sync_on_close: Some(level),
+            ..self
+        }
     }
 
     /// Open the log file. Return error if open file failed.

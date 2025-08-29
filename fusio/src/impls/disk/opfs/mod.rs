@@ -15,6 +15,7 @@ use web_sys::{
 };
 
 use crate::{
+    durability::{Commit, FileSync},
     error::{wasm_err, Error},
     fs::OpenOptions,
     IoBuf, IoBufMut, Read, Write,
@@ -130,6 +131,38 @@ impl Write for OPFSFile {
         }
         let _ = self.file_handle.take();
 
+        Ok(())
+    }
+}
+
+impl FileSync for OPFSFile {
+    async fn sync_data(&mut self) -> Result<(), Error> {
+        // OPFS FileSystemWritableFileStream has no durable sync; only close commits.
+        // Treat data sync as a best-effort no-op to avoid spurious failures in browser contexts.
+        Ok(())
+    }
+
+    async fn sync_all(&mut self) -> Result<(), Error> {
+        // There is no fsync-equivalent for the streaming writer; do not imply durability.
+        Err(Error::Unsupported {
+            message: "OPFS stream writer lacks fsync-level durability; close to persist"
+                .to_string(),
+        })
+    }
+
+    async fn sync_range(&mut self, _offset: u64, _len: u64) -> Result<(), Error> {
+        // As with sync_data, treat as best-effort no-op.
+        Ok(())
+    }
+}
+
+impl Commit for OPFSFile {
+    async fn commit(&mut self) -> Result<(), Error> {
+        // Closing the FileSystemWritableFileStream persists changes to storage.
+        // Keep the FileSystemFileHandle so reads remain possible after commit.
+        if let Some(writer) = self.write_stream.take() {
+            JsFuture::from(writer.close()).await.map_err(wasm_err)?;
+        }
         Ok(())
     }
 }

@@ -5,6 +5,7 @@ use futures_core::Stream;
 
 use super::MonoioFile;
 use crate::{
+    durability::DirSync,
     error::Error,
     fs::{FileMeta, FileSystemTag, Fs, OpenOptions},
     path::{path_to_local, Path},
@@ -95,6 +96,18 @@ impl Fs for MonoIoFs {
 
         monoio::spawn(async move { fs::hard_link(&from, &to) }).await?;
 
+        Ok(())
+    }
+}
+
+impl DirSync for MonoIoFs {
+    async fn sync_parent(&self, path: &Path) -> Result<(), Error> {
+        let p = path_to_local(path).map_err(|err| Error::Path(err.into()))?;
+        if let Some(parent) = p.parent() {
+            // Use blocking std fsync on directory handle
+            let file = std::fs::File::open(parent)?;
+            file.sync_all()?;
+        }
         Ok(())
     }
 }

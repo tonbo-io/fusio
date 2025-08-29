@@ -282,10 +282,6 @@ pub fn path_to_local(location: &Path) -> Result<PathBuf, Error> {
 #[cfg(test)]
 #[cfg(not(target_arch = "wasm32"))]
 mod tests {
-    use std::fs::canonicalize;
-
-    use tempfile::NamedTempFile;
-
     use super::*;
 
     #[test]
