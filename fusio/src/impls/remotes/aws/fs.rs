@@ -425,7 +425,7 @@ mod tests {
             }),
             region: region.into(),
             sign_payload: true,
-            checksum: false,
+            checksum: true,
         };
 
         let s3 = AmazonS3 {
