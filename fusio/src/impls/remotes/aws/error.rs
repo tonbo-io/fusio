@@ -1,6 +1,6 @@
 use thiserror::Error;
 
-use crate::remotes::{aws::credential::AuthorizeError, http::HttpError};
+use crate::remotes::{aws::sign::AuthorizeError, http::HttpError};
 
 #[derive(Debug, Error)]
 pub enum S3Error {

@@ -209,12 +209,10 @@ pub async fn copy(
 
 #[cfg(test)]
 mod tests {
-
-    use fusio_core::Write;
-
     #[cfg(all(feature = "tokio", not(feature = "completion-based")))]
     #[tokio::test(flavor = "multi_thread")]
     async fn test_dyn_fs() {
+        use fusio_core::Write;
         use tempfile::tempfile;
 
         use crate::disk::tokio::TokioFile;
@@ -229,6 +227,7 @@ mod tests {
     #[cfg(all(feature = "tokio", not(feature = "completion-based")))]
     #[tokio::test(flavor = "multi_thread")]
     async fn test_dyn_buf_fs() {
+        use fusio_core::Write;
         use tempfile::NamedTempFile;
 
         use crate::{
@@ -236,6 +235,7 @@ mod tests {
             dynamic::DynFile,
             fs::{Fs, OpenOptions},
             impls::buffered::BufWriter,
+            path::Path,
             Read,
         };
 
@@ -243,10 +243,9 @@ mod tests {
         let fs = TokioFs;
         let temp_file = NamedTempFile::new().unwrap();
         let path = temp_file.into_temp_path();
+        let cloud_path = Path::from_absolute_path(&path).unwrap();
         let mut dyn_file = Box::new(BufWriter::new(
-            fs.open_options(&path.to_str().unwrap().into(), open_options)
-                .await
-                .unwrap(),
+            fs.open_options(&cloud_path, open_options).await.unwrap(),
             5,
         )) as Box<dyn DynFile>;
 
