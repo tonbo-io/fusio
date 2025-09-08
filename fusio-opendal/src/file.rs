@@ -1,4 +1,4 @@
-use fusio::{error::Error, fs::OpenOptions, IoBuf, IoBufMut, Read, Write};
+use fusio::{durability::FileCommit, error::Error, fs::OpenOptions, IoBuf, IoBufMut, Read, Write};
 use opendal::{Operator, Reader, Writer};
 
 use crate::utils::parse_opendal_error;
@@ -145,6 +145,19 @@ impl Write for OpendalFile {
     async fn close(&mut self) -> Result<(), Error> {
         let FileState::Write(w) = &mut self.state else {
             return Err(Error::Other("file is not open as write mode".into()));
+        };
+        w.close().await.map_err(parse_opendal_error)
+    }
+}
+
+impl FileCommit for OpendalFile {
+    async fn commit(&mut self) -> Result<(), Error> {
+        // For OpenDAL writer, committing is equivalent to finalizing the write stream.
+        let FileState::Write(w) = &mut self.state else {
+            // Nothing to commit for read handles.
+            return Err(Error::Unsupported {
+                message: "commit is only valid for write handles".to_string(),
+            });
         };
         w.close().await.map_err(parse_opendal_error)
     }
