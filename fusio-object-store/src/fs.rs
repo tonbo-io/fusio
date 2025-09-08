@@ -57,7 +57,7 @@ impl<O: ObjectStore> Fs for S3Store<O> {
 
         Ok(stream! {
             while let Some(meta) = stream.next().await.transpose().map_err(|err| Error::Remote(BoxedError::from(err)))? {
-                yield Ok(FileMeta { path: meta.location.into(), size: meta.size as u64 });
+                yield Ok(FileMeta { path: meta.location.into(), size: meta.size });
             }
         })
     }

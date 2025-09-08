@@ -4,9 +4,16 @@ use fusio::{disk::LocalFs, dynamic::DynFile, DynFs};
 
 #[allow(unused)]
 async fn use_fs() {
+    use fusio::fs::OpenOptions;
     let fs: Arc<dyn DynFs> = Arc::new(LocalFs {});
 
-    let mut file: Box<dyn DynFile> = Box::new(fs.open(&"foo.txt".into()).await.unwrap());
+    let mut file: Box<dyn DynFile> = fs
+        .open_options(
+            &"foo.txt".into(),
+            OpenOptions::default().create(true).truncate(true),
+        )
+        .await
+        .unwrap();
 
     let write_buf = "hello, world".as_bytes();
     let mut read_buf = [0; 12];

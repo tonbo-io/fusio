@@ -12,7 +12,7 @@ default = []
 monoio = ["fusio/monoio"]
 object_store = ["dep:fusio-object-store", "object_store/aws"]
 opfs = ["fusio/opfs"]
-tokio = ["fusio/tokio"]
+tokio = ["fusio/tokio-http"]
 
 [dependencies]
 fusio = { version = "0.4.1", path = "../fusio" }
