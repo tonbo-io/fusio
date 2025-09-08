@@ -84,7 +84,7 @@ impl Read for S3File {
         };
 
         if !response.status().is_success() {
-            return (
+            (
                 Err(Error::Remote(Box::new(HttpError::HttpNotSuccess {
                     status: response.status(),
                     body: String::from_utf8_lossy(
@@ -98,7 +98,7 @@ impl Read for S3File {
                     .to_string(),
                 }))),
                 buf,
-            );
+            )
         } else {
             match response.into_body().collect().await.map_err(S3Error::from) {
                 Ok(body) => {
@@ -148,7 +148,7 @@ impl Read for S3File {
         };
 
         if !response.status().is_success() {
-            return (
+            (
                 Err(Error::Remote(Box::new(HttpError::HttpNotSuccess {
                     status: response.status(),
                     body: String::from_utf8_lossy(
@@ -162,7 +162,7 @@ impl Read for S3File {
                     .to_string(),
                 }))),
                 buf,
-            );
+            )
         } else {
             match response.into_body().collect().await.map_err(S3Error::from) {
                 Ok(body) => {

@@ -7,11 +7,8 @@ version = "0.1.0"
 [lib]
 crate-type = ["cdylib", "rlib"]
 
-[dependencies]
-arrow = { workspace = true }
-fusio = { path = "../../fusio", features = ["opfs"] }
-fusio-dispatch = { path = "../../fusio-dispatch", features = ["opfs"] }
-fusio-parquet = { path = "../../fusio-parquet", features = ["web"] }
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+arrow = "56"
 futures = { version = "0.3" }
 parquet = { workspace = true, default-features = false, features = [
     "arrow",
@@ -20,6 +17,9 @@ parquet = { workspace = true, default-features = false, features = [
 wasm-bindgen = "0.2.95"
 wasm-bindgen-futures = { version = "0.4.45" }
 web-sys = { version = "0.3", features = ["console"] }
+fusio = { path = "../../fusio", features = ["opfs"] }
+fusio-dispatch = { path = "../../fusio-dispatch", features = ["opfs"] }
+fusio-parquet = { path = "../../fusio-parquet", features = ["web"] }
 
-[dev-dependencies]
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 wasm-bindgen-test = "0.3.34"

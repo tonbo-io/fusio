@@ -3,9 +3,19 @@ use crate::write_without_runtime_awareness;
 #[allow(unused)]
 #[cfg(feature = "tokio")]
 async fn use_tokio_file() {
-    use tokio::fs::File;
+    use fusio::{
+        disk::LocalFs,
+        fs::{Fs, OpenOptions},
+    };
 
-    let mut file = File::open("foo.txt").await.unwrap();
+    let fs = LocalFs {};
+    let mut file = fs
+        .open_options(
+            &"foo.txt".into(),
+            OpenOptions::default().create(true).truncate(true),
+        )
+        .await
+        .unwrap();
     let write_buf = "hello, world".as_bytes();
     let mut read_buf = [0; 12];
     let (result, _, read_buf) =
@@ -17,10 +27,19 @@ async fn use_tokio_file() {
 #[allow(unused)]
 #[cfg(feature = "monoio")]
 async fn use_monoio_file() {
-    use fusio::disk::MonoioFile;
-    use monoio::fs::File;
+    use fusio::{
+        disk::MonoIoFs,
+        fs::{Fs, OpenOptions},
+    };
 
-    let mut file: MonoioFile = File::open("foo.txt").await.unwrap().into();
+    let fs = MonoIoFs;
+    let mut file = fs
+        .open_options(
+            &"foo.txt".into(),
+            OpenOptions::default().create(true).truncate(true),
+        )
+        .await
+        .unwrap();
     let write_buf = "hello, world".as_bytes();
     let read_buf = vec![0; 12];
     // completion-based runtime has to pass owned buffer to the function

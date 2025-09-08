@@ -3,7 +3,7 @@ use http::{Request, Response};
 use http_body::Body;
 
 use super::{HttpClient, HttpError};
-use crate::{error::BoxedError, MaybeSend, MaybeSync};
+use crate::{error::BoxedError, MaybeSync};
 
 pub struct TokioClient {
     client: reqwest::Client,
@@ -31,7 +31,7 @@ impl HttpClient for TokioClient {
         request: Request<B>,
     ) -> Result<Response<Self::RespBody>, HttpError>
     where
-        B: Body + MaybeSend + MaybeSync + 'static,
+        B: Body + Send + MaybeSync + 'static,
         B::Data: Into<Bytes>,
         B::Error: Into<BoxedError>,
     {

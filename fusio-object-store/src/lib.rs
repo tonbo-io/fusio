@@ -32,12 +32,12 @@ impl<O: ObjectStore> S3File<O> {
             .map_err(BoxedError::from)
         {
             Ok(result) => result,
-            Err(e) => return (Err(Error::Remote(e.into())), buf),
+            Err(e) => return (Err(Error::Remote(e)), buf),
         };
 
         let bytes = match result.bytes().await.map_err(BoxedError::from) {
             Ok(bytes) => bytes,
-            Err(e) => return (Err(Error::Other(e.into())), buf),
+            Err(e) => return (Err(Error::Other(e)), buf),
         };
 
         buf.as_slice_mut().copy_from_slice(&bytes);
