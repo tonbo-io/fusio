@@ -13,8 +13,8 @@ Notes
 - When an operation is unsupported on a backend, it must be surfaced as such and either no-op or map to the closest stronger operation when safe, with explicit `Unsupported` errors for requested guarantees that cannot be met.
 - Range sync is a best-effort optimization on supported OSes and can degrade to full file sync.
 
-## Proposed API Surface (sketch)
-These are additive traits and options that do not replace existing traits. Keep `fusio-core` minimal; place implementations in `fusio`, and share small enums via `fusio-core` if widely referenced.
+## API Surface (as implemented)
+These traits and options are additive and do not replace the core Read/Write traits. Shared enums live in `fusio-core`; durability traits live in `fusio`.
 
 ```rust
 // fusio-core (shared types)
@@ -33,21 +33,22 @@ pub enum Capability { Flush, DataSync, Fsync, DirSync, Commit, RangeSync }
 use crate::{Error, MaybeSend};
 use core::future::Future;
 
-pub trait SyncOps: MaybeSend {
+// File-handle durability operations
+pub trait FileSync: MaybeSend {
     fn sync_data(&mut self) -> impl Future<Output = Result<(), Error>> + MaybeSend;
     fn sync_all(&mut self) -> impl Future<Output = Result<(), Error>> + MaybeSend;
-    /// Optional optimization; may fall back to full data sync.
+    /// Optional optimization; may fall back to data sync.
     fn sync_range(&mut self, _offset: u64, _len: u64)
         -> impl Future<Output = Result<(), Error>> + MaybeSend;
 }
 
-/// Object-store writers and other backends that need an explicit finalize step.
-pub trait CommitOp: MaybeSend {
+/// Backends that require an explicit finalize step for visibility (e.g., S3 MPU complete).
+pub trait FileCommit: MaybeSend {
     fn commit(&mut self) -> impl Future<Output = Result<(), Error>> + MaybeSend;
 }
 
 /// Directory sync exposed via filesystem handle when applicable.
-pub trait DirSyncOp: MaybeSend {
+pub trait DirSync: MaybeSend {
     fn sync_parent(&self, path: &crate::path::Path)
         -> impl Future<Output = Result<(), Error>> + MaybeSend;
 }
@@ -56,6 +57,23 @@ pub trait DirSyncOp: MaybeSend {
 pub trait SupportsDurability {
     fn supports(&self, op: crate::durability::DurabilityOp) -> bool;
 }
+```
+
+Policy helpers on close:
+
+```rust
+// Flush drains in-process buffers; Data/All perform durable syncs.
+// Commit degrades to sync_all by default.
+pub async fn apply_on_close<W: FileSync + Write>(
+    writer: &mut W,
+    level: Option<DurabilityLevel>,
+) -> Result<(), Error> { /* ... */ }
+
+// Prefer real commit for backends that support it.
+pub async fn apply_on_close_with_commit<W: FileSync + Write + FileCommit>(
+    writer: &mut W,
+    level: Option<DurabilityLevel>,
+) -> Result<(), Error> { /* ... */ }
 ```
 
 ```rust
@@ -77,9 +95,11 @@ pub struct OpenOptions {
 ```
 
 Helpers
-- atomic_write_file(path, bytes, level): write temp, `sync_data`, close, rename, `dirsync`.
-- atomic_replace(paths[], level): write all temps, sync each, rename all, final `dirsync`.
-- DurabilityGuard: RAII policy helper that triggers `sync_data` every N ms/bytes.
+- apply_on_close(level): Flush → flush, Data/All → sync, Commit → sync_all fallback.
+- apply_on_close_with_commit(level): Commit → commit() when available; otherwise same as apply_on_close.
+- atomic_write_file(path, bytes, level): write temp, `sync_data`, close, rename, `dirsync` (planned).
+- atomic_replace(paths[], level): write all temps, sync each, rename all, final `dirsync` (planned).
+- DurabilityGuard: RAII helper to `sync_data` every N ms/bytes (planned).
 
 ## Backend Mapping
 - POSIX/local
@@ -87,11 +107,12 @@ Helpers
   - DataSync: `fdatasync` (or `F_FULLFSYNC` on macOS when requested).
   - Fsync: `fsync`.
   - DirSync: `fsync(dirfd)` on the parent directory.
-  - Commit: N/A.
+  - Commit: Unsupported (no publish step).
 - macOS
   - Support `F_FULLFSYNC` behind an option for stronger barriers; default to `fdatasync`/`fsync`.
 - Windows
   - DataSync/Fsync: `FlushFileBuffers` (file handle). Directory sync has no distinct primitive; document behavior.
+  - DirSync: Unsupported (returns Unsupported in fusio).
 - S3 and object stores
   - Flush: buffer upload or part upload initiation; not durable.
   - DataSync: uploaded parts persisted but not yet visible.
@@ -121,7 +142,33 @@ Capability table (indicative)
 - Multi-file update
   - Write temps for all, `sync_data` each; rename all; final `sync_parent` on the common parent directory.
 - Object-store upload
-  - Upload parts; periodic `sync` as MPU part completes; `commit` at the end; treat re-listing as visibility confirmation.
+  - Upload parts; periodic `sync` as MPU part completes (best-effort); `commit` at the end; treat re-listing as visibility confirmation.
+
+Commit fallback example
+
+```rust
+use fusio::{durability::FileCommit, DurabilityOp, SupportsDurability};
+
+if writer.supports(DurabilityOp::Commit) {
+    writer.commit().await?;
+} else {
+    writer.sync_all().await?;
+}
+```
+
+Or use the helper that prefers commit:
+
+```rust
+use fusio::durability::apply_on_close_with_commit;
+apply_on_close_with_commit(&mut writer, Some(DurabilityLevel::Commit)).await?;
+```
+
+## Dynamic Dispatch
+
+- All dynamic files (`Box<dyn DynFile>`) support `commit()` via `DynFileCommit`.
+  - On backends where commit has no meaning (local files), it returns `Error::Unsupported`.
+- `BufWriter<Box<dyn DynFile>>` implements `FileSync` by delegating to concrete backends under the hood.
+- `DirSync` is exposed on filesystem handles (e.g., `TokioFs`, `MonoioFs`, `TokioUringFs`), not file handles.
 
 ## Error and Degradation Policy
 - If a requested level or op is unsupported, return `Error::Unsupported` from the specific op and document the nearest guarantee that can be achieved.
