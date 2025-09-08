@@ -11,6 +11,7 @@ use percent_encoding::utf8_percent_encode;
 
 use super::{fs::AmazonS3, sign::Sign, S3Error, STRICT_PATH_ENCODE_SET};
 use crate::{
+    durability::{FileCommit, FileSync},
     error::Error,
     path::Path,
     remotes::{
@@ -239,6 +240,31 @@ impl Write for S3File {
     }
 
     async fn close(&mut self) -> Result<(), Error> {
+        if let Some(mut writer) = self.writer.take() {
+            writer.close().await?;
+        }
+        Ok(())
+    }
+}
+
+impl FileSync for S3File {
+    async fn sync_data(&mut self) -> Result<(), Error> {
+        // Best-effort: flush any buffered parts to the service.
+        self.flush().await
+    }
+
+    async fn sync_all(&mut self) -> Result<(), Error> {
+        // There is no distinct fsync concept; rely on flush.
+        self.flush().await
+    }
+
+    async fn sync_range(&mut self, _offset: u64, _len: u64) -> Result<(), Error> {
+        self.flush().await
+    }
+}
+
+impl FileCommit for S3File {
+    async fn commit(&mut self) -> Result<(), Error> {
         if let Some(mut writer) = self.writer.take() {
             writer.close().await?;
         }

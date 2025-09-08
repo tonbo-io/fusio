@@ -4,6 +4,7 @@ use web_sys::{FileSystemFileHandle, FileSystemReadWriteOptions, FileSystemSyncAc
 
 use crate::{
     disk::opfs::promise,
+    durability::{FileCommit, FileSync},
     error::{wasm_err, Error},
     fs::OpenOptions,
     IoBuf, IoBufMut, Read, Write,
@@ -82,6 +83,27 @@ impl Write for OPFSSyncFile {
             access_handle.close();
         }
         Ok(())
+    }
+}
+
+impl FileSync for OPFSSyncFile {
+    async fn sync_data(&mut self) -> Result<(), Error> {
+        self.flush().await
+    }
+
+    async fn sync_all(&mut self) -> Result<(), Error> {
+        self.flush().await
+    }
+
+    async fn sync_range(&mut self, _offset: u64, _len: u64) -> Result<(), Error> {
+        self.flush().await
+    }
+}
+
+impl FileCommit for OPFSSyncFile {
+    async fn commit(&mut self) -> Result<(), Error> {
+        // Best-effort: flush; OPFS "commit" is effectively close for SyncAccessHandle.
+        self.flush().await
     }
 }
 

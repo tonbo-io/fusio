@@ -9,6 +9,7 @@ use tokio::{
 
 use crate::{
     disk::tokio::TokioFile,
+    durability::DirSync,
     error::Error,
     fs::{FileMeta, FileSystemTag, Fs, OpenOptions},
     path::{path_to_local, Path},
@@ -105,5 +106,35 @@ impl Fs for TokioFs {
         tokio::fs::hard_link(&from, &to).await?;
 
         Ok(())
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+impl DirSync for TokioFs {
+    async fn sync_parent(&self, path: &Path) -> Result<(), Error> {
+        let p = path_to_local(path).map_err(|err| Error::Path(Box::new(err)))?;
+        let Some(parent) = p.parent() else {
+            return Ok(());
+        };
+        let parent_path = parent.to_path_buf();
+        tokio::task::spawn_blocking(move || {
+            // Open directory and fsync it.
+            let file = std::fs::File::open(parent_path)?;
+            file.sync_all()?;
+            Ok::<(), std::io::Error>(())
+        })
+        .await
+        .map_err(std::io::Error::from)??;
+        Ok(())
+    }
+}
+
+#[cfg(target_os = "windows")]
+impl DirSync for TokioFs {
+    async fn sync_parent(&self, _path: &Path) -> Result<(), Error> {
+        // Windows lacks a direct, stable way to fsync directories via std APIs.
+        Err(Error::Unsupported {
+            message: "DirSync is not supported on Windows".into(),
+        })
     }
 }

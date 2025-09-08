@@ -6,6 +6,7 @@ use tokio_uring::fs::{create_dir_all, remove_file};
 
 use crate::{
     disk::tokio_uring::TokioUringFile,
+    durability::DirSync,
     error::Error,
     fs::{FileMeta, FileSystemTag, Fs, OpenOptions},
     path::{path_to_local, Path},
@@ -100,5 +101,22 @@ impl Fs for TokioUringFs {
         fs::hard_link(&from, &to)?;
 
         Ok(())
+    }
+}
+
+impl DirSync for TokioUringFs {
+    async fn sync_parent(&self, path: &Path) -> Result<(), Error> {
+        let p = path_to_local(path).map_err(|err| Error::Path(err.into()))?;
+        let Some(parent) = p.parent() else {
+            return Ok(());
+        };
+        // Best-effort: use blocking std sync for directory.
+        let res = std::fs::File::open(parent)
+            .and_then(|f| {
+                f.sync_all()?;
+                Ok(())
+            })
+            .map_err(Error::from);
+        res
     }
 }

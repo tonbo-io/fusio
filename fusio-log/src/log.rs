@@ -2,6 +2,7 @@ use std::{io::Cursor, marker::PhantomData, sync::Arc};
 
 use fusio::{
     buffered::{BufReader, BufWriter},
+    durability,
     dynamic::DynFile,
     fs::OpenOptions,
     path::Path,
@@ -20,6 +21,9 @@ pub struct Logger<T> {
     path: Path,
     fs: Arc<dyn DynFs>,
     buf_writer: BufWriter<Box<dyn DynFile>>,
+    bytes_per_sync: Option<u64>,
+    bytes_since_sync: u64,
+    sync_on_close: Option<fusio::DurabilityLevel>,
     _mark: PhantomData<T>,
 }
 
@@ -45,6 +49,9 @@ where
             fs,
             buf_writer,
             path: option.path,
+            bytes_per_sync: option.bytes_per_sync,
+            bytes_since_sync: 0,
+            sync_on_close: option.sync_on_close,
             _mark: PhantomData,
         })
     }
@@ -66,6 +73,9 @@ where
             fs,
             buf_writer,
             path: option.path,
+            bytes_per_sync: option.bytes_per_sync,
+            bytes_since_sync: 0,
+            sync_on_close: option.sync_on_close,
             _mark: PhantomData,
         })
     }
@@ -85,14 +95,18 @@ where
     {
         let mut writer = HashWriter::new(&mut self.buf_writer);
         (data.len() as u32).encode(&mut writer).await?;
+        let mut sum: u64 = 0;
         for e in data {
             e.encode(&mut writer)
                 .await
                 .map_err(|err| LogError::Encode {
                     message: err.to_string(),
                 })?;
+            sum += e.size() as u64;
         }
         writer.eol().await?;
+        let batch_size = size_of::<u32>() as u64 + sum + size_of::<u32>() as u64;
+        self.maybe_sync(batch_size).await?;
         Ok(())
     }
 
@@ -108,6 +122,8 @@ where
                 message: err.to_string(),
             })?;
         writer.eol().await?;
+        let batch_size = size_of::<u32>() as u64 + data.size() as u64 + size_of::<u32>() as u64;
+        self.maybe_sync(batch_size).await?;
         Ok(())
     }
 
@@ -120,6 +136,12 @@ where
     /// Close the log file. This will flush the data to the log file and close it.
     /// It is not guaranteed that the log file can be operated after closing.
     pub async fn close(&mut self) -> Result<(), LogError> {
+        // Apply requested durability level if any, then close.
+        if self.sync_on_close.is_some() {
+            durability::apply_on_close(&mut self.buf_writer, self.sync_on_close)
+                .await
+                .map_err(|e| LogError::from(e))?;
+        }
         self.buf_writer.close().await?;
         Ok(())
     }
@@ -184,6 +206,17 @@ where
 }
 
 impl<T> Logger<T> {
+    async fn maybe_sync(&mut self, wrote: u64) -> Result<(), LogError> {
+        if let Some(n) = self.bytes_per_sync {
+            self.bytes_since_sync = self.bytes_since_sync.saturating_add(wrote);
+            if self.bytes_since_sync >= n {
+                use fusio::durability::FileSync;
+                self.buf_writer.sync_data().await.map_err(LogError::from)?;
+                self.bytes_since_sync = 0;
+            }
+        }
+        Ok(())
+    }
     /// Remove log file
     pub async fn remove(self) -> Result<(), LogError> {
         self.fs.remove(&self.path).await?;

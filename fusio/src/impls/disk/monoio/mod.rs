@@ -3,7 +3,11 @@ pub mod fs;
 
 use monoio::fs::File;
 
-use crate::{error::Error, IoBuf, IoBufMut, Read, Write};
+use crate::{
+    durability::{FileCommit, FileSync},
+    error::Error,
+    IoBuf, IoBufMut, Read, Write,
+};
 
 #[repr(transparent)]
 struct MonoioBuf<B> {
@@ -81,6 +85,31 @@ impl Write for MonoioFile {
     async fn close(&mut self) -> Result<(), Error> {
         File::close(self.file.take().expect("close file twice")).await?;
         Ok(())
+    }
+}
+
+impl FileSync for MonoioFile {
+    async fn sync_data(&mut self) -> Result<(), Error> {
+        // monoio File only exposes sync_all; use it for both data and all.
+        monoio::fs::File::sync_all(self.file.as_ref().expect("sync file after closed")).await?;
+        Ok(())
+    }
+
+    async fn sync_all(&mut self) -> Result<(), Error> {
+        monoio::fs::File::sync_all(self.file.as_ref().expect("sync file after closed")).await?;
+        Ok(())
+    }
+
+    async fn sync_range(&mut self, _offset: u64, _len: u64) -> Result<(), Error> {
+        self.sync_data().await
+    }
+}
+
+impl FileCommit for MonoioFile {
+    async fn commit(&mut self) -> Result<(), Error> {
+        Err(Error::Unsupported {
+            message: "commit not applicable for local files".to_string(),
+        })
     }
 }
 
