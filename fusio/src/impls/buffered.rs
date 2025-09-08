@@ -3,7 +3,7 @@ use std::cmp;
 use fusio_core::Write;
 
 use crate::{
-    durability::{Commit, FileSync, SupportsDurability},
+    durability::{FileCommit, FileSync, SupportsDurability},
     error::Error,
     IoBuf, IoBufMut, Read,
 };
@@ -184,7 +184,7 @@ impl<F: Write + FileSync> FileSync for BufWriter<F> {
         self.inner.sync_range(offset, len).await
     }
 }
-impl<F: Write + Commit> Commit for BufWriter<F> {
+impl<F: Write + FileCommit> FileCommit for BufWriter<F> {
     async fn commit(&mut self) -> Result<(), Error> {
         self.flush().await?;
         self.inner.commit().await
@@ -277,27 +277,7 @@ impl FileSync for BufWriter<Box<dyn crate::dynamic::fs::DynFile>> {
         })
     }
 }
-impl Commit for BufWriter<Box<dyn crate::dynamic::fs::DynFile>> {
-    async fn commit(&mut self) -> Result<(), Error> {
-        self.flush().await?;
-        let any = (&mut *self.inner) as &mut dyn core::any::Any;
-        #[cfg(all(feature = "opfs", target_arch = "wasm32"))]
-        if let Some(f) = any.downcast_mut::<crate::impls::disk::OPFSFile>() {
-            return f.commit().await;
-        }
-        #[cfg(all(feature = "opfs", target_arch = "wasm32", feature = "sync"))]
-        if let Some(f) = any.downcast_mut::<crate::impls::disk::OPFSSyncFile>() {
-            return f.commit().await;
-        }
-        #[cfg(feature = "aws")]
-        if let Some(f) = any.downcast_mut::<crate::impls::remotes::aws::s3::S3File>() {
-            return f.commit().await;
-        }
-        Err(Error::Unsupported {
-            message: "Commit not supported for this backend".to_string(),
-        })
-    }
-}
+// Specialized dynamic BufWriter no longer needed; covered by generic impl above
 
 // Advertise durability support by delegating to the inner handle when possible.
 impl<F> SupportsDurability for BufWriter<F>

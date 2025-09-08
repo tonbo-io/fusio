@@ -7,7 +7,7 @@ pub use fs::TokioUringFs;
 use tokio_uring::fs::File;
 
 use crate::{
-    durability::{Commit, FileSync},
+    durability::{FileCommit, FileSync},
     error::Error,
     IoBuf, IoBufMut, Read, Write,
 };
@@ -110,7 +110,7 @@ impl FileSync for TokioUringFile {
     }
 }
 
-impl Commit for TokioUringFile {
+impl FileCommit for TokioUringFile {
     async fn commit(&mut self) -> Result<(), Error> {
         Err(Error::Unsupported {
             message: "commit not applicable for local files".to_string(),

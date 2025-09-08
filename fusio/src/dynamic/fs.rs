@@ -5,16 +5,16 @@ use fusio_core::{DynWrite, Write};
 
 use super::{MaybeSendFuture, MaybeSendStream};
 use crate::{
-    durability::FileSync,
+    durability::{FileCommit, FileSync},
     error::Error,
     fs::{FileMeta, FileSystemTag, Fs, OpenOptions},
     path::Path,
     DynRead, IoBuf, IoBufMut, MaybeSend, MaybeSync, Read,
 };
 
-pub trait DynFile: DynRead + DynWrite + 'static + Any {}
+pub trait DynFile: DynRead + DynWrite + DynFileCommit + 'static + Any {}
 
-impl<F> DynFile for F where F: DynRead + DynWrite + 'static + Any {}
+impl<F> DynFile for F where F: DynRead + DynWrite + DynFileCommit + 'static + Any {}
 
 impl<'read> Read for Box<dyn DynFile + 'read> {
     async fn read_exact_at<B: IoBufMut>(&mut self, buf: B, pos: u64) -> (Result<(), Error>, B) {
@@ -50,7 +50,13 @@ impl<'write> Write for Box<dyn DynFile + 'write> {
     }
 }
 
-pub unsafe trait DynSyncOps: MaybeSend {
+impl FileCommit for Box<dyn DynFile + '_> {
+    async fn commit(&mut self) -> Result<(), Error> {
+        DynFileCommit::commit(self.as_mut()).await
+    }
+}
+
+pub unsafe trait DynFileSync: MaybeSend {
     fn sync_data(&mut self) -> Pin<Box<dyn MaybeSendFuture<Output = Result<(), Error>> + '_>>;
     fn sync_all(&mut self) -> Pin<Box<dyn MaybeSendFuture<Output = Result<(), Error>> + '_>>;
     fn sync_range(
@@ -60,7 +66,7 @@ pub unsafe trait DynSyncOps: MaybeSend {
     ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<(), Error>> + '_>>;
 }
 
-unsafe impl<T> DynSyncOps for T
+unsafe impl<T> DynFileSync for T
 where
     T: FileSync,
 {
@@ -78,6 +84,21 @@ where
         len: u64,
     ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<(), Error>> + '_>> {
         Box::pin(async move { FileSync::sync_range(self, offset, len).await })
+    }
+}
+
+/// Dyn-compatible (object safe) version of `Commit` for dynamic files.
+/// All types implementing `Commit` automatically implement this trait.
+pub unsafe trait DynFileCommit: MaybeSend {
+    fn commit(&mut self) -> Pin<Box<dyn MaybeSendFuture<Output = Result<(), Error>> + '_>>;
+}
+
+unsafe impl<T> DynFileCommit for T
+where
+    T: FileCommit,
+{
+    fn commit(&mut self) -> Pin<Box<dyn MaybeSendFuture<Output = Result<(), Error>> + '_>> {
+        Box::pin(async move { FileCommit::commit(self).await })
     }
 }
 
@@ -134,7 +155,11 @@ pub trait DynFs: MaybeSend + MaybeSync {
     ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<(), Error>> + 's>>;
 }
 
-impl<F: Fs> DynFs for F {
+impl<F> DynFs for F
+where
+    F: Fs,
+    F::File: FileCommit,
+{
     fn file_system(&self) -> FileSystemTag {
         Fs::file_system(self)
     }

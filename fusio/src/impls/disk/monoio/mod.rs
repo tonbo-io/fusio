@@ -4,7 +4,7 @@ pub mod fs;
 use monoio::fs::File;
 
 use crate::{
-    durability::{Commit, FileSync},
+    durability::{FileCommit, FileSync},
     error::Error,
     IoBuf, IoBufMut, Read, Write,
 };
@@ -105,7 +105,7 @@ impl FileSync for MonoioFile {
     }
 }
 
-impl Commit for MonoioFile {
+impl FileCommit for MonoioFile {
     async fn commit(&mut self) -> Result<(), Error> {
         Err(Error::Unsupported {
             message: "commit not applicable for local files".to_string(),

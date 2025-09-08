@@ -13,7 +13,7 @@ use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio::{fs::File, io::AsyncWriteExt, task::block_in_place};
 
 use crate::{
-    durability::{Commit, FileSync},
+    durability::{FileCommit, FileSync},
     error::Error,
     IoBuf, IoBufMut, Read, Write,
 };
@@ -104,7 +104,7 @@ impl FileSync for TokioFile {
     }
 }
 
-impl Commit for TokioFile {
+impl FileCommit for TokioFile {
     async fn commit(&mut self) -> Result<(), Error> {
         Err(Error::Unsupported {
             message: "commit not applicable for local files".to_string(),

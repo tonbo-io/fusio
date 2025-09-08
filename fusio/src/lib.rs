@@ -56,7 +56,7 @@ pub mod fs;
 pub mod impls;
 pub mod path;
 
-pub use durability::{Commit, DirSync, FileSync, SupportsDurability};
+pub use durability::{DirSync, FileCommit, FileSync, SupportsDurability};
 #[cfg(all(feature = "dyn", feature = "fs"))]
 pub use dynamic::fs::DynFs;
 pub use fusio_core::{
@@ -71,7 +71,7 @@ pub use impls::*;
 mod tests {
     use fusio_core::{error::Error, IoBuf, IoBufMut};
 
-    use super::{Read, Write};
+    use super::{DynFs, Read, Write};
 
     #[allow(unused)]
     struct CountWrite<W> {
@@ -199,7 +199,7 @@ mod tests {
         let work_dir_path = tmp_dir.path().join("work");
         let work_file_path = work_dir_path.join("test.file");
 
-        fs.create_dir_all(
+        S::create_dir_all(
             &Path::from_absolute_path(&work_dir_path).map_err(|err| Error::Path(Box::new(err)))?,
         )
         .await?;
@@ -277,12 +277,10 @@ mod tests {
         let src_file_path = work_dir_path.join("src_test.file");
         let dst_file_path = work_dir_path.join("dst_test.file");
 
-        src_fs
-            .create_dir_all(
-                &Path::from_absolute_path(&work_dir_path)
-                    .map_err(|err| Error::Path(Box::new(err)))?,
-            )
-            .await?;
+        F::create_dir_all(
+            &Path::from_absolute_path(&work_dir_path).map_err(|err| Error::Path(Box::new(err)))?,
+        )
+        .await?;
 
         // create files
         let _ = src_fs

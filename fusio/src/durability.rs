@@ -2,7 +2,7 @@ use core::future::Future;
 
 use fusio_core::{Capability, DurabilityLevel, DurabilityOp, MaybeSend};
 
-use crate::error::Error;
+use crate::{error::Error, path::Path, Write};
 
 /// File-handle durability operations.
 pub trait FileSync: MaybeSend {
@@ -17,16 +17,13 @@ pub trait FileSync: MaybeSend {
 }
 
 /// Backends that require an explicit finalize step for visibility (e.g., S3 MPU complete).
-pub trait Commit: MaybeSend {
+pub trait FileCommit: MaybeSend {
     fn commit(&mut self) -> impl Future<Output = Result<(), Error>> + MaybeSend;
 }
 
 /// Filesystem-level parent directory sync operations.
 pub trait DirSync: MaybeSend {
-    fn sync_parent(
-        &self,
-        path: &crate::path::Path,
-    ) -> impl Future<Output = Result<(), Error>> + MaybeSend;
+    fn sync_parent(&self, path: &Path) -> impl Future<Output = Result<(), Error>> + MaybeSend;
 }
 
 /// Capability query used by higher layers to feature-detect.
@@ -40,16 +37,34 @@ pub trait SupportsDurability {
 }
 
 /// Policy helper: convert a DurabilityLevel into concrete operations.
-pub async fn apply_on_close<W: FileSync>(
+pub async fn apply_on_close<W: FileSync + Write>(
     writer: &mut W,
     level: Option<DurabilityLevel>,
 ) -> Result<(), Error> {
     match level {
         None | Some(DurabilityLevel::None) => Ok(()),
-        Some(DurabilityLevel::Flush) => writer.sync_data().await, // ensure content
+        // Flush means drain in-process buffers; not a durable sync.
+        Some(DurabilityLevel::Flush) => writer.flush().await,
         Some(DurabilityLevel::Data) => writer.sync_data().await,
         Some(DurabilityLevel::All) => writer.sync_all().await,
-        Some(DurabilityLevel::Commit) => writer.sync_all().await, // commit is file-store specific
+        // Commit is backend-specific; default to sync_all. Prefer using
+        // `apply_on_close_with_commit` when `Commit` is available.
+        Some(DurabilityLevel::Commit) => writer.sync_all().await,
+    }
+}
+
+/// Like `apply_on_close` but when `Commit` is available, it will be used for
+/// `DurabilityLevel::Commit`.
+pub async fn apply_on_close_with_commit<W: FileSync + Write + FileCommit>(
+    writer: &mut W,
+    level: Option<DurabilityLevel>,
+) -> Result<(), Error> {
+    match level {
+        None | Some(DurabilityLevel::None) => Ok(()),
+        Some(DurabilityLevel::Flush) => writer.flush().await,
+        Some(DurabilityLevel::Data) => writer.sync_data().await,
+        Some(DurabilityLevel::All) => writer.sync_all().await,
+        Some(DurabilityLevel::Commit) => writer.commit().await,
     }
 }
 

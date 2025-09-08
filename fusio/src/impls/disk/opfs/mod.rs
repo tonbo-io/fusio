@@ -15,7 +15,7 @@ use web_sys::{
 };
 
 use crate::{
-    durability::{Commit, FileSync},
+    durability::{FileCommit, FileSync},
     error::{wasm_err, Error},
     fs::OpenOptions,
     IoBuf, IoBufMut, Read, Write,
@@ -156,7 +156,7 @@ impl FileSync for OPFSFile {
     }
 }
 
-impl Commit for OPFSFile {
+impl FileCommit for OPFSFile {
     async fn commit(&mut self) -> Result<(), Error> {
         // Closing the FileSystemWritableFileStream persists changes to storage.
         // Keep the FileSystemFileHandle so reads remain possible after commit.

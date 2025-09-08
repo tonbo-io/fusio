@@ -163,7 +163,7 @@ mod tokio_more_examples {
             // If this branch ever triggers on local, something changed.
             #[allow(unreachable_code)]
             {
-                use fusio::durability::Commit;
+                use fusio::durability::FileCommit;
                 writer.commit().await.unwrap();
             }
         } else {

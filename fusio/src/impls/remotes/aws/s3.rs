@@ -11,7 +11,7 @@ use percent_encoding::utf8_percent_encode;
 
 use super::{fs::AmazonS3, sign::Sign, S3Error, STRICT_PATH_ENCODE_SET};
 use crate::{
-    durability::{Commit, FileSync},
+    durability::{FileCommit, FileSync},
     error::Error,
     path::Path,
     remotes::{
@@ -263,7 +263,7 @@ impl FileSync for S3File {
     }
 }
 
-impl Commit for S3File {
+impl FileCommit for S3File {
     async fn commit(&mut self) -> Result<(), Error> {
         if let Some(mut writer) = self.writer.take() {
             writer.close().await?;
