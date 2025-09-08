@@ -163,7 +163,7 @@ where
         fs: Arc<dyn DynFs>,
     ) -> Result<impl TryStream<Ok = Vec<T>, Error = LogError> + Unpin, LogError> {
         let file = BufReader::new(
-            fs.open_options(&path, OpenOptions::default().create(false))
+            fs.open_options(path, OpenOptions::default().create(false))
                 .await?,
             DEFAULT_BUF_SIZE,
         )

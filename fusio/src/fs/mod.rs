@@ -58,6 +58,12 @@ pub trait Fs: MaybeSend + MaybeSync {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(all(
+        feature = "tokio-http",
+        feature = "tokio",
+        feature = "aws",
+        not(feature = "completion-based")
+    ))]
     use crate::error::Error;
 
     #[ignore]

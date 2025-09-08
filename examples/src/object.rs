@@ -3,9 +3,18 @@ use fusio::{dynamic::DynFile, Error, IoBuf, IoBufMut, Read, Write};
 #[allow(unused)]
 #[cfg(feature = "tokio")]
 async fn use_tokio_file() {
-    use tokio::fs::File;
+    use std::sync::Arc;
 
-    let mut file: Box<dyn DynFile> = Box::new(File::open("foo.txt").await.unwrap());
+    use fusio::{disk::LocalFs, fs::OpenOptions, DynFs};
+
+    let fs: Arc<dyn DynFs> = Arc::new(LocalFs {});
+    let mut file: Box<dyn DynFile> = fs
+        .open_options(
+            &"foo.txt".into(),
+            OpenOptions::default().create(true).truncate(true),
+        )
+        .await
+        .unwrap();
     let write_buf = "hello, world".as_bytes();
     let mut read_buf = [0; 12];
     let (result, _, read_buf) =

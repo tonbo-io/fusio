@@ -24,10 +24,14 @@ async fn use_fs() {
             .build(),
     );
 
-    let _ = write_without_runtime_awareness(
-        &mut s3.open(&"foo.txt".into()).await.unwrap(),
-        "hello, world".as_bytes(),
-        &mut [0; 12][..],
-    )
-    .await;
+    use fusio::fs::OpenOptions;
+    let mut file = s3
+        .open_options(
+            &"foo.txt".into(),
+            OpenOptions::default().create(true).truncate(true),
+        )
+        .await
+        .unwrap();
+    let _ = write_without_runtime_awareness(&mut file, "hello, world".as_bytes(), &mut [0; 12][..])
+        .await;
 }

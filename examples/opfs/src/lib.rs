@@ -1,3 +1,4 @@
+#![cfg(target_arch = "wasm32")]
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, Int64Array, RecordBatch};

@@ -133,8 +133,11 @@ mod tokio_more_examples {
             .child("cap.txt");
         let fs = fusio::disk::TokioFs;
 
-        // TokioFs advertises DirSync capability
+        // TokioFs advertises DirSync capability except on Windows
+        #[cfg(not(target_os = "windows"))]
         assert!(fs.supports(DurabilityOp::DirSync));
+        #[cfg(target_os = "windows")]
+        assert!(!fs.supports(DurabilityOp::DirSync));
 
         let file = fs
             .open_options(

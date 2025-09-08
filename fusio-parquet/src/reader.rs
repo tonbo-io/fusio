@@ -1,7 +1,6 @@
 use std::{cmp, ops::Range, sync::Arc};
 
 use bytes::{Bytes, BytesMut};
-#[allow(unused)]
 use fusio::{dynamic::DynFile, Read};
 use futures::{future::BoxFuture, FutureExt};
 use parquet::{
@@ -11,7 +10,7 @@ use parquet::{
     },
     errors::ParquetError,
     file::{
-        metadata::{ParquetMetaData, ParquetMetaDataReader},
+        metadata::{PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader},
         FOOTER_SIZE,
     },
 };
@@ -61,8 +60,7 @@ impl AsyncReader {
         prefetch_footer_size: usize,
         file: &mut F,
     ) -> Result<ParquetMetaData, ParquetError> {
-        let mut buf = Vec::with_capacity(prefetch_footer_size);
-        buf.resize(prefetch_footer_size, 0);
+        let mut buf = vec![0; prefetch_footer_size];
 
         #[cfg(not(any(feature = "web", feature = "monoio")))]
         let buf = &mut buf[..];
@@ -115,7 +113,8 @@ impl AsyncReader {
         metadata: ParquetMetaData,
         fetch: F,
     ) -> Result<ParquetMetaData, ParquetError> {
-        let mut reader = ParquetMetaDataReader::new_with_metadata(metadata).with_page_indexes(true);
+        let mut reader = ParquetMetaDataReader::new_with_metadata(metadata)
+            .with_page_index_policy(PageIndexPolicy::Required);
         reader.load_page_index(fetch).await?;
         reader.finish()
     }
@@ -125,15 +124,14 @@ impl AsyncReader {
         range: Range<u64>,
     ) -> Result<Bytes, ParquetError> {
         let len = (range.end - range.start) as usize;
-        let mut buf = Vec::with_capacity(len);
-        buf.resize(len, 0);
+        let mut buf = vec![0; len];
 
         #[cfg(not(any(feature = "web", feature = "monoio")))]
         let b = &mut buf[..];
         #[cfg(any(feature = "web", feature = "monoio"))]
         let b = buf;
 
-        let (result, _b) = file.read_exact_at(b, range.start as u64).await;
+        let (result, _b) = file.read_exact_at(b, range.start).await;
         result.map_err(|err| ParquetError::External(Box::new(err)))?;
 
         #[cfg(not(any(feature = "web", feature = "monoio")))]

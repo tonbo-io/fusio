@@ -7,9 +7,16 @@ use opendal::{services::Memory, Operator};
 #[allow(unused)]
 async fn use_opendalfs() {
     let op = Operator::new(Memory::default()).unwrap().finish();
+    use fusio::fs::OpenOptions;
     let fs: Arc<dyn DynFs> = Arc::new(OpendalFs::from(op));
 
-    let mut file: Box<dyn DynFile> = Box::new(fs.open(&"foo.txt".into()).await.unwrap());
+    let mut file: Box<dyn DynFile> = fs
+        .open_options(
+            &"foo.txt".into(),
+            OpenOptions::default().create(true).truncate(true),
+        )
+        .await
+        .unwrap();
 
     let write_buf = "hello, world".as_bytes();
     let mut read_buf = [0; 12];

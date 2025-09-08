@@ -242,12 +242,10 @@ pub async fn copy(
 
 #[cfg(test)]
 mod tests {
-
-    use fusio_core::Write;
-
     #[cfg(all(feature = "tokio", not(feature = "completion-based")))]
     #[tokio::test(flavor = "multi_thread")]
     async fn test_dyn_fs() {
+        use fusio_core::Write;
         use tempfile::tempfile;
 
         use crate::disk::tokio::TokioFile;
@@ -262,6 +260,7 @@ mod tests {
     #[cfg(all(feature = "tokio", not(feature = "completion-based")))]
     #[tokio::test(flavor = "multi_thread")]
     async fn test_dyn_buf_fs() {
+        use fusio_core::Write;
         use tempfile::NamedTempFile;
 
         use crate::{
@@ -269,6 +268,7 @@ mod tests {
             dynamic::DynFile,
             fs::{Fs, OpenOptions},
             impls::buffered::BufWriter,
+            path::Path,
             Read,
         };
 

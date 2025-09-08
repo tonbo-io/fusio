@@ -34,8 +34,8 @@ pub struct AmazonS3Builder {
 }
 
 impl AmazonS3Builder {
-    #[allow(unused_variables)]
     pub fn new(bucket: String) -> Self {
+        #[allow(clippy::needless_late_init)]
         let client: Box<dyn DynHttpClient>;
         cfg_if::cfg_if! {
             if #[cfg(all(feature = "tokio-http", not(feature = "completion-based")))] {
@@ -425,7 +425,7 @@ mod tests {
             }),
             region: region.into(),
             sign_payload: true,
-            checksum: false,
+            checksum: true,
         };
 
         let s3 = AmazonS3 {
