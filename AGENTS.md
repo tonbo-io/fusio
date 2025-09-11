@@ -30,6 +30,9 @@
 - When adding backends or features, test across runtimes: e.g., `--features tokio` and `--features monoio`. For S3-related code, include an `aws` feature test run.
 - Add doc tests where helpful for public APIs.
 - WASM: keep tests headless-browser friendly; gate with feature flags like `opfs`/`web`.
+- For fusio-manifest: we support in-memory and S3 backends only. For local end-to-end S3 tests, use LocalStack or MinIO. Example with LocalStack:
+  - `docker run -p 4566:4566 -e SERVICES=s3 localstack/localstack`
+  - export AWS credentials/region, then run `cargo test -p fusio-manifest --features aws-tokio`.
 
 ## Commit & Pull Request Guidelines
 - Follow Conventional Commits (observed in history): `feat:`, `fix:`, `docs:`, `chore:`, `refactor:` with optional scope, e.g., `feat(parquet): ...` and reference PRs/issues `(#123)`.
@@ -40,3 +43,32 @@
 - Do not commit credentials. For S3 tests/examples, export `AWS_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` locally; avoid checking these into code.
 - Prefer `--no-default-features` when you need a minimal surface and enable only the features you require.
 
+## Tooling: ast-grep (AST-aware search)
+
+We use ast-grep to quickly search Rust sources by tokens or simple AST templates. It’s available in the dev environment as `ast-grep`.
+
+Basic usage
+- Search the whole workspace for a token/pattern (Rust only):
+  - `ast-grep run -l rust -p 'ManifestDb' -r .`
+- JSON output for piping/inspection:
+  - `ast-grep run -l rust -p 'KvDb' -r . --json=stream`
+- Limit to a crate/path:
+  - `ast-grep run -l rust -p 'Manifest' fusio-manifest/`
+- Show surrounding context (like grep’s context):
+  - `ast-grep run -l rust -p 'CheckpointStore' -r . -A 2 -B 2`
+
+Common queries in this repo
+- Find all uses of the new `Manifest` type:
+  - `ast-grep run -l rust -p 'Manifest' -r .`
+- Locate trait impl sites (by token):
+  - `ast-grep run -l rust -p 'impl HeadStore' -r .`
+  - `ast-grep run -l rust -p 'impl SegmentIo' -r .`
+- Track functions quickly:
+  - `ast-grep run -l rust -p 'compact_and_gc' -r .`
+  - `ast-grep run -l rust -p 'compact_once' -r .`
+
+Notes and tips
+- ast-grep patterns are AST-based; for complex Rust syntax (generics, trait bounds), prefer token searches (e.g., `'Manifest<'` or `'impl TraitName'`) for reliability.
+- The CLI does not support `-n` (line numbers) like grep; use `--json=stream` and pipe to tools for custom formatting if needed.
+- Use `--globs` to include or exclude paths; example: `--globs '!target/**'` (ignored by default).
+- If you see “Pattern contains an ERROR node,” simplify the pattern (use token search) or try the playground to refine it: https://ast-grep.github.io/playground.html
