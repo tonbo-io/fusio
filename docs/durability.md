@@ -1,6 +1,6 @@
-# Durability Semantics (Capability-Based)
+# Durability Semantics (Method-First, Family-Specific)
 
-This document defines durability semantics for Fusio across local filesystems, object stores, and OPFS/WASM. It is intentionally capability-based and not log-specific so it applies to logs, atomic config writes, compaction outputs, and other file-like workflows.
+This document defines durability semantics for Fusio across local filesystems, object stores, and OPFS/WASM. It focuses on method-based, family-specific traits (no runtime durability dispatch) so the call sites read cleanly and guarantees are explicit.
 
 ## Semantics
 - Flush: move buffered bytes into OS/runtime buffers; may still be lost on crash.
@@ -14,66 +14,29 @@ Notes
 - Range sync is a best-effort optimization on supported OSes and can degrade to full file sync.
 
 ## API Surface (as implemented)
-These traits and options are additive and do not replace the core Read/Write traits. Shared enums live in `fusio-core`; durability traits live in `fusio`.
+These traits are additive and do not replace the core `Read`/`Write`. Policy enums live in `fusio-core` (`DurabilityLevel`); durability traits live in `fusio`.
 
 ```rust
-// fusio-core (shared types)
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub enum DurabilityOp { Flush, DataSync, Fsync, DirSync, Commit }
-
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum DurabilityLevel { None, Flush, Data, All, Commit }
-
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub enum Capability { Flush, DataSync, Fsync, DirSync, Commit, RangeSync }
 ```
 
-```rust
-// fusio (extension traits)
-use crate::{Error, MaybeSend};
-use core::future::Future;
+Key traits in `fusio::durability`:
 
-// File-handle durability operations
-pub trait FileSync: MaybeSend {
-    fn sync_data(&mut self) -> impl Future<Output = Result<(), Error>> + MaybeSend;
-    fn sync_all(&mut self) -> impl Future<Output = Result<(), Error>> + MaybeSend;
-    /// Optional optimization; may fall back to data sync.
-    fn sync_range(&mut self, _offset: u64, _len: u64)
-        -> impl Future<Output = Result<(), Error>> + MaybeSend;
-}
+- `FileSync` — local filesystem handles: `sync_data()`, `sync_all()`, and optional `sync_range()`.
+- `FileCommit` — object stores: `commit()` to finalize/publish objects (e.g., complete MPU).
+- `DirSync` — filesystem-level parent directory durability: `sync_parent(path)`.
 
-/// Backends that require an explicit finalize step for visibility (e.g., S3 MPU complete).
-pub trait FileCommit: MaybeSend {
-    fn commit(&mut self) -> impl Future<Output = Result<(), Error>> + MaybeSend;
-}
-
-/// Directory sync exposed via filesystem handle when applicable.
-pub trait DirSync: MaybeSend {
-    fn sync_parent(&self, path: &crate::path::Path)
-        -> impl Future<Output = Result<(), Error>> + MaybeSend;
-}
-
-/// Query for durability capabilities on a backend or handle.
-pub trait SupportsDurability {
-    fn supports(&self, op: crate::durability::DurabilityOp) -> bool;
-}
-```
-
-Policy helpers on close:
+Close policy: higher layers may map `DurabilityLevel` to method calls:
 
 ```rust
-// Flush drains in-process buffers; Data/All perform durable syncs.
-// Commit degrades to sync_all by default.
-pub async fn apply_on_close<W: FileSync + Write>(
-    writer: &mut W,
-    level: Option<DurabilityLevel>,
-) -> Result<(), Error> { /* ... */ }
-
-// Prefer real commit for backends that support it.
-pub async fn apply_on_close_with_commit<W: FileSync + Write + FileCommit>(
-    writer: &mut W,
-    level: Option<DurabilityLevel>,
-) -> Result<(), Error> { /* ... */ }
+match level {
+    None | Some(DurabilityLevel::None) => {}
+    Some(DurabilityLevel::Flush) => writer.flush().await?,
+    Some(DurabilityLevel::Data) => writer.sync_data().await?,
+    Some(DurabilityLevel::All) => writer.sync_all().await?,
+    Some(DurabilityLevel::Commit) => writer.commit().await?, // object-store only
+}
 ```
 
 ```rust
@@ -95,17 +58,15 @@ pub struct OpenOptions {
 ```
 
 Helpers
-- apply_on_close(level): Flush → flush, Data/All → sync, Commit → sync_all fallback.
-- apply_on_close_with_commit(level): Commit → commit() when available; otherwise same as apply_on_close.
-- atomic_write_file(path, bytes, level): write temp, `sync_data`, close, rename, `dirsync` (planned).
-- atomic_replace(paths[], level): write all temps, sync each, rename all, final `dirsync` (planned).
-- DurabilityGuard: RAII helper to `sync_data` every N ms/bytes (planned).
+- atomic_write_file(path, bytes): write temp, `sync_data`, close, rename, `dirsync`.
+- atomic_replace(paths[]): write all temps, sync each, rename all, final `dirsync`.
+- DurabilityGuard: RAII helper to call `sync_data` every N ms/bytes.
 
 ## Backend Mapping
 - POSIX/local
   - Flush: `Write::flush` on buffers.
-  - DataSync: `fdatasync` (or `F_FULLFSYNC` on macOS when requested).
-  - Fsync: `fsync`.
+  - DataSync: `sync_data` (fdatasync-like; or `F_FULLFSYNC` on macOS when requested).
+  - Fsync: `sync_all` (fsync-like).
   - DirSync: `fsync(dirfd)` on the parent directory.
   - Commit: Unsupported (no publish step).
 - macOS
@@ -121,18 +82,10 @@ Helpers
   - Flush/DataSync: `SyncAccessHandle.flush()`/`close()` where available; durability caveats documented by browser.
   - DirSync/Commit: N/A.
 
-Capability table (indicative)
-
-| Backend         | Flush | DataSync | Fsync | DirSync | RangeSync | Commit |
-|-----------------|:-----:|:--------:|:-----:|:-------:|:---------:|:------:|
-| POSIX (Linux)   |  yes  |   yes    |  yes  |   yes   |  maybe    |  N/A   |
-| macOS           |  yes  |  yes*    |  yes  |   yes   |  maybe    |  N/A   |
-| Windows         |  yes  |   yes    |  yes  |   no    |   no      |  N/A   |
-| S3/Obj store    |  yes  |   yes    |  N/A  |   N/A   |   N/A     |  yes   |
-| OPFS/WASM       |  yes  |  yes†    |  N/A  |   N/A   |   N/A     |  N/A   |
-
-- macOS yes*: optionally `F_FULLFSYNC` when requested.
-- OPFS yes†: subject to browser implementation; treat as best-effort.
+- Backend notes
+- Local FS (POSIX/Windows): `sync_data`/`sync_all`; on Windows both map to `FlushFileBuffers`. Parent `sync_parent` for create/rename on POSIX.
+- Object Store: `commit()` finalizes visibility (e.g., S3 MPU complete). No rename/dirsync.
+- OPFS/WASM: treat as best-effort; `flush` only.
 
 ## Usage Patterns
 - Append-only log
@@ -144,31 +97,17 @@ Capability table (indicative)
 - Object-store upload
   - Upload parts; periodic `sync` as MPU part completes (best-effort); `commit` at the end; treat re-listing as visibility confirmation.
 
-Commit fallback example
-
+Commit usage
 ```rust
-use fusio::{durability::FileCommit, DurabilityOp, SupportsDurability};
-
-if writer.supports(DurabilityOp::Commit) {
-    writer.commit().await?;
-} else {
-    writer.sync_all().await?;
-}
+use fusio::durability::FileCommit;
+// `writer` must implement `FileCommit`
+writer.commit().await?;
 ```
 
-Or use the helper that prefers commit:
+## Dynamic Notes
 
-```rust
-use fusio::durability::apply_on_close_with_commit;
-apply_on_close_with_commit(&mut writer, Some(DurabilityLevel::Commit)).await?;
-```
-
-## Dynamic Dispatch
-
-- All dynamic files (`Box<dyn DynFile>`) support `commit()` via `DynFileCommit`.
-  - On backends where commit has no meaning (local files), it returns `Error::Unsupported`.
-- `BufWriter<Box<dyn DynFile>>` implements `FileSync` by delegating to concrete backends under the hood.
-- `DirSync` is exposed on filesystem handles (e.g., `TokioFs`, `MonoioFs`, `TokioUringFs`), not file handles.
+- For `Box<dyn DynFile>`, durable barriers require knowing the family at construction time, or an
+  adapter that maps to the correct methods internally. Prefer using concrete types for durability.
 
 ## Error and Degradation Policy
 - If a requested level or op is unsupported, return `Error::Unsupported` from the specific op and document the nearest guarantee that can be achieved.
@@ -178,7 +117,7 @@ apply_on_close_with_commit(&mut writer, Some(DurabilityLevel::Commit)).await?;
 1. Add types and traits behind a `durability` feature; implement for local disk backends first (Tokio/Tokio-uring/Monoio).
 2. Implement directory sync for create/rename paths in local backends; add `sync_on_close` semantics.
 3. Map S3 MPU to `CommitOp` with documented DataSync/Commit split; OPFS: best-effort flush/close.
-4. Wire options into fusio-log; add tests for crash safety (truncate-on-recover, early CRC, fsync-on-create/roll).
+4. Integrate into higher layers (e.g., manifest) with tests for crash safety (truncate-on-recover, early CRC, fsync-on-create/roll).
 5. Expose helpers (`atomic_write_file`, `atomic_replace`) and DurabilityGuard; add metrics and tracing.
 
 ---

@@ -3,7 +3,7 @@ use std::cmp;
 use fusio_core::Write;
 
 use crate::{
-    durability::{FileCommit, FileSync, SupportsDurability},
+    durability::{FileCommit, FileSync},
     error::Error,
     IoBuf, IoBufMut, Read,
 };
@@ -191,107 +191,10 @@ impl<F: Write + FileCommit> FileCommit for BufWriter<F> {
     }
 }
 
-impl FileSync for BufWriter<Box<dyn crate::dynamic::fs::DynFile>> {
-    async fn sync_data(&mut self) -> Result<(), Error> {
-        self.flush().await?;
-        // Attempt downcast to known concrete file types and delegate.
-        let any = (&mut *self.inner) as &mut dyn core::any::Any;
-        #[cfg(feature = "tokio")]
-        if let Some(f) = any.downcast_mut::<crate::impls::disk::tokio::TokioFile>() {
-            return f.sync_data().await;
-        }
-        #[cfg(all(feature = "tokio-uring", target_os = "linux"))]
-        if let Some(f) = any.downcast_mut::<crate::impls::disk::tokio_uring::TokioUringFile>() {
-            return f.sync_data().await;
-        }
-        #[cfg(all(feature = "opfs", target_arch = "wasm32", feature = "sync"))]
-        if let Some(f) = any.downcast_mut::<crate::impls::disk::OPFSSyncFile>() {
-            return f.sync_data().await;
-        }
-        #[cfg(feature = "monoio")]
-        if let Some(f) = any.downcast_mut::<crate::impls::disk::monoio::MonoioFile>() {
-            return f.sync_data().await;
-        }
-        #[cfg(feature = "aws")]
-        if let Some(f) = any.downcast_mut::<crate::impls::remotes::aws::s3::S3File>() {
-            return f.sync_data().await;
-        }
-        Err(Error::Unsupported {
-            message: "Durable sync not supported for this backend".to_string(),
-        })
-    }
-
-    async fn sync_all(&mut self) -> Result<(), Error> {
-        self.flush().await?;
-        let any = (&mut *self.inner) as &mut dyn core::any::Any;
-        #[cfg(feature = "tokio")]
-        if let Some(f) = any.downcast_mut::<crate::impls::disk::tokio::TokioFile>() {
-            return f.sync_all().await;
-        }
-        #[cfg(all(feature = "tokio-uring", target_os = "linux"))]
-        if let Some(f) = any.downcast_mut::<crate::impls::disk::tokio_uring::TokioUringFile>() {
-            return f.sync_all().await;
-        }
-        #[cfg(all(feature = "opfs", target_arch = "wasm32", feature = "sync"))]
-        if let Some(f) = any.downcast_mut::<crate::impls::disk::OPFSSyncFile>() {
-            return f.sync_all().await;
-        }
-        #[cfg(feature = "monoio")]
-        if let Some(f) = any.downcast_mut::<crate::impls::disk::monoio::MonoioFile>() {
-            return f.sync_all().await;
-        }
-        #[cfg(feature = "aws")]
-        if let Some(f) = any.downcast_mut::<crate::impls::remotes::aws::s3::S3File>() {
-            return f.sync_all().await;
-        }
-        Err(Error::Unsupported {
-            message: "Durable sync not supported for this backend".to_string(),
-        })
-    }
-
-    async fn sync_range(&mut self, offset: u64, len: u64) -> Result<(), Error> {
-        self.flush().await?;
-        let any = (&mut *self.inner) as &mut dyn core::any::Any;
-        #[cfg(feature = "tokio")]
-        if let Some(f) = any.downcast_mut::<crate::impls::disk::tokio::TokioFile>() {
-            return f.sync_range(offset, len).await;
-        }
-        #[cfg(all(feature = "tokio-uring", target_os = "linux"))]
-        if let Some(f) = any.downcast_mut::<crate::impls::disk::tokio_uring::TokioUringFile>() {
-            return f.sync_range(offset, len).await;
-        }
-        #[cfg(all(feature = "opfs", target_arch = "wasm32", feature = "sync"))]
-        if let Some(f) = any.downcast_mut::<crate::impls::disk::OPFSSyncFile>() {
-            return f.sync_range(offset, len).await;
-        }
-        #[cfg(feature = "monoio")]
-        if let Some(f) = any.downcast_mut::<crate::impls::disk::monoio::MonoioFile>() {
-            return f.sync_range(offset, len).await;
-        }
-        #[cfg(feature = "aws")]
-        if let Some(f) = any.downcast_mut::<crate::impls::remotes::aws::s3::S3File>() {
-            return f.sync_range(offset, len).await;
-        }
-        Err(Error::Unsupported {
-            message: "Durable sync not supported for this backend".to_string(),
-        })
-    }
-}
+// (No runtime durability dispatch for dynamic files.)
 // Specialized dynamic BufWriter no longer needed; covered by generic impl above
 
 // Advertise durability support by delegating to the inner handle when possible.
-impl<F> SupportsDurability for BufWriter<F>
-where
-    F: SupportsDurability,
-{
-    fn supports(&self, op: fusio_core::DurabilityOp) -> bool {
-        self.inner.supports(op)
-    }
-
-    fn capabilities(&self) -> &'static [fusio_core::Capability] {
-        self.inner.capabilities()
-    }
-}
 
 #[cfg(feature = "tokio")]
 #[cfg(test)]
