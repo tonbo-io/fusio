@@ -56,12 +56,12 @@ pub mod fs;
 pub mod impls;
 pub mod path;
 
-pub use durability::{DirSync, FileCommit, FileSync, SupportsDurability};
+pub use durability::{DirSync, FileCommit, FileSync};
 #[cfg(all(feature = "dyn", feature = "fs"))]
 pub use dynamic::fs::DynFs;
 pub use fusio_core::{
     error::{BoxedError, Error},
-    Capability, DurabilityLevel, DurabilityOp, IoBuf, IoBufMut, MaybeSend, MaybeSync, Read, Write,
+    DurabilityLevel, IoBuf, IoBufMut, MaybeSend, MaybeSync, Read, Write,
 };
 #[cfg(feature = "dyn")]
 pub use fusio_core::{DynRead, DynWrite};
@@ -71,7 +71,7 @@ pub use impls::*;
 mod tests {
     use fusio_core::{error::Error, IoBuf, IoBufMut};
 
-    use super::{DynFs, Read, Write};
+    use super::{Read, Write};
 
     #[allow(unused)]
     struct CountWrite<W> {

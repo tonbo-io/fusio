@@ -55,12 +55,6 @@ jobs:
           command: build
           args: --package fusio --features=tokio-uring
 
-      - name: Run cargo build on fusio-dispatch
-        uses: actions-rs/cargo@v1
-        with:
-          command: build
-          args: --package fusio-dispatch --features=aws,tokio
-
       - name: Run cargo build on fusio-object-store
         uses: actions-rs/cargo@v1
         with:
@@ -85,19 +79,6 @@ jobs:
         with:
           command: build
           args: --package fusio-parquet --features=monoio
-
-      - name: Run cargo build on fusio-log tokio
-        uses: actions-rs/cargo@v1
-        with:
-          command: build
-          args: --package fusio-log
-
-      - name: Run cargo build on fusio-log monoio
-        if: runner.os != 'Windows'
-        uses: actions-rs/cargo@v1
-        with:
-          command: build
-          args: --package fusio-log --no-default-features --features=aws,bytes,monoio,monoio-http
 
       - name: Configure aws credentials
         if: ${{ (github.event_name == 'push' && github.ref_name == 'main') || startsWith(github.ref, 'refs/tags/') }}
@@ -142,19 +123,6 @@ jobs:
         with:
           command: test
           args: --package fusio-parquet --features=monoio
-
-      - name: Run cargo test on fusio-log tokio
-        uses: actions-rs/cargo@v1
-        with:
-          command: test
-          args: --package fusio-log --features=tokio
-
-      - name: Run cargo test on fusio-log monoio
-        if: runner.os != 'Windows'
-        uses: actions-rs/cargo@v1
-        with:
-          command: test
-          args: --package fusio-log --no-default-features --features=aws,bytes,monoio,monoio-http
 
   # 2
   fmt:
@@ -207,12 +175,6 @@ jobs:
         with:
           command: build
           args: --target wasm32-unknown-unknown --package fusio-parquet --features=web
-
-      - name: Run cargo build on fusio-dispatch
-        uses: actions-rs/cargo@v1
-        with:
-          command: build
-          args: --target wasm32-unknown-unknown --package fusio-dispatch --features=opfs,aws
 
       - name: Install Chrome Environment
         run: |

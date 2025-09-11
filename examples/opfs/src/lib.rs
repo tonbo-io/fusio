@@ -3,7 +3,6 @@ use std::sync::Arc;
 
 use arrow::array::{ArrayRef, Int64Array, RecordBatch};
 use fusio::{fs::OpenOptions, path::Path, Read, Write};
-use fusio_dispatch::FsOptions;
 use fusio_parquet::{reader::AsyncReader, writer::AsyncWriter};
 use futures::StreamExt;
 use parquet::arrow::{AsyncArrowWriter, ParquetRecordBatchStreamBuilder};
@@ -11,8 +10,7 @@ use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
 pub async fn write_to_opfs() {
-    let fs_options = FsOptions::Local;
-    let fs = fs_options.parse().unwrap();
+    let fs = fusio::disk::opfs::fs::OPFS;
     let mut file = fs
         .open_options(
             &Path::from_opfs_path("foo").unwrap(),
@@ -32,8 +30,7 @@ pub async fn write_to_opfs() {
 
 #[wasm_bindgen]
 pub async fn read_from_opfs() {
-    let fs_options = FsOptions::Local;
-    let fs = fs_options.parse().unwrap();
+    let fs = fusio::disk::opfs::fs::OPFS;
     let mut file = fs
         .open(&Path::from_opfs_path("foo").unwrap())
         .await
@@ -47,8 +44,7 @@ pub async fn read_from_opfs() {
 
 #[wasm_bindgen]
 pub async fn async_writer() {
-    let fs_options = FsOptions::Local;
-    let fs = fs_options.parse().unwrap();
+    let fs = fusio::disk::opfs::fs::OPFS;
     let file = fs
         .open_options(
             &Path::from_opfs_path("bar").unwrap(),
@@ -56,7 +52,7 @@ pub async fn async_writer() {
         )
         .await
         .unwrap();
-    let writer = AsyncWriter::new(file);
+    let writer = AsyncWriter::new(Box::new(file));
     let col = Arc::new(Int64Array::from_iter_values([1, 2, 3])) as ArrayRef;
     let to_write = RecordBatch::try_from_iter([("col", col)]).unwrap();
     let mut writer = AsyncArrowWriter::try_new(writer, to_write.schema(), None).unwrap();
@@ -67,15 +63,14 @@ pub async fn async_writer() {
 
 #[wasm_bindgen]
 pub async fn async_reader() {
-    let fs_options = FsOptions::Local;
-    let fs = fs_options.parse().unwrap();
+    let fs = fusio::disk::opfs::fs::OPFS;
     let file = fs
         .open(&Path::from_opfs_path("bar").unwrap())
         .await
         .unwrap();
 
     let size = file.size().await.unwrap();
-    let reader = AsyncReader::new(file, size).await.unwrap();
+    let reader = AsyncReader::new(Box::new(file), size).await.unwrap();
     let mut stream = ParquetRecordBatchStreamBuilder::new(reader)
         .await
         .unwrap()
@@ -92,8 +87,7 @@ pub async fn async_reader() {
 
 #[wasm_bindgen]
 pub async fn remove_all_dir() {
-    let fs_options = FsOptions::Local;
-    let fs = fs_options.parse().unwrap();
+    let fs = fusio::disk::opfs::fs::OPFS;
     fs.remove(&Path::from_opfs_path("foo").unwrap())
         .await
         .unwrap();

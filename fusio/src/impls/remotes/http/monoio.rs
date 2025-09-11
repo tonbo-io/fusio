@@ -86,6 +86,7 @@ impl HttpClient for MonoioClient {
 
 #[cfg(test)]
 mod tests {
+    use http_body_util::BodyExt;
 
     #[monoio::test(enable_timer = true)]
     async fn test_monoio_client() {
@@ -101,5 +102,14 @@ mod tests {
         let client = MonoioClient {};
         let response = client.send_request(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
+        let a = response
+            .body()
+            .clone()
+            .collect()
+            .await
+            .unwrap()
+            .to_bytes()
+            .to_vec();
+        println!("{}", String::from_utf8_lossy(&a));
     }
 }

@@ -18,7 +18,6 @@ wasm-bindgen = "0.2.95"
 wasm-bindgen-futures = { version = "0.4.45" }
 web-sys = { version = "0.3", features = ["console"] }
 fusio = { path = "../../fusio", features = ["opfs"] }
-fusio-dispatch = { path = "../../fusio-dispatch", features = ["opfs"] }
 fusio-parquet = { path = "../../fusio-parquet", features = ["web"] }
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]

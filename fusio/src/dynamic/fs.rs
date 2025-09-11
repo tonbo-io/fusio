@@ -5,7 +5,7 @@ use fusio_core::{DynWrite, Write};
 
 use super::{MaybeSendFuture, MaybeSendStream};
 use crate::{
-    durability::{FileCommit, FileSync},
+    durability::FileCommit,
     error::Error,
     fs::{FileMeta, FileSystemTag, Fs, OpenOptions},
     path::Path,
@@ -53,37 +53,6 @@ impl<'write> Write for Box<dyn DynFile + 'write> {
 impl FileCommit for Box<dyn DynFile + '_> {
     async fn commit(&mut self) -> Result<(), Error> {
         DynFileCommit::commit(self.as_mut()).await
-    }
-}
-
-pub unsafe trait DynFileSync: MaybeSend {
-    fn sync_data(&mut self) -> Pin<Box<dyn MaybeSendFuture<Output = Result<(), Error>> + '_>>;
-    fn sync_all(&mut self) -> Pin<Box<dyn MaybeSendFuture<Output = Result<(), Error>> + '_>>;
-    fn sync_range(
-        &mut self,
-        offset: u64,
-        len: u64,
-    ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<(), Error>> + '_>>;
-}
-
-unsafe impl<T> DynFileSync for T
-where
-    T: FileSync,
-{
-    fn sync_data(&mut self) -> Pin<Box<dyn MaybeSendFuture<Output = Result<(), Error>> + '_>> {
-        Box::pin(async move { FileSync::sync_data(self).await })
-    }
-
-    fn sync_all(&mut self) -> Pin<Box<dyn MaybeSendFuture<Output = Result<(), Error>> + '_>> {
-        Box::pin(async move { FileSync::sync_all(self).await })
-    }
-
-    fn sync_range(
-        &mut self,
-        offset: u64,
-        len: u64,
-    ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<(), Error>> + '_>> {
-        Box::pin(async move { FileSync::sync_range(self, offset, len).await })
     }
 }
 
@@ -302,7 +271,7 @@ mod tests {
         let temp_file = NamedTempFile::new().unwrap();
         let path = temp_file.into_temp_path();
         // Use filesystem-aware conversion to handle Windows paths correctly.
-        let fusio_path = crate::path::Path::from_filesystem_path(&path).unwrap();
+        let fusio_path = Path::from_filesystem_path(&path).unwrap();
         let mut dyn_file = Box::new(BufWriter::new(
             fs.open_options(&fusio_path, open_options).await.unwrap(),
             5,

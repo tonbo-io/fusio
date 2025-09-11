@@ -2,6 +2,7 @@ pub mod credential;
 mod error;
 #[cfg(feature = "fs")]
 pub mod fs;
+pub mod head;
 pub(crate) mod multipart_upload;
 pub(crate) mod options;
 pub(crate) mod s3;

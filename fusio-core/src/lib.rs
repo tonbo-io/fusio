@@ -15,7 +15,7 @@ mod maybe;
 use core::future::Future;
 
 pub use buf::{IoBuf, IoBufMut};
-pub use durability::{Capability, DurabilityLevel, DurabilityOp};
+pub use durability::DurabilityLevel;
 #[cfg(feature = "alloc")]
 #[cfg_attr(docsrs, doc(cfg(feature = "alloc")))]
 pub use dynamic::{DynRead, DynWrite};
