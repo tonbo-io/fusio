@@ -51,6 +51,8 @@ pub mod durability;
 #[cfg(feature = "dyn")]
 pub mod dynamic;
 pub mod error;
+#[cfg(feature = "executor")]
+pub mod executor;
 #[cfg(feature = "fs")]
 pub mod fs;
 pub mod impls;
