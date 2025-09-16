@@ -72,3 +72,6 @@ Notes and tips
 - The CLI does not support `-n` (line numbers) like grep; use `--json=stream` and pipe to tools for custom formatting if needed.
 - Use `--globs` to include or exclude paths; example: `--globs '!target/**'` (ignored by default).
 - If you see “Pattern contains an ERROR node,” simplify the pattern (use token search) or try the playground to refine it: https://ast-grep.github.io/playground.html
+
+# IMPORTAT
+We could break any backward compatibility, just make implementation as neat as possibe.

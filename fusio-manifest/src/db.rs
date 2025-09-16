@@ -6,10 +6,12 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use crate::{
     checkpoint::{CheckpointId, CheckpointMeta, CheckpointStore},
     head::{HeadJson, HeadStore, HeadTag, PutCondition},
-    lease::{LeaseHandle, LeaseStore},
+    lease::LeaseStore,
     options::Options,
     segment::SegmentIo,
-    types::{Commit, Error, Lsn, Result},
+    session::Session,
+    snapshot::{ScanRange, Snapshot},
+    types::{Error, Lsn, Result},
 };
 
 fn now_ms() -> u64 {
@@ -21,14 +23,14 @@ fn now_ms() -> u64 {
 
 /// Operation on a key (crate-internal).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-enum Op {
+pub(crate) enum Op {
     Put,
     Del,
 }
 
 /// A single KV record framed into a segment (crate-internal).
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct Record<K, V> {
+pub(crate) struct Record<K, V> {
     pub lsn: u64,
     pub key: K,
     pub op: Op,
@@ -37,75 +39,18 @@ struct Record<K, V> {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct Segment<K, V> {
-    version: u32,
-    records: Vec<Record<K, V>>,
-}
-
-/// Default codec is serde JSON via generic types.
-pub trait KeyCodec<K>: Clone + 'static {
-    fn encode_key(&self, k: &K) -> K;
-    fn decode_key(&self, k: K) -> K;
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct DefaultKeyCodec;
-
-impl<K: Clone> KeyCodec<K> for DefaultKeyCodec {
-    fn encode_key(&self, k: &K) -> K {
-        // Identity codec for JSON-encodable keys
-        k.clone()
-    }
-    fn decode_key(&self, k: K) -> K {
-        k
-    }
-}
-
-pub trait ValueCodec<V>: Clone + 'static {
-    fn encode_value(&self, v: &V) -> V;
-    fn decode_value(&self, v: V) -> V;
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct DefaultValueCodec;
-
-impl<V: Clone> ValueCodec<V> for DefaultValueCodec {
-    fn encode_value(&self, v: &V) -> V {
-        v.clone()
-    }
-    fn decode_value(&self, v: V) -> V {
-        v
-    }
-}
-
-/// A stable snapshot for serializable reads.
-#[derive(Debug, Clone)]
-pub struct Snapshot {
-    pub head_tag: Option<HeadTag>,
-    pub lsn: Lsn,
-    pub last_segment_seq: Option<u64>,
-    /// If a checkpoint is published, last seq included in it.
-    pub checkpoint_seq: Option<u64>,
-    /// The checkpoint id published in HEAD, if any.
-    pub checkpoint_id: Option<CheckpointId>,
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct ReadOptions<K> {
-    pub as_of: Option<Snapshot>,
-    pub start: Option<K>,
-    pub end: Option<K>,
+pub(crate) struct Segment<K, V> {
+    pub(crate) version: u32,
+    pub(crate) records: Vec<Record<K, V>>,
 }
 
 /// KV database facade over HeadStore + SegmentIo + CheckpointStore.
-pub struct Manifest<K, V, HS, SS, CS, LS, KC = DefaultKeyCodec, VC = DefaultValueCodec>
+pub struct Manifest<K, V, HS, SS, CS, LS>
 where
     HS: HeadStore + Clone,
     SS: SegmentIo + Clone,
     CS: CheckpointStore + Clone,
     LS: LeaseStore + Clone,
-    KC: KeyCodec<K> + Clone,
-    VC: ValueCodec<V> + Clone,
 {
     _phantom: PhantomData<(K, V)>,
     head: HS,
@@ -113,12 +58,9 @@ where
     ckpt: CS,
     leases: LS,
     opts: Options,
-    kcodec: KC,
-    vcodec: VC,
 }
 
-impl<K: Clone, V: Clone, HS, SS, CS, LS>
-    Manifest<K, V, HS, SS, CS, LS, DefaultKeyCodec, DefaultValueCodec>
+impl<K, V, HS, SS, CS, LS> Manifest<K, V, HS, SS, CS, LS>
 where
     HS: HeadStore + Clone,
     SS: SegmentIo + Clone,
@@ -133,8 +75,6 @@ where
             ckpt,
             leases,
             opts: Options::default(),
-            kcodec: DefaultKeyCodec,
-            vcodec: DefaultValueCodec,
         }
     }
 
@@ -146,89 +86,216 @@ where
             ckpt,
             leases,
             opts,
-            kcodec: DefaultKeyCodec,
-            vcodec: DefaultValueCodec,
+        }
+    }
+}
+
+impl<K, V, HS, SS, CS, LS> Manifest<K, V, HS, SS, CS, LS>
+where
+    K: Ord + Serialize + DeserializeOwned,
+    V: Serialize + DeserializeOwned,
+    HS: HeadStore + Clone,
+    SS: SegmentIo + Clone,
+    CS: CheckpointStore + Clone,
+    LS: LeaseStore + Clone,
+{
+    /// Attempt to adopt durable-but-unpublished segments by scanning for a
+    /// contiguous run immediately after the current HEAD and CAS-advancing HEAD.
+    ///
+    /// Returns the number of segments adopted. If a concurrent actor advances
+    /// HEAD first, this becomes a no-op (returns 0).
+    ///
+    /// TODO:
+    /// - Add bounded backoff when CAS fails repeatedly; surface metrics.
+    /// - Consider verifying segment continuity more strictly (e.g., ensure LSNs are strictly
+    ///   increasing without gaps and optionally validate a checksum header).
+    /// - Add a hard cap on segments scanned per recovery pass; loop with yield if needed.
+    /// - Real-S3 black-box test to simulate orphan segments and verify adoption.
+    pub async fn recover_orphans(&self) -> Result<usize> {
+        // Load current head once and derive CAS condition.
+        let loaded = self.head.load().await?;
+        let (cur, cond) = match loaded.clone() {
+            None => (
+                HeadJson {
+                    version: 1,
+                    snapshot: None,
+                    last_segment_seq: None,
+                    last_lsn: 0,
+                },
+                PutCondition::IfNotExists,
+            ),
+            Some((h, tag)) => (h, PutCondition::IfMatch(tag)),
+        };
+
+        // Determine starting sequence to probe.
+        let mut expected: u64 = cur.last_segment_seq.unwrap_or(0).saturating_add(1);
+        if expected == 0 {
+            expected = 1;
+        }
+
+        let mut adopted = 0usize;
+        let mut max_seq = cur.last_segment_seq.unwrap_or(0);
+        let mut last_lsn = cur.last_lsn;
+
+        'outer: loop {
+            // List a window starting at the expected next sequence.
+            let ids = self.seg.list_from(expected, 256).await?;
+            if ids.is_empty() {
+                break;
+            }
+            let mut progressed = false;
+            for id in ids.into_iter() {
+                if id.seq < expected {
+                    continue;
+                }
+                if id.seq > expected {
+                    // Found a gap; stop adopting.
+                    break 'outer;
+                }
+                let bytes = self.seg.get(&id).await?;
+                // Ensure the segment decodes and its last LSN moves forward.
+                // TODO: consider reading a small header/summary instead of full decode
+                // once segments carry compact headers.
+                let seg: Segment<K, V> = serde_json::from_slice(&bytes)
+                    .map_err(|e| Error::Corrupt(format!("kv segment decode: {e}")))?;
+                match seg.records.last() {
+                    Some(r) if r.lsn > last_lsn => {
+                        last_lsn = r.lsn;
+                        max_seq = id.seq;
+                        expected = expected.saturating_add(1);
+                        adopted += 1;
+                        progressed = true;
+                    }
+                    _ => {
+                        // Empty or non-monotonic — do not adopt further.
+                        break 'outer;
+                    }
+                }
+            }
+            if !progressed {
+                break;
+            }
+        }
+
+        if adopted == 0 {
+            return Ok(0);
+        }
+
+        // Publish updated HEAD via CAS. If CAS fails, treat as benign race.
+        let new_head = HeadJson {
+            version: cur.version.max(1),
+            snapshot: cur.snapshot.clone(),
+            last_segment_seq: Some(max_seq),
+            last_lsn,
+        };
+        match self.head.put(&new_head, cond).await {
+            Ok(_t) => Ok(adopted),
+            Err(Error::PreconditionFailed) => Ok(0),
+            Err(e) => Err(e),
         }
     }
 }
 
 /// Convenience constructors and alias for an in-memory Manifest using Mem backends.
-#[cfg(feature = "mem")]
-impl<K: Clone, V: Clone>
-    Manifest<
-        K,
-        V,
-        crate::head::MemHeadStore,
-        crate::segment::MemSegmentStore,
-        crate::checkpoint::MemCheckpointStore,
-        crate::lease::MemLeaseStore,
-        DefaultKeyCodec,
-        DefaultValueCodec,
-    >
-{
-    /// Construct an in-memory Manifest with default Options and Mem backends.
-    pub fn new_mem() -> Self {
-        Self::new(
-            crate::head::MemHeadStore::new(),
-            crate::segment::MemSegmentStore::new(),
-            crate::checkpoint::MemCheckpointStore::new(),
-            crate::lease::MemLeaseStore::new(),
-        )
-    }
+// The in-memory constructors and alias moved to `impls::mem` (test-only).
 
-    /// Construct an in-memory Manifest with custom Options.
-    pub fn new_mem_with_opts(opts: Options) -> Self {
-        Self::new_with_opts(
-            crate::head::MemHeadStore::new(),
-            crate::segment::MemSegmentStore::new(),
-            crate::checkpoint::MemCheckpointStore::new(),
-            crate::lease::MemLeaseStore::new(),
-            opts,
-        )
-    }
-}
-
-/// Type alias for the common in-memory Manifest configuration.
-#[cfg(feature = "mem")]
-pub type MemManifest<K, V> = Manifest<
-    K,
-    V,
-    crate::head::MemHeadStore,
-    crate::segment::MemSegmentStore,
-    crate::checkpoint::MemCheckpointStore,
-    crate::lease::MemLeaseStore,
->;
-
-impl<K, V, HS, SS, CS, LS, KC, VC> Manifest<K, V, HS, SS, CS, LS, KC, VC>
+impl<K, V, HS, SS, CS, LS> Manifest<K, V, HS, SS, CS, LS>
 where
-    K: Ord + Clone + Serialize + DeserializeOwned,
-    V: Clone + Serialize + DeserializeOwned,
+    K: Ord + Serialize + DeserializeOwned,
+    V: Serialize + DeserializeOwned,
     HS: HeadStore + Clone,
     SS: SegmentIo + Clone,
     CS: CheckpointStore + Clone,
     LS: LeaseStore + Clone,
-    KC: KeyCodec<K> + Clone,
-    VC: ValueCodec<V> + Clone,
 {
-    pub async fn begin(&self) -> Result<Tx<K, V, HS, SS, LS, KC, VC>> {
+    /// NEW: Open a read session. When `pin` is true, pins GC via a lease.
+    pub async fn session_read(&self, pin: bool) -> Result<Session<K, V, HS, SS, CS, LS>> {
         let snap = self.snapshot().await?;
-        // create a lease for active snapshot tracking
+        if pin {
+            let ttl = self.opts.retention.lease_ttl_ms;
+            let lease = self
+                .leases
+                .create(snap.lsn.0, snap.head_tag.clone(), ttl)
+                .await?;
+            Ok(Session::new(
+                self.head.clone(),
+                self.seg.clone(),
+                self.ckpt.clone(),
+                self.leases.clone(),
+                Some(lease),
+                snap,
+                false,
+                true,
+                ttl,
+            ))
+        } else {
+            Ok(Session::new(
+                self.head.clone(),
+                self.seg.clone(),
+                self.ckpt.clone(),
+                self.leases.clone(),
+                None,
+                snap,
+                false,
+                false,
+                self.opts.retention.lease_ttl_ms,
+            ))
+        }
+    }
+
+    /// NEW: Open a write session (pinned, with lease)
+    pub async fn session_write(&self) -> Result<Session<K, V, HS, SS, CS, LS>> {
+        // Opportunistically adopt durable-but-unpublished segments before opening a writer.
+        let _ = self.recover_orphans().await;
+        let snap = self.snapshot().await?;
         let ttl = self.opts.retention.lease_ttl_ms;
         let lease = self
             .leases
             .create(snap.lsn.0, snap.head_tag.clone(), ttl)
             .await?;
-        Ok(Tx {
-            _phantom: PhantomData,
-            head: self.head.clone(),
-            seg: self.seg.clone(),
-            leases: self.leases.clone(),
-            lease: Some(lease),
-            kcodec: self.kcodec.clone(),
-            vcodec: self.vcodec.clone(),
-            snapshot: snap,
-            staged: Vec::new(),
-        })
+        Ok(Session::new(
+            self.head.clone(),
+            self.seg.clone(),
+            self.ckpt.clone(),
+            self.leases.clone(),
+            Some(lease),
+            snap,
+            true,
+            true,
+            ttl,
+        ))
+    }
+
+    /// NEW: Create a session bound to an explicit snapshot (read-only, no pin)
+    pub fn session_at(&self, snapshot: Snapshot) -> Session<K, V, HS, SS, CS, LS> {
+        Session::new(
+            self.head.clone(),
+            self.seg.clone(),
+            self.ckpt.clone(),
+            self.leases.clone(),
+            None,
+            snapshot,
+            false,
+            false,
+            self.opts.retention.lease_ttl_ms,
+        )
+    }
+
+    /// One-shot latest get (no pin)
+    pub async fn get_latest(&self, key: &K) -> Result<Option<V>> {
+        let snap = self.snapshot().await?;
+        let sess = self.session_at(snap);
+        sess.get(key).await
+    }
+
+    /// One-shot latest scan (no pin)
+    pub async fn scan_latest(&self, range: Option<ScanRange<K>>) -> Result<Vec<(K, V)>> {
+        let snap = self.snapshot().await?;
+        let sess = self.session_at(snap);
+        match range {
+            None => sess.scan().await,
+            Some(r) => sess.scan_range(r).await,
+        }
     }
 
     pub async fn snapshot(&self) -> Result<Snapshot> {
@@ -257,99 +324,6 @@ where
                 })
             }
         }
-    }
-
-    pub async fn get(&self, key: &K, ro: &ReadOptions<K>) -> Result<Option<V>> {
-        let snap = if let Some(s) = &ro.as_of {
-            s.clone()
-        } else {
-            self.snapshot().await?
-        };
-        // Fast path point lookup: walk segments from newest to oldest, scan records
-        // in reverse, and stop at the first match at/before the snapshot LSN.
-        if let Some(last_seq) = snap.last_segment_seq {
-            let start_seq = snap
-                .checkpoint_seq
-                .map(|s| s.saturating_add(1))
-                .unwrap_or(0);
-            // Gather segment ids up to last_seq (in chunks), then iterate in reverse.
-            let mut all: Vec<crate::types::SegmentId> = Vec::new();
-            let mut cursor = start_seq;
-            loop {
-                let mut ids = self.seg.list_from(cursor, 512).await?;
-                if ids.is_empty() {
-                    break;
-                }
-                ids.retain(|id| id.seq >= start_seq && id.seq <= last_seq);
-                if ids.is_empty() {
-                    break;
-                }
-                cursor = ids.iter().map(|s| s.seq).max().unwrap_or(cursor) + 1;
-                all.extend(ids);
-                if cursor > last_seq {
-                    break;
-                }
-            }
-            all.sort_by_key(|s| s.seq);
-            for id in all.into_iter().rev() {
-                let bytes = self.seg.get(&id).await?;
-                let seg: Segment<K, V> = serde_json::from_slice(&bytes)
-                    .map_err(|e| Error::Corrupt(format!("kv segment decode: {e}")))?;
-                for r in seg.records.into_iter().rev() {
-                    if r.lsn > snap.lsn.0 {
-                        continue;
-                    }
-                    if &r.key == key {
-                        return Ok(match r.op {
-                            Op::Put => r.value,
-                            Op::Del => None,
-                        });
-                    }
-                }
-            }
-            // Not found in post-checkpoint segments; if a checkpoint exists, consult it.
-            if let Some(ckpt_id) = snap.checkpoint_id.clone() {
-                let (_meta, bytes) = self.ckpt.get_checkpoint(&ckpt_id).await?;
-                #[derive(Deserialize)]
-                struct CkptPayload<K, V> {
-                    version: u32,
-                    entries: Vec<(K, V)>,
-                }
-                let payload: CkptPayload<K, V> = serde_json::from_slice(&bytes)
-                    .map_err(|e| Error::Corrupt(format!("ckpt decode: {e}")))?;
-                if payload.version != 1 {
-                    return Err(Error::Corrupt(format!(
-                        "unsupported checkpoint version: {}",
-                        payload.version
-                    )));
-                }
-                for (k, v) in payload.entries.into_iter().rev() {
-                    if &k == key {
-                        return Ok(Some(v));
-                    }
-                }
-            }
-            return Ok(None);
-        }
-        Ok(None)
-    }
-
-    pub async fn scan(&self, ro: ReadOptions<K>) -> Result<Vec<(K, V)>> {
-        let snap = if let Some(s) = ro.as_of {
-            s
-        } else {
-            self.snapshot().await?
-        };
-        let mut map: BTreeMap<K, V> = BTreeMap::new();
-        self.fold_until(&mut map, &snap).await?;
-        let mut out: Vec<(K, V)> = map.into_iter().collect();
-        if let Some(start) = ro.start.as_ref() {
-            out.retain(|(k, _)| k >= start);
-        }
-        if let Some(end) = ro.end.as_ref() {
-            out.retain(|(k, _)| k < end);
-        }
-        Ok(out)
     }
 
     async fn fold_until(&self, map: &mut BTreeMap<K, V>, snap: &Snapshot) -> Result<()> {
@@ -409,9 +383,10 @@ where
             entries: Vec<(K, V)>,
         }
         let entries: Vec<(K, V)> = map.into_iter().collect();
+        let entries_len = entries.len();
         let payload = serde_json::to_vec(&CkptPayload {
             version: 1,
-            entries: entries.clone(),
+            entries,
         })
         .map_err(|e| Error::Corrupt(format!("ckpt encode: {e}")))?;
         // 3b) Meta
@@ -421,7 +396,7 @@ where
             .as_millis() as u64;
         let meta = CheckpointMeta {
             lsn: snap.lsn.0,
-            key_count: entries.len(),
+            key_count: entries_len,
             byte_size: payload.len(),
             created_at_ms: now_ms,
             format: "application/json".into(),
@@ -441,7 +416,32 @@ where
                     last_segment_seq: None,
                     last_lsn: 0,
                 };
-                let tag = self.head.put(&new_head, PutCondition::IfNotExists).await?;
+                // Bounded retry on transient errors only
+                let pol = self.opts.backoff;
+                let mut bo = crate::backoff::ExponentialBackoff::new(pol);
+                let tag = loop {
+                    match self.head.put(&new_head, PutCondition::IfNotExists).await {
+                        Ok(t) => break t,
+                        Err(Error::PreconditionFailed) => return Err(Error::PreconditionFailed),
+                        Err(e) => match crate::backoff::classify_error(&e) {
+                            crate::backoff::RetryClass::RetryTransient if !bo.exhausted() => {
+                                let sleeper = {
+                                    #[cfg(feature = "exec")]
+                                    {
+                                        self.opts.sleeper.as_deref()
+                                    }
+                                    #[cfg(not(feature = "exec"))]
+                                    {
+                                        None::<&()>
+                                    }
+                                };
+                                crate::backoff::sleep_ms_with(bo.next_delay_ms(), sleeper).await;
+                                continue;
+                            }
+                            _ => return Err(e),
+                        },
+                    }
+                };
                 Ok((id, tag))
             }
             Some((cur, cur_tag)) => {
@@ -451,10 +451,35 @@ where
                     last_segment_seq: cur.last_segment_seq,
                     last_lsn: cur.last_lsn,
                 };
-                let tag = self
-                    .head
-                    .put(&new_head, PutCondition::IfMatch(cur_tag))
-                    .await?;
+                let pol = self.opts.backoff;
+                let mut bo = crate::backoff::ExponentialBackoff::new(pol);
+                let tag = loop {
+                    match self
+                        .head
+                        .put(&new_head, PutCondition::IfMatch(cur_tag.clone()))
+                        .await
+                    {
+                        Ok(t) => break t,
+                        Err(Error::PreconditionFailed) => return Err(Error::PreconditionFailed),
+                        Err(e) => match crate::backoff::classify_error(&e) {
+                            crate::backoff::RetryClass::RetryTransient if !bo.exhausted() => {
+                                let sleeper = {
+                                    #[cfg(feature = "exec")]
+                                    {
+                                        self.opts.sleeper.as_deref()
+                                    }
+                                    #[cfg(not(feature = "exec"))]
+                                    {
+                                        None::<&()>
+                                    }
+                                };
+                                crate::backoff::sleep_ms_with(bo.next_delay_ms(), sleeper).await;
+                                continue;
+                            }
+                            _ => return Err(e),
+                        },
+                    }
+                };
                 Ok((id, tag))
             }
         }
@@ -477,7 +502,6 @@ where
             .min()
             .unwrap_or(u64::MAX);
         let (meta, _bytes) = self.ckpt.get_checkpoint(&ckpt_id).await?;
-        // Segment GC: if watermark has moved past the checkpoint LSN, delete legacy segments.
         if watermark > meta.lsn {
             let _ = self.seg.delete_upto(meta.last_segment_seq_at_ckpt).await;
         }
@@ -514,109 +538,12 @@ where
     }
 }
 
-/// Transaction staging KV operations and committing via HEAD CAS.
-pub struct Tx<K, V, HS, SS, LS, KC = DefaultKeyCodec, VC = DefaultValueCodec>
-where
-    HS: HeadStore + Clone,
-    SS: SegmentIo + Clone,
-    LS: LeaseStore + Clone,
-    KC: KeyCodec<K> + Clone,
-    VC: ValueCodec<V> + Clone,
-{
-    _phantom: PhantomData<(K, V)>,
-    head: HS,
-    seg: SS,
-    leases: LS,
-    lease: Option<LeaseHandle>,
-    kcodec: KC,
-    vcodec: VC,
-    snapshot: Snapshot,
-    staged: Vec<(K, Op, Option<V>)>,
-}
-
-impl<K, V, HS, SS, LS, KC, VC> Tx<K, V, HS, SS, LS, KC, VC>
-where
-    K: Ord + Clone + Serialize + DeserializeOwned,
-    V: Clone + Serialize + DeserializeOwned,
-    HS: HeadStore + Clone,
-    SS: SegmentIo + Clone,
-    LS: LeaseStore + Clone,
-    KC: KeyCodec<K> + Clone,
-    VC: ValueCodec<V> + Clone,
-{
-    pub fn put(&mut self, k: K, v: V) {
-        self.staged.push((k, Op::Put, Some(v)));
-    }
-
-    pub fn delete(&mut self, k: K) {
-        self.staged.push((k, Op::Del, None));
-    }
-
-    pub async fn commit(mut self) -> Result<Commit> {
-        // Determine new lsn range and segment seq
-        let base_lsn = self.snapshot.lsn.0;
-        let new_lsn = base_lsn + self.staged.len() as u64;
-        let next_seq = self
-            .snapshot
-            .last_segment_seq
-            .unwrap_or(0)
-            .saturating_add(1);
-
-        // Encode segment
-        let mut lsn = base_lsn;
-        let mut records: Vec<Record<K, V>> = Vec::with_capacity(self.staged.len());
-        for (k, op, v) in self.staged.drain(..) {
-            let key = self.kcodec.encode_key(&k);
-            let val = v.map(|x| self.vcodec.encode_value(&x));
-            lsn += 1;
-            records.push(Record {
-                lsn,
-                key,
-                op,
-                value: val,
-            });
-        }
-        let seg = Segment {
-            version: 1,
-            records,
-        };
-        let payload =
-            serde_json::to_vec(&seg).map_err(|e| Error::Corrupt(format!("kv encode: {e}")))?;
-
-        // Write segment and publish HEAD via CAS
-        let seg_id = self
-            .seg
-            .put_next(next_seq, &payload, "application/json")
-            .await?;
-
-        let new_head = HeadJson {
-            version: 1,
-            snapshot: None,
-            last_segment_seq: Some(seg_id.seq),
-            last_lsn: new_lsn,
-        };
-        let tag = match self.snapshot.head_tag.take() {
-            None => self.head.put(&new_head, PutCondition::IfNotExists).await?,
-            Some(t) => self.head.put(&new_head, PutCondition::IfMatch(t)).await?,
-        };
-        // release lease on successful commit
-        if let Some(lease) = self.lease.take() {
-            let _ = self.leases.release(lease).await;
-        }
-        let _ = tag; // currently unused beyond CAS success
-        Ok(Commit {
-            lsn: Lsn(new_lsn),
-            segment_id: Some(seg_id),
-        })
-    }
-}
-
-#[cfg(all(test, feature = "mem"))]
+#[cfg(test)]
 mod tests {
     use futures_executor::block_on;
 
     use super::*;
-    use crate::{
+    use crate::impls::mem::{
         checkpoint::MemCheckpointStore, head::MemHeadStore, lease::MemLeaseStore,
         segment::MemSegmentStore,
     };
@@ -632,45 +559,38 @@ mod tests {
                 Manifest::new(head.clone(), seg.clone(), ck.clone(), ls.clone());
 
             // tx1
-            let mut tx1 = kv.begin().await.unwrap();
-            tx1.put("a".into(), "1".into());
-            tx1.put("b".into(), "2".into());
-            let _c1 = tx1.commit().await.unwrap();
+            let mut s1 = kv.session_write().await.unwrap();
+            s1.put("a".into(), "1".into()).unwrap();
+            s1.put("b".into(), "2".into()).unwrap();
+            let _c1 = s1.commit().await.unwrap();
 
-            // Read latest
-            let got = kv.get(&"a".into(), &ReadOptions::default()).await.unwrap();
+            // Read latest via explicit snapshot
+            let snap = kv.snapshot().await.unwrap();
+            let got = kv.session_at(snap.clone()).get(&"a".into()).await.unwrap();
             assert_eq!(got.as_deref(), Some("1"));
-            let all = kv.scan(ReadOptions::default()).await.unwrap();
+            let all = kv.session_at(snap).scan().await.unwrap();
             assert_eq!(all.len(), 2);
 
             // tx2 and tx3 from same snapshot; tx2 wins, tx3 loses
             let _snap = kv.snapshot().await.unwrap();
-            let mut tx2 = kv.begin().await.unwrap();
-            let mut tx3 = Manifest::<String, String, _, _, _, _>::new(
+            let mut s2 = kv.session_write().await.unwrap();
+            let mut s3 = Manifest::<String, String, _, _, _, _>::new(
                 head.clone(),
                 seg.clone(),
                 ck.clone(),
                 ls.clone(),
             )
-            .begin()
+            .session_write()
             .await
             .unwrap();
-            tx2.put("a".into(), "10".into());
-            tx3.delete("a".into());
-            let _ = tx2.commit().await.unwrap();
-            let r3 = tx3.commit().await;
+            s2.put("a".into(), "10".into()).unwrap();
+            s3.delete("a".into()).unwrap();
+            let _ = s2.commit().await.unwrap();
+            let r3 = s3.commit().await;
             assert!(matches!(r3, Err(Error::PreconditionFailed)));
 
-            let got2 = kv
-                .get(
-                    &"a".into(),
-                    &ReadOptions {
-                        as_of: None,
-                        ..Default::default()
-                    },
-                )
-                .await
-                .unwrap();
+            let snap2 = kv.snapshot().await.unwrap();
+            let got2 = kv.session_at(snap2).get(&"a".into()).await.unwrap();
             assert_eq!(got2.as_deref(), Some("10"));
         })
     }
@@ -678,35 +598,39 @@ mod tests {
     #[test]
     fn mem_kv_point_get_and_tombstone() {
         block_on(async move {
-            let head = MemHeadStore::new();
-            let seg = MemSegmentStore::new();
+            let head = crate::impls::mem::head::MemHeadStore::new();
+            let seg = crate::impls::mem::segment::MemSegmentStore::new();
             let kv: Manifest<String, String, _, _, _, _> = Manifest::new(
                 head.clone(),
                 seg.clone(),
-                MemCheckpointStore::new(),
-                MemLeaseStore::new(),
+                crate::impls::mem::checkpoint::MemCheckpointStore::new(),
+                crate::impls::mem::lease::MemLeaseStore::new(),
             );
 
             // Seed data
-            let mut tx = kv.begin().await.unwrap();
-            tx.put("a".into(), "1".into());
-            tx.put("b".into(), "2".into());
-            let _ = tx.commit().await.unwrap();
+            let mut s = kv.session_write().await.unwrap();
+            s.put("a".into(), "1".into()).unwrap();
+            s.put("b".into(), "2".into()).unwrap();
+            let _ = s.commit().await.unwrap();
 
             // Point gets
-            let ga = kv.get(&"a".into(), &ReadOptions::default()).await.unwrap();
-            let gb = kv.get(&"b".into(), &ReadOptions::default()).await.unwrap();
+            let snap = kv.snapshot().await.unwrap();
+            let sess = kv.session_at(snap.clone());
+            let ga = sess.get(&"a".into()).await.unwrap();
+            let gb = kv.session_at(snap).get(&"b".into()).await.unwrap();
             assert_eq!(ga.as_deref(), Some("1"));
             assert_eq!(gb.as_deref(), Some("2"));
 
             // Update and delete on new snapshot
-            let mut tx2 = kv.begin().await.unwrap();
-            tx2.put("a".into(), "10".into());
-            tx2.delete("b".into());
-            let _ = tx2.commit().await.unwrap();
+            let mut s2 = kv.session_write().await.unwrap();
+            s2.put("a".into(), "10".into()).unwrap();
+            s2.delete("b".into()).unwrap();
+            let _ = s2.commit().await.unwrap();
 
-            let ga2 = kv.get(&"a".into(), &ReadOptions::default()).await.unwrap();
-            let gb2 = kv.get(&"b".into(), &ReadOptions::default()).await.unwrap();
+            let snap3 = kv.snapshot().await.unwrap();
+            let sess3 = kv.session_at(snap3.clone());
+            let ga2 = sess3.get(&"a".into()).await.unwrap();
+            let gb2 = kv.session_at(snap3).get(&"b".into()).await.unwrap();
             assert_eq!(ga2.as_deref(), Some("10"));
             assert_eq!(gb2, None);
         })
@@ -715,23 +639,23 @@ mod tests {
     #[test]
     fn mem_kv_compact_and_read_from_checkpoint() {
         block_on(async move {
-            let head = MemHeadStore::new();
-            let seg = MemSegmentStore::new();
-            let ck = MemCheckpointStore::new();
-            let ls = MemLeaseStore::new();
+            let head = crate::impls::mem::head::MemHeadStore::new();
+            let seg = crate::impls::mem::segment::MemSegmentStore::new();
+            let ck = crate::impls::mem::checkpoint::MemCheckpointStore::new();
+            let ls = crate::impls::mem::lease::MemLeaseStore::new();
             let kv: Manifest<String, String, _, _, _, _> =
                 Manifest::new(head.clone(), seg.clone(), ck.clone(), ls.clone());
 
             // Two transactions → two segments
-            let mut tx1 = kv.begin().await.unwrap();
-            tx1.put("a".into(), "1".into());
-            tx1.put("b".into(), "2".into());
-            let _ = tx1.commit().await.unwrap();
+            let mut s1 = kv.session_write().await.unwrap();
+            s1.put("a".into(), "1".into()).unwrap();
+            s1.put("b".into(), "2".into()).unwrap();
+            let _ = s1.commit().await.unwrap();
 
-            let mut tx2 = kv.begin().await.unwrap();
-            tx2.put("b".into(), "20".into());
-            tx2.put("c".into(), "3".into());
-            let _ = tx2.commit().await.unwrap();
+            let mut s2 = kv.session_write().await.unwrap();
+            s2.put("b".into(), "20".into()).unwrap();
+            s2.put("c".into(), "3".into()).unwrap();
+            let _ = s2.commit().await.unwrap();
 
             // Compact
             let (_ckpt_id, _tag) = kv.compact_once().await.unwrap();
@@ -741,12 +665,121 @@ mod tests {
             assert!(snap.checkpoint_seq.is_some());
 
             // Reads still reflect latest values
-            let ga = kv.get(&"a".into(), &ReadOptions::default()).await.unwrap();
-            let gb = kv.get(&"b".into(), &ReadOptions::default()).await.unwrap();
-            let gc = kv.get(&"c".into(), &ReadOptions::default()).await.unwrap();
+            let sess = kv.session_at(snap);
+            let ga = sess.get(&"a".into()).await.unwrap();
+            let gb = sess.get(&"b".into()).await.unwrap();
+            let gc = sess.get(&"c".into()).await.unwrap();
             assert_eq!(ga.as_deref(), Some("1"));
             assert_eq!(gb.as_deref(), Some("20"));
             assert_eq!(gc.as_deref(), Some("3"));
+        })
+    }
+
+    #[test]
+    fn mem_recover_orphans_no_head_adopts_seq1() {
+        block_on(async move {
+            let head = crate::impls::mem::head::MemHeadStore::new();
+            let seg = crate::impls::mem::segment::MemSegmentStore::new();
+            let ck = crate::impls::mem::checkpoint::MemCheckpointStore::new();
+            let ls = crate::impls::mem::lease::MemLeaseStore::new();
+            let kv: Manifest<String, String, _, _, _, _> =
+                Manifest::new(head.clone(), seg.clone(), ck.clone(), ls.clone());
+
+            // Manually write an orphan segment at seq=1 with LSNs 1..=2
+            let seg_payload: Segment<String, String> = Segment {
+                version: 1,
+                records: vec![
+                    Record::<String, String> {
+                        lsn: 1,
+                        key: "a".into(),
+                        op: Op::Put,
+                        value: Some("1".into()),
+                    },
+                    Record::<String, String> {
+                        lsn: 2,
+                        key: "b".into(),
+                        op: Op::Put,
+                        value: Some("2".into()),
+                    },
+                ],
+            };
+            let bytes = serde_json::to_vec(&seg_payload).unwrap();
+            let _ = seg.put_next(1, &bytes, "application/json").await.unwrap();
+
+            // Recover
+            let adopted = kv.recover_orphans().await.unwrap();
+            assert_eq!(adopted, 1);
+            // Head advanced
+            let loaded = head.load().await.unwrap().unwrap();
+            assert_eq!(loaded.0.last_segment_seq, Some(1));
+            assert_eq!(loaded.0.last_lsn, 2);
+        })
+    }
+
+    #[test]
+    fn mem_recover_orphans_gap_does_not_adopt() {
+        block_on(async move {
+            let head = crate::impls::mem::head::MemHeadStore::new();
+            let seg = crate::impls::mem::segment::MemSegmentStore::new();
+            let ck = crate::impls::mem::checkpoint::MemCheckpointStore::new();
+            let ls = crate::impls::mem::lease::MemLeaseStore::new();
+            let kv: Manifest<String, String, _, _, _, _> =
+                Manifest::new(head.clone(), seg.clone(), ck.clone(), ls.clone());
+
+            // Write orphan only at seq=2 (gap at 1)
+            let seg_payload: Segment<String, String> = Segment {
+                version: 1,
+                records: vec![Record::<String, String> {
+                    lsn: 1,
+                    key: "a".into(),
+                    op: Op::Put,
+                    value: Some("1".into()),
+                }],
+            };
+            let bytes = serde_json::to_vec(&seg_payload).unwrap();
+            let _ = seg.put_next(2, &bytes, "application/json").await.unwrap();
+
+            let adopted = kv.recover_orphans().await.unwrap();
+            assert_eq!(adopted, 0);
+            assert!(head.load().await.unwrap().is_none());
+        })
+    }
+
+    #[test]
+    fn mem_recover_orphans_advances_over_existing_head() {
+        block_on(async move {
+            let head = crate::impls::mem::head::MemHeadStore::new();
+            let seg = crate::impls::mem::segment::MemSegmentStore::new();
+            let ck = crate::impls::mem::checkpoint::MemCheckpointStore::new();
+            let ls = crate::impls::mem::lease::MemLeaseStore::new();
+            let kv: Manifest<String, String, _, _, _, _> =
+                Manifest::new(head.clone(), seg.clone(), ck.clone(), ls.clone());
+
+            // Create initial segment and head via normal commit
+            {
+                let mut s = kv.session_write().await.unwrap();
+                s.put("a".into(), "1".into()).unwrap();
+                let _ = s.commit().await.unwrap(); // seq=1, lsn=1
+            }
+
+            // Manually write next segment (seq=2) without publishing head
+            let seg_payload: Segment<String, String> = Segment {
+                version: 1,
+                records: vec![Record::<String, String> {
+                    lsn: 2,
+                    key: "b".into(),
+                    op: Op::Put,
+                    value: Some("2".into()),
+                }],
+            };
+            let bytes = serde_json::to_vec(&seg_payload).unwrap();
+            let _ = seg.put_next(2, &bytes, "application/json").await.unwrap();
+
+            let adopted = kv.recover_orphans().await.unwrap();
+            assert_eq!(adopted, 1);
+            let loaded = head.load().await.unwrap().unwrap();
+            assert_eq!(loaded.0.last_segment_seq, Some(2));
+            assert_eq!(loaded.0.last_lsn, 2);
         })
     }
 }

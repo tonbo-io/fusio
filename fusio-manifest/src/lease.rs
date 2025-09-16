@@ -1,6 +1,4 @@
 use core::pin::Pin;
-#[cfg(feature = "mem")]
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use fusio_core::{MaybeSend, MaybeSendFuture, MaybeSync};
 use serde::{Deserialize, Serialize};
@@ -45,94 +43,38 @@ pub trait LeaseStore: MaybeSend + MaybeSync + Clone {
     ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<Vec<ActiveLease>>>>>;
 }
 
-#[cfg(feature = "mem")]
-#[derive(Debug, Clone, Default)]
-pub struct MemLeaseStore {
-    ctr: std::sync::Arc<AtomicU64>,
-    inner: std::sync::Arc<std::sync::Mutex<Vec<ActiveLease>>>,
-}
+#[cfg(test)]
+mod tests {
+    use futures_executor::block_on;
 
-#[cfg(feature = "mem")]
-impl MemLeaseStore {
-    pub fn new() -> Self {
-        Self::default()
-    }
-}
+    use super::*;
+    use crate::impls::mem::lease::MemLeaseStore;
 
-#[cfg(feature = "mem")]
-impl LeaseStore for MemLeaseStore {
-    fn create(
-        &self,
-        snapshot_lsn: u64,
-        _head_tag: Option<HeadTag>,
-        ttl_ms: u64,
-    ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<LeaseHandle>>>> {
-        let id = self.ctr.fetch_add(1, Ordering::Relaxed) + 1;
-        let lease = LeaseHandle {
-            id: LeaseId(format!("lease-{:020}", id)),
-            snapshot_lsn,
-        };
-        let now_ms = unix_ms();
-        let active = ActiveLease {
-            id: lease.id.clone(),
-            snapshot_lsn,
-            expires_at_ms: now_ms + ttl_ms,
-        };
-        let inner = self.inner.clone();
-        Box::pin(async move {
-            inner.lock().unwrap().push(active);
-            Ok(lease)
+    #[test]
+    fn mem_lease_ttl_and_min_watermark() {
+        block_on(async move {
+            let store = MemLeaseStore::new();
+            // Create two leases at different snapshot LSNs
+            let l1 = store.create(100, None, 60_000).await.unwrap();
+            let l2 = store.create(50, None, 60_000).await.unwrap();
+
+            // Now = 0 should show both as active if we pass a very small now (simulate immediate
+            // check)
+            let active = store.list_active(0).await.unwrap();
+            assert_eq!(active.len(), 2);
+            let min = active.iter().map(|l| l.snapshot_lsn).min().unwrap();
+            assert_eq!(min, 50);
+
+            // Heartbeat l1 and ensure it extends expiry without affecting lsn
+            store.heartbeat(&l1, 60_000).await.unwrap();
+
+            // Simulate far-future 'now' so all leases appear expired
+            let far_future = u64::MAX / 2;
+            let active2 = store.list_active(far_future).await.unwrap();
+            assert!(active2.is_empty());
+
+            // Release removes from active set
+            store.release(l2).await.unwrap();
         })
     }
-
-    fn heartbeat(
-        &self,
-        lease: &LeaseHandle,
-        ttl_ms: u64,
-    ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<()>>>> {
-        let id = lease.id.clone();
-        let inner = self.inner.clone();
-        Box::pin(async move {
-            let now = unix_ms();
-            let mut g = inner.lock().unwrap();
-            if let Some(l) = g.iter_mut().find(|l| l.id == id) {
-                l.expires_at_ms = now + ttl_ms;
-            }
-            Ok(())
-        })
-    }
-
-    fn release(&self, lease: LeaseHandle) -> Pin<Box<dyn MaybeSendFuture<Output = Result<()>>>> {
-        let id = lease.id;
-        let inner = self.inner.clone();
-        Box::pin(async move {
-            let mut g = inner.lock().unwrap();
-            g.retain(|l| l.id != id);
-            Ok(())
-        })
-    }
-
-    fn list_active(
-        &self,
-        now_ms: u64,
-    ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<Vec<ActiveLease>>>>> {
-        let inner = self.inner.clone();
-        Box::pin(async move {
-            let g = inner.lock().unwrap();
-            let v = g
-                .iter()
-                .filter(|l| l.expires_at_ms > now_ms)
-                .cloned()
-                .collect();
-            Ok(v)
-        })
-    }
-}
-
-#[cfg(feature = "mem")]
-fn unix_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64
 }

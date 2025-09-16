@@ -1,0 +1,301 @@
+#![cfg(any(feature = "aws-tokio", feature = "aws-wasm"))]
+
+use fusio::impls::remotes::aws::{
+    credential::AwsCredential,
+    fs::{AmazonS3, AmazonS3Builder},
+};
+
+use crate::{
+    backoff::BackoffPolicy,
+    compactor::Compactor,
+    db::Manifest,
+    impls::s3::{S3CheckpointStore, S3GcPlanStore, S3HeadStore, S3LeaseStore, S3SegmentStore},
+    options::Options,
+};
+
+/// Default file name for the manifest head object.
+pub const DEFAULT_HEAD_FILE: &str = "HEAD.json";
+
+/// Minimal S3 configuration for a manifest collection under a single prefix.
+#[derive(Clone)]
+pub struct Config {
+    pub s3: AmazonS3,
+    pub prefix: String,
+    pub opts: Options,
+}
+
+impl Config {
+    pub fn new(s3: AmazonS3, prefix: impl Into<String>) -> Self {
+        Self {
+            s3,
+            prefix: prefix.into().trim_end_matches('/').to_string(),
+            opts: Options::default(),
+        }
+    }
+    pub fn with_options(mut self, opts: Options) -> Self {
+        self.opts = opts;
+        self
+    }
+    /// Override the retry/backoff policy while keeping other options intact.
+    pub fn with_backoff(mut self, backoff: BackoffPolicy) -> Self {
+        self.opts = self.opts.with_backoff(backoff);
+        self
+    }
+
+    /// Full object key for the manifest head using the default naming.
+    pub fn head_key(&self) -> String {
+        join_path(&self.prefix, DEFAULT_HEAD_FILE)
+    }
+}
+
+/// Builder that constructs `AmazonS3` internally for ergonomic initialization.
+#[derive(Clone, Debug)]
+pub struct Builder {
+    bucket: String,
+    prefix: Option<String>,
+    region: String,
+    endpoint: Option<String>,
+    credential: Option<AwsCredential>,
+    sign_payload: bool,
+    checksum: bool,
+    opts: Options,
+}
+
+impl Builder {
+    /// Create a new builder for a given S3 `bucket` and manifest `prefix`.
+    /// `prefix` is trimmed of any trailing slash.
+    pub fn new(bucket: impl Into<String>) -> Self {
+        Self {
+            bucket: bucket.into(),
+            prefix: None,
+            region: "us-east-1".into(),
+            endpoint: None,
+            credential: None,
+            sign_payload: false,
+            checksum: false,
+            opts: Options::default(),
+        }
+    }
+
+    /// Optional manifest prefix. Defaults to root (no prefix).
+    pub fn prefix(mut self, prefix: impl Into<String>) -> Self {
+        self.prefix = Some(prefix.into().trim_end_matches('/').to_string());
+        self
+    }
+
+    /// Set the AWS region (default: `us-east-1`).
+    pub fn region(mut self, region: impl Into<String>) -> Self {
+        self.region = region.into();
+        self
+    }
+
+    /// Set a custom endpoint (e.g., MinIO/Localstack). When set, path-style addressing is used.
+    pub fn endpoint(mut self, endpoint: impl Into<String>) -> Self {
+        self.endpoint = Some(endpoint.into());
+        self
+    }
+
+    /// Set static credentials.
+    pub fn credential(mut self, credential: AwsCredential) -> Self {
+        self.credential = Some(credential);
+        self
+    }
+
+    /// Enable SigV4 payload signing (default: false). Recommended for AWS/MinIO.
+    pub fn sign_payload(mut self, yes: bool) -> Self {
+        self.sign_payload = yes;
+        self
+    }
+
+    /// Enable checksum when available (default: false).
+    pub fn checksum(mut self, yes: bool) -> Self {
+        self.checksum = yes;
+        self
+    }
+
+    /// Provide manifest options (retention, TTLs, etc.).
+    pub fn with_options(mut self, opts: Options) -> Self {
+        self.opts = opts;
+        self
+    }
+
+    /// Override just the backoff policy in the embedded options.
+    pub fn backoff(mut self, backoff: BackoffPolicy) -> Self {
+        self.opts = self.opts.with_backoff(backoff);
+        self
+    }
+
+    /// Build a `Config` by constructing `AmazonS3` internally.
+    pub fn build(self) -> Config {
+        let mut b = AmazonS3Builder::new(self.bucket);
+        if let Some(cred) = self.credential {
+            b = b.credential(cred);
+        }
+        if let Some(ep) = self.endpoint {
+            b = b.endpoint(ep);
+        }
+        let s3 = b
+            .region(self.region)
+            .sign_payload(self.sign_payload)
+            .checksum(self.checksum)
+            .build();
+
+        let prefix = self.prefix.unwrap_or_default();
+        Config::new(s3, prefix).with_options(self.opts)
+    }
+}
+
+fn join_path(prefix: &str, child: &str) -> String {
+    if prefix.is_empty() {
+        child.to_string()
+    } else {
+        format!("{}/{}", prefix, child)
+    }
+}
+
+/// Public wrapper over a Manifest with S3 stores to avoid leaking store types.
+pub struct S3Manifest<K, V> {
+    inner: Manifest<K, V, S3HeadStore, S3SegmentStore, S3CheckpointStore, S3LeaseStore>,
+}
+
+impl<K, V> S3Manifest<K, V>
+where
+    K: Ord + serde::Serialize + for<'de> serde::Deserialize<'de>,
+    V: serde::Serialize + for<'de> serde::Deserialize<'de>,
+{
+    pub async fn session_write(
+        &self,
+    ) -> crate::types::Result<
+        crate::session::Session<K, V, S3HeadStore, S3SegmentStore, S3CheckpointStore, S3LeaseStore>,
+    > {
+        self.inner.session_write().await
+    }
+
+    pub async fn session_read(
+        &self,
+        pin: bool,
+    ) -> crate::types::Result<
+        crate::session::Session<K, V, S3HeadStore, S3SegmentStore, S3CheckpointStore, S3LeaseStore>,
+    > {
+        self.inner.session_read(pin).await
+    }
+
+    pub fn session_at(
+        &self,
+        snapshot: crate::snapshot::Snapshot,
+    ) -> crate::session::Session<K, V, S3HeadStore, S3SegmentStore, S3CheckpointStore, S3LeaseStore>
+    {
+        self.inner.session_at(snapshot)
+    }
+
+    pub async fn snapshot(&self) -> crate::types::Result<crate::snapshot::Snapshot> {
+        self.inner.snapshot().await
+    }
+
+    pub async fn compact_once(
+        &self,
+    ) -> crate::types::Result<(crate::checkpoint::CheckpointId, crate::head::HeadTag)> {
+        self.inner.compact_once().await
+    }
+
+    pub async fn get_latest(&self, key: &K) -> crate::types::Result<Option<V>> {
+        self.inner.get_latest(key).await
+    }
+
+    pub async fn scan_latest(
+        &self,
+        range: Option<crate::snapshot::ScanRange<K>>,
+    ) -> crate::types::Result<Vec<(K, V)>> {
+        self.inner.scan_latest(range).await
+    }
+}
+
+// NOTE: `open` has been removed in favor of `From<Config>` for `S3Manifest`.
+
+/// Wrapper that hides the GC plan store and exposes ergonomic GC methods.
+pub struct S3Compactor<K, V> {
+    inner: Compactor<K, V, S3HeadStore, S3SegmentStore, S3CheckpointStore, S3LeaseStore>,
+    plan: S3GcPlanStore,
+}
+
+impl<K, V> S3Compactor<K, V>
+where
+    K: Ord + serde::Serialize + for<'de> serde::Deserialize<'de>,
+    V: serde::Serialize + for<'de> serde::Deserialize<'de>,
+{
+    pub async fn run_once(&self) -> crate::types::Result<()> {
+        self.inner.run_once().await
+    }
+
+    pub async fn gc_compute(&self) -> crate::types::Result<Option<crate::gc::GcTag>> {
+        self.inner.gc_compute(&self.plan).await
+    }
+
+    pub async fn gc_apply(&self) -> crate::types::Result<()> {
+        self.inner.gc_apply(&self.plan).await
+    }
+
+    pub async fn gc_delete_and_reset(&self) -> crate::types::Result<()> {
+        self.inner.gc_delete_and_reset(&self.plan).await
+    }
+}
+
+/// Open an S3 compactor over the given config (consumes `Config`).
+pub fn compactor<K, V>(cfg: Config) -> S3Compactor<K, V>
+where
+    K: Ord + serde::Serialize + for<'de> serde::Deserialize<'de>,
+    V: serde::Serialize + for<'de> serde::Deserialize<'de>,
+{
+    let head = S3HeadStore::new(cfg.s3.clone(), cfg.head_key());
+    let segs = S3SegmentStore::new(cfg.s3.clone(), join_path(&cfg.prefix, "segments"));
+    let ckpt = S3CheckpointStore::new(cfg.s3.clone(), cfg.prefix.clone());
+    let leases = S3LeaseStore::new(cfg.s3.clone(), cfg.prefix.clone());
+    let inner = Compactor::<K, V, _, _, _, _>::new(head, segs, ckpt, leases, cfg.opts.clone());
+    let plan = S3GcPlanStore::new(cfg.s3.clone(), cfg.prefix.clone());
+    S3Compactor { inner, plan }
+}
+
+/// Open using a `Builder`, constructing `AmazonS3` internally.
+pub fn open_with_builder<K, V>(builder: Builder) -> S3Manifest<K, V>
+where
+    K: Ord + serde::Serialize + for<'de> serde::Deserialize<'de>,
+    V: serde::Serialize + for<'de> serde::Deserialize<'de>,
+{
+    let cfg = builder.build();
+    cfg.into()
+}
+
+/// Create a compactor using a `Builder`, constructing `AmazonS3` internally.
+pub fn compactor_with_builder<K, V>(builder: Builder) -> S3Compactor<K, V>
+where
+    K: Ord + serde::Serialize + for<'de> serde::Deserialize<'de>,
+    V: serde::Serialize + for<'de> serde::Deserialize<'de>,
+{
+    let cfg = builder.build();
+    compactor(cfg)
+}
+
+impl<K, V> From<Config> for S3Manifest<K, V>
+where
+    K: Ord + serde::Serialize + for<'de> serde::Deserialize<'de>,
+    V: serde::Serialize + for<'de> serde::Deserialize<'de>,
+{
+    fn from(cfg: Config) -> Self {
+        let head = S3HeadStore::new(cfg.s3.clone(), cfg.head_key());
+        let segs = S3SegmentStore::new(cfg.s3.clone(), join_path(&cfg.prefix, "segments"));
+        let ckpt = S3CheckpointStore::new(cfg.s3.clone(), cfg.prefix.clone());
+        let leases = S3LeaseStore::new(cfg.s3.clone(), cfg.prefix.clone());
+        let inner = Manifest::new_with_opts(head, segs, ckpt, leases, cfg.opts.clone());
+        S3Manifest { inner }
+    }
+}
+
+impl<K, V> From<Config> for S3Compactor<K, V>
+where
+    K: Ord + serde::Serialize + for<'de> serde::Deserialize<'de>,
+    V: serde::Serialize + for<'de> serde::Deserialize<'de>,
+{
+    fn from(cfg: Config) -> Self {
+        compactor::<K, V>(cfg)
+    }
+}

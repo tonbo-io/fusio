@@ -1,3 +1,5 @@
+#[cfg(feature = "exec")]
+use std::sync::Arc;
 use std::time::Duration;
 
 use fusio_core::durability::DurabilityLevel;
@@ -91,7 +93,7 @@ pub struct SnapshotPolicy {
 }
 
 /// Manifest options.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Options {
     pub durability: Durability,
     pub sync: SyncPolicy,
@@ -103,6 +105,11 @@ pub struct Options {
     pub writer: WriterControl,
     /// Retention/GC policy.
     pub retention: Retention,
+    /// Backoff policy for CAS/storage contention.
+    pub backoff: crate::backoff::BackoffPolicy,
+    /// Optional runtime-agnostic sleeper for non-blocking backoff.
+    #[cfg(feature = "exec")]
+    pub sleeper: Option<Arc<dyn fusio::executor::Sleeper + Send + Sync>>,
 }
 
 impl Default for Options {
@@ -125,7 +132,42 @@ impl Default for Options {
             single_writer: true,
             writer: WriterControl::default(),
             retention: Retention::default(),
+            backoff: crate::backoff::BackoffPolicy::default(),
+            #[cfg(feature = "exec")]
+            sleeper: None,
         }
+    }
+}
+
+impl core::fmt::Debug for Options {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let mut ds = f.debug_struct("Options");
+        ds.field("durability", &self.durability)
+            .field("sync", &"...")
+            .field("segmenting", &"...")
+            .field("snapshots", &"...")
+            .field("single_writer", &self.single_writer)
+            .field("writer", &"...")
+            .field("retention", &"...")
+            .field("backoff", &"...");
+        #[cfg(feature = "exec")]
+        {
+            ds.field("sleeper", &self.sleeper.as_ref().map(|_| "Some"));
+        }
+        ds.finish()
+    }
+}
+
+impl Options {
+    /// Override the retry/backoff policy used by publish/GC loops.
+    pub fn with_backoff(mut self, backoff: crate::backoff::BackoffPolicy) -> Self {
+        self.backoff = backoff;
+        self
+    }
+
+    /// Mutably set the retry/backoff policy.
+    pub fn set_backoff(&mut self, backoff: crate::backoff::BackoffPolicy) {
+        self.backoff = backoff;
     }
 }
 
