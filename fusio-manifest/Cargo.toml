@@ -9,10 +9,6 @@ version.workspace = true
 [features]
 default = ["std", "mem"]
 std = []
-# AWS backends are split by HTTP client to support WASM.
-# Use `aws-tokio` on native, `aws-wasm` on wasm32.
-aws-tokio = ["dep:bytes", "fusio/aws", "fusio/tokio-http"]
-aws-wasm = ["dep:bytes", "fusio/aws", "fusio/wasm-http", "fusio/no-send"]
 mem = []
 
 [dependencies]
@@ -20,12 +16,13 @@ fusio-core = { path = "../fusio-core", version = "0.4.1", features = ["std"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1" }
 sha2 = { version = "0.10" }
-fusio = { path = "../fusio", version = "0.4.1", optional = true }
-bytes = { version = "1", optional = true }
+fusio = { path = "../fusio", version = "0.4.1", default-features = false, features = ["executor", "aws", "tokio-http"] }
+bytes = { version = "1" }
 futures-util = { workspace = true }
 
 [dev-dependencies]
 futures-executor = "0.3"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 
 [package.metadata.docs.rs]
 all-features = true

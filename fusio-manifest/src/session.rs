@@ -1,16 +1,17 @@
-use core::marker::PhantomData;
-use std::collections::BTreeMap;
+use std::{collections::HashMap, hash::Hash, time::Duration};
 
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 use crate::{
+    backoff::{classify_error, ExponentialBackoff, RetryClass},
     checkpoint::CheckpointStore,
-    db::{Op, Record, Segment},
     head::{HeadJson, HeadStore, PutCondition},
     lease::{LeaseHandle, LeaseStore},
+    manifest::{Op, Record, Segment},
     segment::SegmentIo,
     snapshot::{ScanRange, Snapshot},
-    types::{Commit, Error, Lsn, Result},
+    store::StoreHandle,
+    types::{Error, Result},
 };
 
 /// Unified Session: can be read-only or writable; may pin GC via a lease.
@@ -21,22 +22,18 @@ where
     CS: CheckpointStore + Clone,
     LS: LeaseStore + Clone,
 {
-    _phantom: PhantomData<(K, V)>,
-    head: HS,
-    seg: SS,
-    ckpt: CS,
-    leases: LS,
+    store: StoreHandle<HS, SS, CS, LS>,
     lease: Option<LeaseHandle>,
     snapshot: Snapshot,
     writable: bool,
     pinned: bool,
-    ttl_ms: u64,
+    ttl: Duration,
     staged: Vec<(K, Op, Option<V>)>,
 }
 
 impl<K, V, HS, SS, CS, LS> Session<K, V, HS, SS, CS, LS>
 where
-    K: Ord + Serialize + DeserializeOwned,
+    K: PartialOrd + Eq + Hash + Serialize + DeserializeOwned,
     V: Serialize + DeserializeOwned,
     HS: HeadStore + Clone,
     SS: SegmentIo + Clone,
@@ -45,27 +42,20 @@ where
 {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
-        head: HS,
-        seg: SS,
-        ckpt: CS,
-        leases: LS,
+        store: StoreHandle<HS, SS, CS, LS>,
         lease: Option<LeaseHandle>,
         snapshot: Snapshot,
         writable: bool,
         pinned: bool,
-        ttl_ms: u64,
+        ttl: Duration,
     ) -> Self {
         Self {
-            _phantom: PhantomData,
-            head,
-            seg,
-            ckpt,
-            leases,
+            store,
             lease,
             snapshot,
             writable,
             pinned,
-            ttl_ms,
+            ttl,
             staged: Vec::new(),
         }
     }
@@ -77,7 +67,7 @@ where
     pub async fn heartbeat(&self) -> Result<()> {
         if self.pinned {
             if let Some(lease) = self.lease.as_ref() {
-                return self.leases.heartbeat(lease, self.ttl_ms).await;
+                return self.store.leases.heartbeat(lease, self.ttl).await;
             }
         }
         Ok(())
@@ -85,7 +75,7 @@ where
 
     pub async fn end(mut self) -> Result<()> {
         if let Some(lease) = self.lease.take() {
-            self.leases.release(lease).await
+            self.store.leases.release(lease).await
         } else {
             Ok(())
         }
@@ -101,7 +91,7 @@ where
             let mut all: Vec<crate::types::SegmentId> = Vec::new();
             let mut cursor = start_seq;
             loop {
-                let mut ids = self.seg.list_from(cursor, 512).await?;
+                let mut ids = self.store.segment.list_from(cursor, 512).await?;
                 if ids.is_empty() {
                     break;
                 }
@@ -117,13 +107,13 @@ where
             }
             all.sort_by_key(|s| s.seq);
             for id in all.into_iter().rev() {
-                let bytes = self.seg.get(&id).await?;
+                let bytes = self.store.segment.get(&id).await?;
                 let seg: Segment<K, V> = serde_json::from_slice(&bytes)
                     .map_err(|e| Error::Corrupt(format!("kv segment decode: {e}")))?;
+                if seg.txn_id > snap.txn_id.0 {
+                    continue;
+                }
                 for r in seg.records.into_iter().rev() {
-                    if r.lsn > snap.lsn.0 {
-                        continue;
-                    }
                     if &r.key == key {
                         return Ok(match r.op {
                             Op::Put => r.value,
@@ -133,20 +123,13 @@ where
                 }
             }
             if let Some(ckpt_id) = snap.checkpoint_id.clone() {
-                let (_meta, bytes) = self.ckpt.get_checkpoint(&ckpt_id).await?;
+                let (_meta, bytes) = self.store.checkpoint.get_checkpoint(&ckpt_id).await?;
                 #[derive(Deserialize)]
                 struct CkptPayload<K, V> {
-                    version: u32,
                     entries: Vec<(K, V)>,
                 }
                 let payload: CkptPayload<K, V> = serde_json::from_slice(&bytes)
                     .map_err(|e| Error::Corrupt(format!("ckpt decode: {e}")))?;
-                if payload.version != 1 {
-                    return Err(Error::Corrupt(format!(
-                        "unsupported checkpoint version: {}",
-                        payload.version
-                    )));
-                }
                 for (k, v) in payload.entries.into_iter().rev() {
                     if &k == key {
                         return Ok(Some(v));
@@ -159,13 +142,13 @@ where
     }
 
     pub async fn scan(&self) -> Result<Vec<(K, V)>> {
-        let mut map: BTreeMap<K, V> = BTreeMap::new();
+        let mut map: HashMap<K, V> = HashMap::new();
         self.fold_until(&mut map, &self.snapshot).await?;
         Ok(map.into_iter().collect())
     }
 
     pub async fn scan_range(&self, range: ScanRange<K>) -> Result<Vec<(K, V)>> {
-        let mut map: BTreeMap<K, V> = BTreeMap::new();
+        let mut map: HashMap<K, V> = HashMap::new();
         self.fold_until(&mut map, &self.snapshot).await?;
         let mut out: Vec<(K, V)> = map.into_iter().collect();
         if let Some(start) = range.start.as_ref() {
@@ -177,7 +160,7 @@ where
         Ok(out)
     }
 
-    async fn fold_until(&self, map: &mut BTreeMap<K, V>, snap: &Snapshot) -> Result<()> {
+    async fn fold_until(&self, map: &mut HashMap<K, V>, snap: &Snapshot) -> Result<()> {
         let last_seq = match snap.last_segment_seq {
             Some(s) => s,
             None => return Ok(()),
@@ -187,7 +170,7 @@ where
             .map(|s| s.saturating_add(1))
             .unwrap_or(0);
         loop {
-            let ids = self.seg.list_from(cursor, 256).await?;
+            let ids = self.store.segment.list_from(cursor, 256).await?;
             if ids.is_empty() {
                 break;
             }
@@ -195,14 +178,13 @@ where
                 if id.seq > last_seq {
                     return Ok(());
                 }
-                let bytes = self.seg.get(&id).await?;
+                let bytes = self.store.segment.get(&id).await?;
                 let seg: Segment<K, V> = serde_json::from_slice(&bytes)
                     .map_err(|e| Error::Corrupt(format!("kv segment decode: {e}")))?;
+                if seg.txn_id > snap.txn_id.0 {
+                    return Ok(());
+                }
                 for r in seg.records.into_iter() {
-                    if r.lsn > snap.lsn.0 {
-                        // LSNs are monotonic; later segments will only contain larger LSNs.
-                        return Ok(());
-                    }
                     match r.op {
                         Op::Put => {
                             if let Some(v) = r.value {
@@ -264,17 +246,17 @@ where
 
     /// Read-your-writes for a range or full scan.
     pub async fn scan_local(&self, range: Option<ScanRange<K>>) -> Result<Vec<(K, V)>> {
-        let mut map: BTreeMap<K, V> = match range.as_ref() {
-            None => self.scan().await?.into_iter().collect::<BTreeMap<K, V>>(),
-            Some(r) => self
-                .scan_range(ScanRange {
+        let mut base_entries: Vec<(K, V)> = match range.as_ref() {
+            None => self.scan().await?,
+            Some(r) => {
+                self.scan_range(ScanRange {
                     start: r.start.as_ref().map(Self::clone_via_json).transpose()?,
                     end: r.end.as_ref().map(Self::clone_via_json).transpose()?,
                 })
                 .await?
-                .into_iter()
-                .collect::<BTreeMap<K, V>>(),
+            }
         };
+        let mut map: HashMap<K, V> = base_entries.drain(..).collect();
 
         if self.writable {
             for (k, op, v) in &self.staged {
@@ -304,76 +286,115 @@ where
     }
 
     /// Commit staged changes. Only valid for writable sessions.
-    pub async fn commit(mut self) -> Result<Commit> {
+    pub async fn commit(mut self) -> Result<()> {
         if !self.writable {
             return Err(Error::Unimplemented("commit on read-only session"));
         }
-        // Preflight CAS: if our snapshot head tag is stale, fail early to avoid orphaning
-        let current = self.head.load().await?;
-        let stale = match (self.snapshot.head_tag.as_ref(), current.as_ref()) {
-            (None, None) => false,
-            (Some(t), Some((_h, cur))) => t != cur,
-            (None, Some(_)) => true,
-            (Some(_), None) => true,
-        };
-        if stale {
-            return Err(Error::PreconditionFailed);
-        }
-        // Determine new lsn range and segment seq
-        let base_lsn = self.snapshot.lsn.0;
-        let new_lsn = base_lsn + self.staged.len() as u64;
+        // Determine new transaction id and segment seq based on our snapshot
+        let base_txn = self.snapshot.txn_id.0;
+        let next_txn = base_txn.saturating_add(1);
         let next_seq = self
             .snapshot
             .last_segment_seq
             .unwrap_or(0)
             .saturating_add(1);
+        let expected_tag = self.snapshot.head_tag.clone();
 
-        // Encode segment
-        let mut lsn = base_lsn;
-        let mut records: Vec<Record<K, V>> = Vec::with_capacity(self.staged.len());
-        for (k, op, v) in self.staged.drain(..) {
-            let key = k;
-            let val = v;
-            lsn += 1;
+        // Encode the staged operations once; retry loop reuses the payload.
+        let staged = core::mem::take(&mut self.staged);
+        let mut records = Vec::with_capacity(staged.len());
+        for (k, op, v) in staged.into_iter() {
             records.push(Record {
-                lsn,
-                key,
+                key: k,
                 op,
-                value: val,
+                value: v,
             });
         }
         let seg = Segment {
-            version: 1,
+            txn_id: next_txn,
             records,
         };
         let payload =
             serde_json::to_vec(&seg).map_err(|e| Error::Corrupt(format!("kv encode: {e}")))?;
-
-        // Write segment and publish HEAD via CAS
-        let seg_id = self
-            .seg
-            .put_next(next_seq, &payload, "application/json")
-            .await?;
-
         let new_head = HeadJson {
             version: 1,
             snapshot: None,
-            last_segment_seq: Some(seg_id.seq),
-            last_lsn: new_lsn,
+            last_segment_seq: Some(next_seq),
+            last_txn_id: next_txn,
         };
-        let tag = match self.snapshot.head_tag.take() {
-            None => self.head.put(&new_head, PutCondition::IfNotExists).await?,
-            Some(t) => self.head.put(&new_head, PutCondition::IfMatch(t)).await?,
-        };
-        // release lease on successful commit
-        if let Some(lease) = self.lease.take() {
-            let _ = self.leases.release(lease).await;
+
+        let mut seg_written = false;
+        let mut bo = ExponentialBackoff::new(self.store.opts.backoff);
+        let timer = self.store.opts.timer.clone();
+
+        loop {
+            // Reload HEAD to ensure our snapshot tag is still current.
+            let current = match self.store.head.load().await {
+                Ok(v) => v,
+                Err(e) => match classify_error(&e) {
+                    RetryClass::RetryTransient if !bo.exhausted() => {
+                        let delay = bo.next_delay();
+                        timer.sleep(delay).await;
+                        continue;
+                    }
+                    _ => return Err(e),
+                },
+            };
+
+            let stale = match (expected_tag.as_ref(), current.as_ref()) {
+                (None, None) => false,
+                (Some(t), Some((_h, cur))) => t != cur,
+                (None, Some(_)) => true,
+                (Some(_), None) => true,
+            };
+            if stale {
+                return Err(Error::PreconditionFailed);
+            }
+
+            if !seg_written {
+                match self
+                    .store
+                    .segment
+                    .put_next(next_seq, payload.as_slice(), "application/json")
+                    .await
+                {
+                    Ok(_) => {
+                        seg_written = true;
+                    }
+                    Err(e) => match classify_error(&e) {
+                        RetryClass::RetryTransient if !bo.exhausted() => {
+                            let delay = bo.next_delay();
+                            timer.sleep(delay).await;
+                            continue;
+                        }
+                        _ => return Err(e),
+                    },
+                }
+            }
+
+            let cond = match expected_tag.as_ref() {
+                Some(tag) => PutCondition::IfMatch(tag.clone()),
+                None => PutCondition::IfNotExists,
+            };
+
+            match self.store.head.put(&new_head, cond).await {
+                Ok(_) => {
+                    if let Some(lease) = self.lease.take() {
+                        let _ = self.store.leases.release(lease).await;
+                    }
+                    return Ok(());
+                }
+                Err(e) => match classify_error(&e) {
+                    RetryClass::RetryTransient if !bo.exhausted() => {
+                        let delay = bo.next_delay();
+                        timer.sleep(delay).await;
+                        continue;
+                    }
+                    RetryClass::DurableConflict => return Err(Error::PreconditionFailed),
+                    _ => return Err(e),
+                },
+            }
         }
-        let _ = tag; // currently unused beyond CAS success
-        Ok(Commit {
-            lsn: Lsn(new_lsn),
-            segment_id: Some(seg_id),
-        })
     }
 }
 
@@ -394,8 +415,8 @@ mod tests {
             let seg = MemSegmentStore::new();
             let ck = MemCheckpointStore::new();
             let ls = MemLeaseStore::new();
-            let m: crate::db::Manifest<String, String, _, _, _, _> =
-                crate::db::Manifest::new(head.clone(), seg.clone(), ck.clone(), ls.clone());
+            let m: crate::manifest::Manifest<String, String, _, _, _, _> =
+                crate::manifest::Manifest::new(head.clone(), seg.clone(), ck.clone(), ls.clone());
 
             let mut a = m.session_write().await.unwrap();
             a.put("k".into(), "v1".into()).unwrap();

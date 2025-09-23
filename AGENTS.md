@@ -32,7 +32,7 @@
 - WASM: keep tests headless-browser friendly; gate with feature flags like `opfs`/`web`.
 - For fusio-manifest: we support in-memory and S3 backends only. For local end-to-end S3 tests, use LocalStack or MinIO. Example with LocalStack:
   - `docker run -p 4566:4566 -e SERVICES=s3 localstack/localstack`
-  - export AWS credentials/region, then run `cargo test -p fusio-manifest --features aws-tokio`.
+  - export AWS credentials/region, then run `cargo test -p fusio-manifest` (ignored tests require real S3).
 
 ## Commit & Pull Request Guidelines
 - Follow Conventional Commits (observed in history): `feat:`, `fix:`, `docs:`, `chore:`, `refactor:` with optional scope, e.g., `feat(parquet): ...` and reference PRs/issues `(#123)`.

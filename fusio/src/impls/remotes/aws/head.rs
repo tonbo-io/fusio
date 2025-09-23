@@ -112,18 +112,13 @@ pub async fn put_if_none_match(
         .map_err(|e| Error::Remote(Box::new(e)))?;
 
     if resp.status().as_u16() == 412 {
-        return Err(Error::Remote(Box::new(HttpError::HttpNotSuccess {
-            status: resp.status(),
-            body: String::from_utf8_lossy(
-                &resp
-                    .into_body()
-                    .collect()
-                    .await
-                    .map_err(|e| Error::Remote(Box::new(e)))?
-                    .to_bytes(),
-            )
-            .to_string(),
-        })));
+        // Drain body to avoid dangling connection
+        let _ = resp
+            .into_body()
+            .collect()
+            .await
+            .map_err(|e| Error::Remote(Box::new(e)))?;
+        return Err(Error::PreconditionFailed);
     }
     if !resp.status().is_success() {
         return Err(Error::Remote(Box::new(HttpError::HttpNotSuccess {
@@ -187,18 +182,12 @@ pub async fn put_if_match(
         .map_err(|e| Error::Remote(Box::new(e)))?;
 
     if resp.status().as_u16() == 412 {
-        return Err(Error::Remote(Box::new(HttpError::HttpNotSuccess {
-            status: resp.status(),
-            body: String::from_utf8_lossy(
-                &resp
-                    .into_body()
-                    .collect()
-                    .await
-                    .map_err(|e| Error::Remote(Box::new(e)))?
-                    .to_bytes(),
-            )
-            .to_string(),
-        })));
+        let _ = resp
+            .into_body()
+            .collect()
+            .await
+            .map_err(|e| Error::Remote(Box::new(e)))?;
+        return Err(Error::PreconditionFailed);
     }
     if !resp.status().is_success() {
         return Err(Error::Remote(Box::new(HttpError::HttpNotSuccess {

@@ -1,7 +1,8 @@
-use std::env;
+use std::{env, sync::Arc, time::Duration};
 
 use fusio_manifest::{
     options::Options,
+    retention::DefaultRetention,
     s3,
     types::{Error, Result},
 };
@@ -13,12 +14,13 @@ async fn main() -> Result<()> {
         Some(cfg) => cfg,
         None => return Ok(()),
     };
-    let mut opts = Options::default();
-    opts.retention.checkpoints_min_ttl_ms = 0;
-    opts.retention.segments_min_ttl_ms = 0;
+    let retention = DefaultRetention::default()
+        .with_checkpoints_min_ttl(Duration::ZERO)
+        .with_segments_min_ttl(Duration::ZERO);
+    let opts = Options::default().with_retention(Arc::new(retention));
 
-    let manifest: s3::S3Manifest<String, String> =
-        setup.config.clone().with_options(opts.clone()).into();
+    let manifest: s3::S3Manifest<String, String> = setup.config.clone().with_options(opts).into();
+    let compactor: s3::S3Compactor<String, String> = manifest.compactor();
 
     println!("== seed a few commits");
     for (k, v) in [("user:1", "alice"), ("user:2", "bob"), ("user:1", "carol")] {
@@ -28,25 +30,45 @@ async fn main() -> Result<()> {
     }
 
     println!("== hold a pinned read lease before compaction");
-    let pinned = manifest.session_read(true).await?;
-    println!("pinned snapshot lsn={}", pinned.snapshot().lsn.0);
+    let pinned = manifest.session_read().await?;
+    println!("pinned snapshot txn_id={}", pinned.snapshot().txn_id.0);
 
     let segs_before = list_segments(&setup).await?;
     println!("segments before compaction: {:?}", segs_before);
 
-    let (_ckpt, _tag) = manifest.compact_and_gc().await?;
+    let (_ckpt, _tag) = compactor.compact_once().await?;
+    // Run the GC phases while the lease is held; deletes should be deferred.
+    if let Some(tag) = compactor.gc_compute().await? {
+        compactor.gc_apply().await?;
+        compactor.gc_delete_and_reset().await?;
+        println!("gc plan {:?} applied while lease held", tag);
+    } else {
+        println!("gc has nothing to delete while lease is pinned");
+    }
     let segs_after = list_segments(&setup).await?;
     println!("segments after GC (lease held): {:?}", segs_after);
 
-    println!("== release lease and compact again");
+    println!("== hand off snapshot before releasing lease");
+    // Stash the snapshot but immediately reopen it so a lease remains active; once the
+    // last lease ends, GC is free to collect the snapshot's segments.
+    let stored_snapshot = pinned.snapshot().clone();
+    let handoff = manifest.session_at(stored_snapshot).await?;
+    let ga = handoff.get(&"user:1".into()).await?;
+    println!("handoff snapshot read -> {:?}", ga);
     pinned.end().await?;
-    let (_ckpt2, _tag2) = manifest.compact_and_gc().await?;
+    println!("original lease released while handoff stays pinned");
+    handoff.end().await?;
+    println!("handoff finished; no active leases remain");
+
+    println!("== compact again now that no leases remain");
+    let (_ckpt2, _tag2) = compactor.compact_once().await?;
+    if let Some(tag) = compactor.gc_compute().await? {
+        compactor.gc_apply().await?;
+        compactor.gc_delete_and_reset().await?;
+        println!("gc plan {:?} applied after lease released", tag);
+    }
     let segs_final = list_segments(&setup).await?;
     println!("segments after lease released: {:?}", segs_final);
-
-    println!("== run headless compactor once");
-    let compactor: s3::S3Compactor<String, String> = setup.config.clone().into();
-    compactor.run_once().await?;
 
     println!("cleanup: S3 prefix {}", setup.config.prefix);
     Ok(())
@@ -101,10 +123,11 @@ async fn list_segments(setup: &Setup) -> Result<Vec<String>> {
     } else {
         format!("{}/segments", setup.config.prefix)
     };
+    let prefix_path = Path::from(prefix);
     let stream = setup
         .config
         .s3
-        .list(&Path::from(prefix))
+        .list(&prefix_path)
         .await
         .map_err(|e| Error::Other(Box::new(e)))?;
     pin_mut!(stream);

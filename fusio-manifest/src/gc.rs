@@ -1,5 +1,5 @@
 //! GC plan object and CAS operations
-use core::pin::Pin;
+use core::{pin::Pin, time::Duration};
 
 use fusio_core::{MaybeSend, MaybeSendFuture, MaybeSync};
 use serde::{Deserialize, Serialize};
@@ -14,21 +14,22 @@ use crate::{head::PutCondition, types::Error};
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GcPlan {
     /// ETag/tag of the HEAD manifest the plan was computed against.
-    pub against_head_tag: Option<String>,
-    /// Not-before timestamp (ms since UNIX epoch) for phase-3 deletes.
-    pub not_before_ms: u64,
-    /// Segment sequence numbers to delete (may be contiguous; expanded by executor).
-    pub delete_segments: Vec<u64>,
+    pub(crate) against_head_tag: Option<String>,
+    /// Not-before timestamp for deletes.
+    #[serde(with = "duration_millis")]
+    pub(crate) not_before: Duration,
+    /// Segment ranges to delete (inclusive).
+    pub(crate) delete_segments: Vec<SegmentRange>,
     /// Checkpoint object keys to delete.
-    pub delete_checkpoints: Vec<String>,
+    pub(crate) delete_checkpoints: Vec<String>,
     /// Checkpoints to materialize before dropping segments (future use).
-    pub make_checkpoints: Vec<CheckpointSpec>,
+    pub(crate) make_checkpoints: Vec<CheckpointSpec>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CheckpointSpec {
-    pub name: String,
-    pub upto_lsn: u64,
+    pub(crate) name: String,
+    pub(crate) upto_lsn: u64,
 }
 
 impl GcPlan {
@@ -37,6 +38,26 @@ impl GcPlan {
         self.delete_segments.is_empty()
             && self.delete_checkpoints.is_empty()
             && self.make_checkpoints.is_empty()
+    }
+}
+
+/// Inclusive segment range slated for deletion.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SegmentRange {
+    pub(crate) start: u64,
+    pub(crate) end: u64,
+}
+
+impl SegmentRange {
+    pub fn new(start: u64, end: u64) -> Self {
+        if start <= end {
+            Self { start, end }
+        } else {
+            Self {
+                start: end,
+                end: start,
+            }
+        }
     }
 }
 
@@ -90,7 +111,7 @@ mod tests {
         assert!(matches!(
             block_on(store.put(
                 &GcPlan {
-                    not_before_ms: 1,
+                    not_before: Duration::from_millis(1),
                     ..Default::default()
                 },
                 PutCondition::IfMatch(crate::head::HeadTag("bad".into()))
@@ -100,7 +121,7 @@ mod tests {
         // if-match with correct tag succeeds and rotates tag
         let tag2 = block_on(store.put(
             &GcPlan {
-                not_before_ms: 2,
+                not_before: Duration::from_millis(2),
                 ..Default::default()
             },
             PutCondition::IfMatch(crate::head::HeadTag(tag1.0.clone())),
@@ -109,5 +130,27 @@ mod tests {
         let got2 = block_on(store.load()).unwrap().unwrap();
         assert_eq!(got2.1, tag2);
         assert_ne!(tag1, tag2);
+    }
+}
+
+mod duration_millis {
+    use core::time::Duration;
+
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S>(dur: &Duration, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let ms = dur.as_millis().min(u128::from(u64::MAX)) as u64;
+        serializer.serialize_u64(ms)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Duration, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let ms = u64::deserialize(deserializer)?;
+        Ok(Duration::from_millis(ms))
     }
 }

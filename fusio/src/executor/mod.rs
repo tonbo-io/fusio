@@ -1,7 +1,9 @@
+use core::{pin::Pin, time::Duration};
 use std::{
     error::Error,
     future::Future,
     ops::{Deref, DerefMut},
+    time::SystemTime,
 };
 
 use fusio_core::{MaybeSend, MaybeSendFuture, MaybeSync};
@@ -43,16 +45,13 @@ pub trait Executor: 'static {
         T: MaybeSend + MaybeSync;
 }
 
-#[cfg(feature = "executor-tokio")]
-pub mod tokio;
-
 /// Minimal timer abstraction to decouple libraries from concrete runtimes.
-pub trait Sleeper: MaybeSend + MaybeSync {
+pub trait Timer: MaybeSend + MaybeSync {
     /// Sleep for the given duration and yield back to the runtime.
-    fn sleep(
-        &self,
-        dur: core::time::Duration,
-    ) -> core::pin::Pin<Box<dyn MaybeSendFuture<Output = ()>>>;
+    fn sleep(&self, dur: Duration) -> Pin<Box<dyn MaybeSendFuture<Output = ()>>>;
+
+    /// Return the current wall-clock time according to the executor.
+    fn now(&self) -> SystemTime;
 }
 
 /// A blocking fallback for environments without an async runtime.
@@ -61,14 +60,18 @@ pub trait Sleeper: MaybeSend + MaybeSync {
 pub struct BlockingSleeper;
 
 #[cfg(not(target_arch = "wasm32"))]
-impl Sleeper for BlockingSleeper {
-    fn sleep(
-        &self,
-        dur: core::time::Duration,
-    ) -> core::pin::Pin<Box<dyn MaybeSendFuture<Output = ()>>> {
+impl Timer for BlockingSleeper {
+    fn sleep(&self, dur: Duration) -> Pin<Box<dyn MaybeSendFuture<Output = ()>>> {
         Box::pin(async move { std::thread::sleep(dur) })
+    }
+
+    fn now(&self) -> SystemTime {
+        SystemTime::now()
     }
 }
 
 #[cfg(all(feature = "opfs", target_arch = "wasm32"))]
 pub mod opfs;
+
+#[cfg(feature = "executor-tokio")]
+pub mod tokio;

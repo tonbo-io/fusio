@@ -1,12 +1,10 @@
 use core::pin::Pin;
 
-use bytes::Bytes;
 use fusio::{
-    durability::FileCommit,
-    fs::{Fs, OpenOptions},
+    fs::{CasCondition, Fs, FsCas},
     impls::remotes::aws::fs::AmazonS3,
     path::Path,
-    Write,
+    Error as FsError, Read,
 };
 use fusio_core::MaybeSendFuture;
 use futures_util::StreamExt;
@@ -16,19 +14,17 @@ use crate::{
     types::{Result, SegmentId},
 };
 
-/// S3-backed SegmentStore that writes each segment object under a fixed prefix.
+/// Segment store backed by an Amazon S3 filesystem handle.
 #[derive(Clone)]
-#[allow(dead_code)] // staging: used by object-store backend in upcoming wiring
-pub struct S3SegmentStore {
-    s3: AmazonS3,
+pub struct FsSegmentStore {
+    fs: AmazonS3,
     pub(crate) prefix: String,
 }
 
-#[allow(dead_code)] // staging
-impl S3SegmentStore {
-    pub fn new(s3: AmazonS3, prefix: impl Into<String>) -> Self {
+impl FsSegmentStore {
+    pub fn new(fs: AmazonS3, prefix: impl Into<String>) -> Self {
         Self {
-            s3,
+            fs,
             prefix: prefix.into(),
         }
     }
@@ -52,52 +48,43 @@ impl S3SegmentStore {
     }
 }
 
-impl SegmentIo for S3SegmentStore {
+impl SegmentIo for FsSegmentStore {
     fn put_next(
         &self,
         seq: u64,
         payload: &[u8],
         content_type: &str,
     ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<SegmentId>>>> {
-        // Use extension based on content type for readability.
         let ext = match content_type {
             "application/json" => ".json",
             _ => ".bin",
         };
         let key = self.key_for(seq, ext);
-        let s3 = self.s3.clone();
-        let payload = payload.to_vec();
+        let fs = self.fs.clone();
+        let body = payload.to_vec();
+        let ct = if content_type.is_empty() {
+            None
+        } else {
+            Some(content_type.to_string())
+        };
         Box::pin(async move {
-            let mut file = s3
-                .open_options(
-                    &Path::from(key.clone()),
-                    OpenOptions::default()
-                        .create(true)
-                        .truncate(true)
-                        .write(true),
-                )
+            let path = Path::parse(&key).map_err(|e| crate::types::Error::Other(Box::new(e)))?;
+            fs.put_conditional(&path, body, ct.as_deref(), CasCondition::IfNotExists)
                 .await
-                .map_err(|e| crate::types::Error::Other(Box::new(e)))?;
-            let (res, _) = file.write_all(Bytes::from(payload)).await;
-            res.map_err(|e| crate::types::Error::Other(Box::new(e)))?;
-            // Finalize MPU / publish visibility when applicable
-            FileCommit::commit(&mut file)
-                .await
-                .map_err(|e| crate::types::Error::Other(Box::new(e)))?;
+                .map_err(map_fs_error)?;
             Ok(SegmentId { seq })
         })
     }
 
     fn get(&self, id: &SegmentId) -> Pin<Box<dyn MaybeSendFuture<Output = Result<Vec<u8>>>>> {
-        let s3 = self.s3.clone();
+        let fs = self.fs.clone();
         let key_json = self.key_for(id.seq, ".json");
         let key_bin = self.key_for(id.seq, ".bin");
         Box::pin(async move {
-            // Helper to read whole object
-            async fn read_all(s3: &AmazonS3, key: &str) -> Result<Vec<u8>, crate::types::Error> {
-                use fusio::{fs::Fs, path::Path as FusioPath, Read};
-                let mut f = s3
-                    .open(&FusioPath::from(key.to_string()))
+            async fn read_all(fs: &AmazonS3, key: &str) -> Result<Vec<u8>, crate::types::Error> {
+                let path = Path::parse(key).map_err(|e| crate::types::Error::Other(Box::new(e)))?;
+                let mut f = fs
+                    .open(&path)
                     .await
                     .map_err(|e| crate::types::Error::Other(Box::new(e)))?;
                 let (res, buf) = f.read_to_end_at(Vec::new(), 0).await;
@@ -105,9 +92,9 @@ impl SegmentIo for S3SegmentStore {
                 Ok(buf)
             }
 
-            match read_all(&s3, &key_json).await {
+            match read_all(&fs, &key_json).await {
                 Ok(v) => Ok(v),
-                Err(_) => read_all(&s3, &key_bin).await,
+                Err(_) => read_all(&fs, &key_bin).await,
             }
         })
     }
@@ -117,14 +104,14 @@ impl SegmentIo for S3SegmentStore {
         from_seq: u64,
         limit: usize,
     ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<Vec<SegmentId>>>>> {
-        let s3 = self.s3.clone();
+        let fs = self.fs.clone();
         let prefix = self.prefix.clone();
         Box::pin(async move {
-            use fusio::{fs::Fs as _, path::Path as FusioPath};
+            use fusio::path::Path as FusioPath;
 
             let mut out = Vec::new();
             let prefix_path = FusioPath::from(prefix.clone());
-            let stream = s3
+            let stream = fs
                 .list(&prefix_path)
                 .await
                 .map_err(|e| crate::types::Error::Other(Box::new(e)))?;
@@ -132,7 +119,7 @@ impl SegmentIo for S3SegmentStore {
             while let Some(item) = stream.next().await {
                 let meta = item.map_err(|e| crate::types::Error::Other(Box::new(e)))?;
                 if let Some(filename) = meta.path.filename() {
-                    if let Some(seq) = S3SegmentStore::parse_seq(filename) {
+                    if let Some(seq) = FsSegmentStore::parse_seq(filename) {
                         if seq >= from_seq {
                             out.push(SegmentId { seq });
                         }
@@ -148,12 +135,12 @@ impl SegmentIo for S3SegmentStore {
     }
 
     fn delete_upto(&self, upto_seq: u64) -> Pin<Box<dyn MaybeSendFuture<Output = Result<()>>>> {
-        let s3 = self.s3.clone();
+        let fs = self.fs.clone();
         let prefix = self.prefix.clone();
         Box::pin(async move {
-            use fusio::{fs::Fs as _, path::Path as FusioPath};
+            use fusio::path::Path as FusioPath;
             let prefix_path = FusioPath::from(prefix.clone());
-            let stream = s3
+            let stream = fs
                 .list(&prefix_path)
                 .await
                 .map_err(|e| crate::types::Error::Other(Box::new(e)))?;
@@ -161,15 +148,21 @@ impl SegmentIo for S3SegmentStore {
             while let Some(item) = stream.next().await {
                 let meta = item.map_err(|e| crate::types::Error::Other(Box::new(e)))?;
                 if let Some(filename) = meta.path.filename() {
-                    if let Some(seq) = S3SegmentStore::parse_seq(filename) {
+                    if let Some(seq) = FsSegmentStore::parse_seq(filename) {
                         if seq <= upto_seq {
-                            // TODO: use batch delete API when available.
-                            let _ = s3.remove(&meta.path).await; // best-effort
+                            let _ = fs.remove(&meta.path).await;
                         }
                     }
                 }
             }
             Ok(())
         })
+    }
+}
+
+fn map_fs_error(err: FsError) -> crate::types::Error {
+    match err {
+        FsError::PreconditionFailed => crate::types::Error::PreconditionFailed,
+        other => crate::types::Error::Other(Box::new(other)),
     }
 }

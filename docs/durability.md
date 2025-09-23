@@ -14,7 +14,7 @@ Notes
 - Range sync is a best-effort optimization on supported OSes and can degrade to full file sync.
 
 ## API Surface (as implemented)
-These traits are additive and do not replace the core `Read`/`Write`. Policy enums live in `fusio-core` (`DurabilityLevel`); durability traits live in `fusio`.
+These traits are additive and do not replace the core `Read`/`Write`. Policy enums and durability traits both live in `fusio`.
 
 ```rust
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -84,7 +84,7 @@ Helpers
 
 - Backend notes
 - Local FS (POSIX/Windows): `sync_data`/`sync_all`; on Windows both map to `FlushFileBuffers`. Parent `sync_parent` for create/rename on POSIX.
-- Object Store: `commit()` finalizes visibility (e.g., S3 MPU complete). No rename/dirsync.
+- Object Store: `commit()` finalizes visibility (e.g., S3 MPU complete). No rename/dirsync. `fusio-manifest` always drives S3 uploads to the commit barrier; alternate durability levels will be introduced only when we can map them to real backend behaviour.
 - OPFS/WASM: treat as best-effort; `flush` only.
 
 ## Usage Patterns

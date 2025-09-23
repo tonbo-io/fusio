@@ -6,7 +6,7 @@ pub mod head;
 pub mod lease;
 pub mod segment;
 
-use crate::{db::Manifest, options::Options};
+use crate::{manifest::Manifest, options::Options};
 
 /// Test-only type alias for a Manifest backed by in-memory stores.
 pub type MemManifest<K, V> = Manifest<

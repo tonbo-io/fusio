@@ -60,6 +60,23 @@ impl CheckpointStore for MemCheckpointStore {
         })
     }
 
+    fn get_checkpoint_meta(
+        &self,
+        id: &CheckpointId,
+    ) -> core::pin::Pin<Box<dyn MaybeSendFuture<Output = Result<CheckpointMeta>>>> {
+        let inner = self.inner.clone();
+        let id = id.clone();
+        Box::pin(async move {
+            let guard = inner.lock().unwrap();
+            let meta = guard
+                .iter()
+                .find(|(cid, _, _, _)| *cid == id)
+                .map(|(_, m, _, _)| m.clone())
+                .ok_or_else(|| crate::types::Error::Corrupt("checkpoint not found".into()))?;
+            Ok(meta)
+        })
+    }
+
     fn list(
         &self,
     ) -> core::pin::Pin<

@@ -1,6 +1,6 @@
-/// Logical sequence number for records/batches.
+/// Monotonic transaction identifier assigned per committed session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
-pub struct Lsn(pub u64);
+pub struct TxnId(pub u64);
 
 /// Identifier of an immutable segment (sequence number).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -22,10 +22,3 @@ pub enum Error {
 }
 
 pub type Result<T, E = Error> = core::result::Result<T, E>;
-
-/// Commit metadata returned after a durability barrier.
-#[derive(Debug, Clone)]
-pub struct Commit {
-    pub lsn: Lsn,
-    pub segment_id: Option<SegmentId>,
-}

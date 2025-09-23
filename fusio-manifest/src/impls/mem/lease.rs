@@ -1,7 +1,10 @@
 #![cfg(test)]
 
 use core::pin::Pin;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::{
+    sync::atomic::{AtomicU64, Ordering},
+    time::Duration,
+};
 
 use fusio_core::MaybeSendFuture;
 
@@ -26,20 +29,20 @@ impl MemLeaseStore {
 impl LeaseStore for MemLeaseStore {
     fn create(
         &self,
-        snapshot_lsn: u64,
+        snapshot_txn_id: u64,
         _head_tag: Option<HeadTag>,
-        ttl_ms: u64,
+        ttl: Duration,
     ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<LeaseHandle>>>> {
         let id = self.ctr.fetch_add(1, Ordering::Relaxed) + 1;
         let lease = LeaseHandle {
             id: LeaseId(format!("lease-{:020}", id)),
-            snapshot_lsn,
+            snapshot_txn_id,
         };
         let now_ms = unix_ms();
         let active = ActiveLease {
             id: lease.id.clone(),
-            snapshot_lsn,
-            expires_at_ms: now_ms + ttl_ms,
+            snapshot_txn_id,
+            expires_at: Duration::from_millis(now_ms).saturating_add(ttl),
         };
         let inner = self.inner.clone();
         Box::pin(async move {
@@ -51,7 +54,7 @@ impl LeaseStore for MemLeaseStore {
     fn heartbeat(
         &self,
         lease: &LeaseHandle,
-        ttl_ms: u64,
+        ttl: Duration,
     ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<()>>>> {
         let id = lease.id.clone();
         let inner = self.inner.clone();
@@ -59,7 +62,7 @@ impl LeaseStore for MemLeaseStore {
             let now = unix_ms();
             let mut g = inner.lock().unwrap();
             if let Some(l) = g.iter_mut().find(|l| l.id == id) {
-                l.expires_at_ms = now + ttl_ms;
+                l.expires_at = Duration::from_millis(now).saturating_add(ttl);
             }
             Ok(())
         })
@@ -81,12 +84,9 @@ impl LeaseStore for MemLeaseStore {
     ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<Vec<ActiveLease>>>>> {
         let inner = self.inner.clone();
         Box::pin(async move {
+            let now = Duration::from_millis(now_ms);
             let g = inner.lock().unwrap();
-            let v = g
-                .iter()
-                .filter(|l| l.expires_at_ms > now_ms)
-                .cloned()
-                .collect();
+            let v = g.iter().filter(|l| l.expires_at > now).cloned().collect();
             Ok(v)
         })
     }

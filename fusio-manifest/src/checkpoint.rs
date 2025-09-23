@@ -30,6 +30,20 @@ pub trait CheckpointStore: MaybeSend + MaybeSync + Clone {
         id: &CheckpointId,
     ) -> core::pin::Pin<Box<dyn MaybeSendFuture<Output = Result<(CheckpointMeta, Vec<u8>)>>>>;
 
+    fn get_checkpoint_meta(
+        &self,
+        id: &CheckpointId,
+    ) -> core::pin::Pin<Box<dyn MaybeSendFuture<Output = Result<CheckpointMeta>>>>
+    where
+        Self: Sized,
+    {
+        let fut = self.get_checkpoint(id);
+        Box::pin(async move {
+            let (meta, _) = fut.await?;
+            Ok(meta)
+        })
+    }
+
     /// List all checkpoints (meta only). Default returns Unimplemented.
     fn list(
         &self,

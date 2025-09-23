@@ -1,10 +1,10 @@
-use crate::{checkpoint::CheckpointId, head::HeadTag, types::Lsn};
+use crate::{checkpoint::CheckpointId, head::HeadTag, types::TxnId};
 
 /// Stable read snapshot used for serializable reads.
 #[derive(Debug, Clone)]
 pub struct Snapshot {
     pub head_tag: Option<HeadTag>,
-    pub lsn: Lsn,
+    pub txn_id: TxnId,
     pub last_segment_seq: Option<u64>,
     /// If a checkpoint is published, last seq included in it.
     pub checkpoint_seq: Option<u64>,

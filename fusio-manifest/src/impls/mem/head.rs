@@ -43,7 +43,7 @@ impl HeadStore for MemHeadStore {
                 let tag = HeadTag(format!(
                     "v{}:{}:{}",
                     head.version,
-                    head.last_lsn,
+                    head.last_txn_id,
                     guard.is_some()
                 ));
                 *guard = Some((head.clone(), tag.clone()));
@@ -51,7 +51,7 @@ impl HeadStore for MemHeadStore {
             }
             (Some((_h, cur)), PutCondition::IfMatch(expected)) => {
                 if *cur == expected {
-                    let tag = HeadTag(format!("v{}:{}:{}", head.version, head.last_lsn, true));
+                    let tag = HeadTag(format!("v{}:{}:{}", head.version, head.last_txn_id, true));
                     *guard = Some((head.clone(), tag.clone()));
                     Ok(tag)
                 } else {

@@ -1,8 +1,10 @@
+use core::pin::Pin;
 use std::{str::FromStr, sync::Arc};
 
 use async_stream::stream;
 use bytes::{Buf, Bytes};
 use chrono::{DateTime, Utc};
+use fusio_core::MaybeSendFuture;
 use futures_core::Stream;
 use http::{Method, Request};
 use http_body_util::{BodyExt, Empty};
@@ -12,7 +14,8 @@ use url::Url;
 use super::{credential::AwsCredential, options::S3Options, S3Error, S3File};
 use crate::{
     error::Error,
-    fs::{FileMeta, FileSystemTag, Fs, OpenOptions},
+    fs::{CasCondition, FileMeta, FileSystemTag, Fs, FsCas, OpenOptions},
+    impls::remotes::aws::head::{get_with_etag, put_if_match, put_if_none_match, ETag},
     path::Path,
     remotes::{
         aws::{
@@ -302,6 +305,46 @@ impl Fs for AmazonS3 {
     async fn link(&self, _: &Path, _: &Path) -> Result<(), Error> {
         Err(Error::Unsupported {
             message: "s3 does not support link file".to_string(),
+        })
+    }
+}
+
+impl FsCas for AmazonS3 {
+    fn load_with_tag(
+        &self,
+        path: &Path,
+    ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<Option<(Vec<u8>, String)>, Error>> + '_>> {
+        let key = path.to_string();
+        Box::pin(async move {
+            match get_with_etag(self, &key).await? {
+                Some((bytes, etag)) => Ok(Some((bytes.to_vec(), etag.0))),
+                None => Ok(None),
+            }
+        })
+    }
+
+    fn put_conditional(
+        &self,
+        path: &Path,
+        payload: Vec<u8>,
+        content_type: Option<&str>,
+        condition: CasCondition,
+    ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<String, Error>> + '_>> {
+        let key = path.to_string();
+        let ct = content_type.map(|s| s.to_string());
+        let payload = Bytes::from(payload);
+        Box::pin(async move {
+            let ct_ref = ct.as_deref();
+            let result = match condition {
+                CasCondition::IfNotExists => {
+                    put_if_none_match(self, &key, payload.clone(), ct_ref).await
+                }
+                CasCondition::IfMatch(tag) => {
+                    let etag = ETag(tag);
+                    put_if_match(self, &key, payload, &etag, ct_ref).await
+                }
+            }?;
+            Ok(result.0)
         })
     }
 }

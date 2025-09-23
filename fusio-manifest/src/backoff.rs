@@ -1,4 +1,7 @@
 use core::time::Duration;
+use std::sync::Arc;
+
+use fusio::executor::Timer;
 
 use crate::types::Error;
 
@@ -72,7 +75,7 @@ impl ExponentialBackoff {
             .unwrap_or_default()
             .as_nanos() as u64;
         Self {
-            pol: pol,
+            pol,
             attempt: 0,
             start: std::time::Instant::now(),
             rng: seed ^ 0x9e3779b97f4a7c15,
@@ -85,8 +88,8 @@ impl ExponentialBackoff {
             || self.start.elapsed() >= Duration::from_millis(self.pol.max_elapsed_ms)
     }
 
-    /// Compute the next delay in milliseconds and advance the attempt counter.
-    pub fn next_delay_ms(&mut self) -> u64 {
+    /// Compute the next delay and advance the attempt counter.
+    pub fn next_delay(&mut self) -> Duration {
         let a = self.attempt as u64;
         self.attempt = self.attempt.saturating_add(1);
         // multiplier^a with integer math in x100 fixed point
@@ -109,7 +112,7 @@ impl ExponentialBackoff {
         let high = 1.0 + jf;
         let factor = low + (high - low) * jitter;
         let out = (unclamped as f64 * factor) as u64;
-        core::cmp::max(out, 1)
+        Duration::from_millis(core::cmp::max(out, 1))
     }
 
     fn next_unit(&mut self) -> f64 {
@@ -125,33 +128,7 @@ impl ExponentialBackoff {
     }
 }
 
-/// Sleep for `ms` milliseconds using the available runtime.
-pub async fn sleep_ms_async(ms: u64) {
-    if ms == 0 {
-        return;
-    }
-    // Blocking sleep; runtime-agnostic. In async runtimes this blocks the thread,
-    // but our retry budgets are small and this keeps dependencies minimal.
-    std::thread::sleep(Duration::from_millis(ms));
-}
-
-/// Prefer a provided Sleeper; fall back to blocking sleep otherwise.
-#[cfg(feature = "exec")]
-pub async fn sleep_ms_with(
-    ms: u64,
-    sleeper: Option<&(dyn fusio::executor::Sleeper + Send + Sync)>,
-) {
-    if let Some(s) = sleeper {
-        s.sleep(Duration::from_millis(ms)).await;
-    } else {
-        sleep_ms_async(ms).await;
-    }
-}
-
-#[cfg(not(feature = "exec"))]
-pub async fn sleep_ms_with(ms: u64, _sleeper: Option<&()>) {
-    sleep_ms_async(ms).await;
-}
+pub type TimerHandle = Arc<dyn Timer + Send + Sync>;
 
 #[cfg(test)]
 mod tests {
@@ -163,9 +140,9 @@ mod tests {
         let mut bo = ExponentialBackoff::new(pol);
         let mut delays = Vec::new();
         for _ in 0..pol.max_retries {
-            delays.push(bo.next_delay_ms());
+            delays.push(bo.next_delay());
         }
-        assert!(delays.iter().all(|d| *d >= 1));
+        assert!(delays.iter().all(|d| *d >= Duration::from_millis(1)));
         assert!(bo.exhausted());
     }
 

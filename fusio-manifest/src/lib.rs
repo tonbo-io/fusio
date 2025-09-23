@@ -2,21 +2,23 @@
 
 pub(crate) mod checkpoint;
 pub mod compactor; // Headless remote compactor façade
-pub mod db;
 pub(crate) mod gc; // TODO: GC plan (stub)
 pub(crate) mod head;
 pub(crate) mod lease;
+pub mod manifest;
 pub mod session;
 pub mod snapshot; // Snapshot types and snapshot-bound reader // Unified read/write session API
                   // Re-export lease handle type for public read-lease APIs
 pub use lease::LeaseHandle;
 pub(crate) mod backoff;
+pub use backoff::{BackoffPolicy, TimerHandle};
 pub mod options;
+pub mod retention;
 pub(crate) mod segment;
+pub(crate) mod store;
 pub mod types;
 
 // Ergonomic S3 entrypoint (single config wires all stores).
-#[cfg(any(feature = "aws-tokio", feature = "aws-wasm"))]
 pub mod s3;
 
 // Backend implementations (grouped by provider)
@@ -40,7 +42,7 @@ mod tests {
             version: 1,
             snapshot: None,
             last_segment_seq: None,
-            last_lsn: 7,
+            last_txn_id: 7,
         };
         // First publish should succeed as if_not_exists
         let tag = block_on(store.put(&head, PutCondition::IfNotExists)).unwrap();

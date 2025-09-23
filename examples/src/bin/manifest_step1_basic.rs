@@ -18,22 +18,19 @@ async fn main() -> Result<()> {
     let mut write = manifest.session_write().await?;
     write.put("user:1".into(), "alice".into())?;
     write.put("user:2".into(), "bob".into())?;
-    let commit = write.commit().await?;
-    println!(
-        "commit lsn={} segment={:?}",
-        commit.lsn.0, commit.segment_id
-    );
+    write.commit().await?;
+    println!("commit succeeded");
 
     println!("== step 2: read back with a snapshot");
     let snap = manifest.snapshot().await?;
-    let reader = manifest.session_at(snap.clone());
+    let reader = manifest.session_at(snap).await?;
     for key in ["user:1", "user:2", "user:3"] {
         let value = reader.get(&key.to_string()).await?;
         println!("snapshot {key:?} -> {:?}", value);
     }
 
     println!("== step 3: pin a read session (holds a lease)");
-    let pinned = manifest.session_read(true).await?;
+    let pinned = manifest.session_read().await?;
     let contents = pinned.scan().await?;
     println!("pinned snapshot contents: {:?}", contents);
     pinned.end().await?;

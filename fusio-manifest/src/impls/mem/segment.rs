@@ -33,7 +33,11 @@ impl SegmentIo for MemSegmentStore {
         let ct = content_type.to_string();
         let data = payload.to_vec();
         Box::pin(async move {
-            inner.lock().unwrap().push((seq, data, ct));
+            let mut guard = inner.lock().unwrap();
+            if guard.iter().any(|(existing, _, _)| *existing == seq) {
+                return Err(crate::types::Error::PreconditionFailed);
+            }
+            guard.push((seq, data, ct));
             Ok(SegmentId { seq })
         })
     }

@@ -1,5 +1,3 @@
-#![cfg(all(feature = "aws-tokio"))]
-
 use std::env;
 
 use fusio_manifest as manifest;
@@ -60,6 +58,7 @@ async fn s3_end_to_end_manifest() {
         .sign_payload(true)
         .build();
     let kv: s3::S3Manifest<String, String> = cfg.clone().into();
+    let compactor: s3::S3Compactor<String, String> = kv.compactor();
 
     // Write
     let mut s = kv.session_write().await.unwrap();
@@ -69,11 +68,12 @@ async fn s3_end_to_end_manifest() {
 
     // Read
     let snap = kv.snapshot().await.unwrap();
-    let got_a = kv.session_at(snap.clone()).get(&"a".into()).await.unwrap();
+    let reader = kv.session_at(snap.clone()).await.unwrap();
+    let got_a = reader.get(&"a".into()).await.unwrap();
     assert_eq!(got_a.as_deref(), Some("1"));
 
     // Compact once (publishes a checkpoint)
-    let (_ckpt, _tag) = kv.compact_once().await.unwrap();
+    let (_ckpt, _tag) = compactor.compact_once().await.unwrap();
 
     // Optional best-effort cleanup: remove HEAD object
     let _ = cfg

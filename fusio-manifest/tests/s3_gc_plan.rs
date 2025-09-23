@@ -1,9 +1,7 @@
-#![cfg(all(feature = "aws-tokio"))]
-
 // This test exercises the GC plan phases against real S3. It is ignored by default
 // and requires valid AWS credentials and an existing bucket (see env vars).
 
-use std::env;
+use std::{env, sync::Arc, time::Duration};
 
 use fusio_manifest as manifest;
 
@@ -51,12 +49,12 @@ async fn s3_gc_plan_end_to_end() {
             .as_millis()
     );
 
-    // Options: make GC not_before_ms immediate
+    // Options: make GC not_before immediate
     let mut opts = manifest::options::Options::default();
-    let mut retention = opts.retention;
-    retention.segments_min_ttl_ms = 0;
-    retention.checkpoints_min_ttl_ms = 0;
-    opts.retention = retention;
+    let retention = manifest::retention::DefaultRetention::default()
+        .with_segments_min_ttl(Duration::ZERO)
+        .with_checkpoints_min_ttl(Duration::ZERO);
+    opts.set_retention(Arc::new(retention));
 
     // Manifest for writing
     let cfg = s3::Builder::new(bucket)
@@ -71,6 +69,7 @@ async fn s3_gc_plan_end_to_end() {
         .with_options(opts.clone())
         .build();
     let kv: s3::S3Manifest<String, String> = cfg.clone().into();
+    let comp: s3::S3Compactor<String, String> = kv.compactor();
 
     // Seed two segments (two commits)
     let mut s1 = kv.session_write().await.unwrap();
@@ -82,13 +81,10 @@ async fn s3_gc_plan_end_to_end() {
     let _ = s2.commit().await.unwrap();
 
     // Compact to create a checkpoint
-    let (_ckpt_id, _tag) = kv.compact_once().await.unwrap();
+    let (_ckpt_id, _tag) = comp.compact_once().await.unwrap();
 
     // Create a pinned read lease so watermark reflects current HEAD
-    let _reader = kv.session_read(true).await.unwrap();
-
-    // Headless compactor managing GC plan
-    let comp: s3::S3Compactor<String, String> = cfg.clone().into();
+    let _reader = kv.session_read().await.unwrap();
 
     // Compute
     let _ = comp.gc_compute().await.unwrap();

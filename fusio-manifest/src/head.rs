@@ -24,7 +24,7 @@ pub struct HeadJson {
     pub version: u32,
     pub snapshot: Option<String>,
     pub last_segment_seq: Option<u64>,
-    pub last_lsn: u64,
+    pub last_txn_id: u64,
 }
 
 /// Backend abstraction for publishing and fetching HEAD with conditional semantics.

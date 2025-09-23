@@ -1,10 +1,10 @@
 use std::env;
 
 use fusio_manifest::{
-    backoff::BackoffPolicy,
     options::Options,
     s3,
     types::{Error, Result},
+    BackoffPolicy,
 };
 
 #[tokio::main(flavor = "current_thread")]
@@ -25,6 +25,7 @@ async fn main() -> Result<()> {
 
     let cfg = setup.config.clone().with_options(opts.clone());
     let manifest: s3::S3Manifest<String, String> = cfg.clone().into();
+    let compactor: s3::S3Compactor<String, String> = manifest.compactor();
     let mut tx = manifest.session_write().await?;
     tx.put("config".into(), "s3-example".into())?;
     tx.commit().await?;
@@ -32,10 +33,9 @@ async fn main() -> Result<()> {
     let snapshot = manifest.snapshot().await?;
     println!("S3 snapshot -> {:?}", snapshot);
 
-    let (_ckpt, _tag) = manifest.compact_once().await?;
+    let (_ckpt, _tag) = compactor.compact_once().await?;
     println!("wrote checkpoint and published head");
 
-    let compactor: s3::S3Compactor<String, String> = cfg.clone().into();
     compactor.run_once().await?;
 
     println!("cleanup: S3 prefix {}", cfg.prefix);

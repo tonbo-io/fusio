@@ -1,19 +1,17 @@
 use core::pin::Pin;
+use std::time::Duration;
 
-use bytes::Bytes;
 use fusio::{
-    fs::Fs as _,
-    impls::remotes::aws::{
-        fs::AmazonS3,
-        head::{get_with_etag, put_if_match, put_if_none_match, ETag},
-    },
+    fs::{CasCondition, Fs, FsCas},
+    impls::remotes::aws::fs::AmazonS3,
     path::Path,
-    Read,
+    Error as FsError, Read,
 };
 use fusio_core::MaybeSendFuture;
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    backoff::{BackoffPolicy, ExponentialBackoff, TimerHandle},
     head::HeadTag,
     lease::{ActiveLease, LeaseHandle, LeaseId, LeaseStore},
     types::Error,
@@ -22,23 +20,35 @@ use crate::{
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct LeaseDoc {
     id: String,
-    snapshot_lsn: u64,
+    snapshot_txn_id: u64,
     expires_at_ms: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     head_tag: Option<String>,
 }
 
-/// S3-backed LeaseStore that keeps JSON docs under `<prefix>/leases/`.
+/// Lease store backed by an Amazon S3 filesystem handle.
 #[derive(Clone)]
-pub struct S3LeaseStore {
-    s3: AmazonS3,
+pub struct FsLeaseStore {
+    fs: AmazonS3,
     prefix: String,
+    backoff: BackoffPolicy,
+    timer: TimerHandle,
 }
 
-impl S3LeaseStore {
-    pub fn new(s3: AmazonS3, prefix: impl Into<String>) -> Self {
+impl FsLeaseStore {
+    pub fn new(
+        fs: AmazonS3,
+        prefix: impl Into<String>,
+        backoff: BackoffPolicy,
+        timer: TimerHandle,
+    ) -> Self {
         let prefix = prefix.into().trim_end_matches('/').to_string();
-        Self { s3, prefix }
+        Self {
+            fs,
+            prefix,
+            backoff,
+            timer,
+        }
     }
 
     fn key_for(&self, id: &str) -> String {
@@ -57,52 +67,67 @@ impl S3LeaseStore {
     }
 }
 
-impl LeaseStore for S3LeaseStore {
+impl LeaseStore for FsLeaseStore {
     fn create(
         &self,
-        snapshot_lsn: u64,
+        snapshot_txn_id: u64,
         head_tag: Option<HeadTag>,
-        ttl_ms: u64,
+        ttl: Duration,
     ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<LeaseHandle, crate::types::Error>>>> {
-        let s3 = self.s3.clone();
+        let fs = self.fs.clone();
         let prefix = self.prefix.clone();
+        let timer = self.timer.clone();
+        let backoff_pol = self.backoff;
         Box::pin(async move {
-            let now = Self::unix_ms();
-            let expires_at_ms = now.saturating_add(ttl_ms);
-            // Deterministic unique-ish id with retry on collision: lease-<ms>-<ctr>
-            let mut ctr: u32 = 0;
+            let ttl_ms = ttl.as_millis().min(u128::from(u64::MAX)) as u64;
+            let mut attempt: u32 = 0;
+            let mut backoff = ExponentialBackoff::new(backoff_pol);
             loop {
-                let id = if ctr == 0 {
+                let now = Self::unix_ms();
+                let expires_at_ms = now.saturating_add(ttl_ms);
+                let id = if attempt == 0 {
                     format!("lease-{}", now)
                 } else {
-                    format!("lease-{}-{}", now, ctr)
+                    format!("lease-{}-{}", now, attempt)
                 };
-                let key = format!("{}/leases/{}.json", prefix, id);
+                let key = if prefix.is_empty() {
+                    format!("leases/{}.json", id)
+                } else {
+                    format!("{}/leases/{}.json", prefix, id)
+                };
                 let doc = LeaseDoc {
                     id: id.clone(),
-                    snapshot_lsn,
+                    snapshot_txn_id,
                     expires_at_ms,
                     head_tag: head_tag.as_ref().map(|t| t.0.clone()),
                 };
                 let body = serde_json::to_vec(&doc)
                     .map_err(|e| Error::Corrupt(format!("lease encode: {e}")))?;
-                match put_if_none_match(&s3, &key, Bytes::from(body), Some("application/json"))
+                let path = Path::parse(&key).map_err(|e| Error::Other(Box::new(e)))?;
+                match fs
+                    .put_conditional(
+                        &path,
+                        body,
+                        Some("application/json"),
+                        CasCondition::IfNotExists,
+                    )
                     .await
                 {
-                    Ok(_etag) => {
+                    Ok(_) => {
                         return Ok(LeaseHandle {
                             id: LeaseId(id),
-                            snapshot_lsn,
+                            snapshot_txn_id,
                         });
                     }
-                    Err(_e) => {
-                        // TODO: check error code for 412; backoff with jitter on busy
-                        // prefixes.
-                        ctr = ctr.saturating_add(1);
-                        if ctr > 16 {
+                    Err(FsError::PreconditionFailed) => {
+                        attempt = attempt.saturating_add(1);
+                        if backoff.exhausted() {
                             return Err(Error::PreconditionFailed);
                         }
+                        let delay = backoff.next_delay();
+                        timer.sleep(delay).await;
                     }
+                    Err(other) => return Err(Error::Other(Box::new(other))),
                 }
             }
         })
@@ -111,33 +136,35 @@ impl LeaseStore for S3LeaseStore {
     fn heartbeat(
         &self,
         lease: &LeaseHandle,
-        ttl_ms: u64,
+        ttl: Duration,
     ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<(), crate::types::Error>>>> {
-        let s3 = self.s3.clone();
+        let fs = self.fs.clone();
         let key = self.key_for(&lease.id.0);
         Box::pin(async move {
-            // Load with ETag, update expiry, write If-Match
-            let (bytes, etag) = match get_with_etag(&s3, &key).await {
+            let path = Path::parse(&key).map_err(|e| Error::Other(Box::new(e)))?;
+            let (bytes, tag) = match fs.load_with_tag(&path).await {
                 Ok(Some(v)) => v,
                 Ok(None) => return Err(Error::Corrupt("lease missing".into())),
-                Err(e) => return Err(Error::Other(Box::new(e))),
+                Err(err) => return Err(Error::Other(Box::new(err))),
             };
             let mut doc: LeaseDoc = serde_json::from_slice(&bytes)
                 .map_err(|e| Error::Corrupt(format!("lease decode: {e}")))?;
-            // Preserve id/snapshot_lsn; extend expiry
             let now = Self::unix_ms();
+            let ttl_ms = ttl.as_millis().min(u128::from(u64::MAX)) as u64;
             doc.expires_at_ms = now.saturating_add(ttl_ms);
             let body = serde_json::to_vec(&doc)
                 .map_err(|e| Error::Corrupt(format!("lease encode: {e}")))?;
-            let _ = put_if_match(
-                &s3,
-                &key,
-                Bytes::from(body),
-                &ETag(etag.0),
+            fs.put_conditional(
+                &path,
+                body,
                 Some("application/json"),
+                CasCondition::IfMatch(tag),
             )
             .await
-            .map_err(|e| Error::Other(Box::new(e)))?;
+            .map_err(|e| match e {
+                FsError::PreconditionFailed => Error::PreconditionFailed,
+                other => Error::Other(Box::new(other)),
+            })?;
             Ok(())
         })
     }
@@ -146,10 +173,12 @@ impl LeaseStore for S3LeaseStore {
         &self,
         lease: LeaseHandle,
     ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<(), crate::types::Error>>>> {
-        let s3 = self.s3.clone();
+        let fs = self.fs.clone();
         let key = self.key_for(&lease.id.0);
         Box::pin(async move {
-            let _ = s3.remove(&Path::from(key)).await; // best-effort
+            if let Ok(path) = Path::parse(&key) {
+                let _ = fs.remove(&path).await;
+            }
             Ok(())
         })
     }
@@ -158,7 +187,7 @@ impl LeaseStore for S3LeaseStore {
         &self,
         now_ms: u64,
     ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<Vec<ActiveLease>, crate::types::Error>>>> {
-        let s3 = self.s3.clone();
+        let fs = self.fs.clone();
         let dir = if self.prefix.is_empty() {
             "leases".to_string()
         } else {
@@ -168,15 +197,14 @@ impl LeaseStore for S3LeaseStore {
             use futures_util::StreamExt;
             let mut out = Vec::new();
             let prefix_path = Path::from(dir.clone());
-            let stream = s3
+            let stream = fs
                 .list(&prefix_path)
                 .await
                 .map_err(|e| Error::Other(Box::new(e)))?;
             futures_util::pin_mut!(stream);
             while let Some(item) = stream.next().await {
                 let meta = item.map_err(|e| Error::Other(Box::new(e)))?;
-                // Read JSON doc
-                let mut f = s3
+                let mut f = fs
                     .open(&meta.path)
                     .await
                     .map_err(|e| Error::Other(Box::new(e)))?;
@@ -186,8 +214,8 @@ impl LeaseStore for S3LeaseStore {
                     if doc.expires_at_ms > now_ms {
                         out.push(ActiveLease {
                             id: LeaseId(doc.id),
-                            snapshot_lsn: doc.snapshot_lsn,
-                            expires_at_ms: doc.expires_at_ms,
+                            snapshot_txn_id: doc.snapshot_txn_id,
+                            expires_at: Duration::from_millis(doc.expires_at_ms),
                         });
                     }
                 }

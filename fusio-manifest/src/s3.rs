@@ -1,4 +1,4 @@
-#![cfg(any(feature = "aws-tokio", feature = "aws-wasm"))]
+use core::hash::Hash;
 
 use fusio::impls::remotes::aws::{
     credential::AwsCredential,
@@ -8,9 +8,12 @@ use fusio::impls::remotes::aws::{
 use crate::{
     backoff::BackoffPolicy,
     compactor::Compactor,
-    db::Manifest,
-    impls::s3::{S3CheckpointStore, S3GcPlanStore, S3HeadStore, S3LeaseStore, S3SegmentStore},
+    impls::fs::{FsCheckpointStore, FsGcPlanStore, FsHeadStore, FsLeaseStore, FsSegmentStore},
+    manifest::Manifest,
     options::Options,
+    session::Session,
+    snapshot::Snapshot,
+    types::Result,
 };
 
 /// Default file name for the manifest head object.
@@ -154,59 +157,58 @@ fn join_path(prefix: &str, child: &str) -> String {
 }
 
 /// Public wrapper over a Manifest with S3 stores to avoid leaking store types.
+type HeadStore = FsHeadStore<AmazonS3>;
+type SegmentStore = FsSegmentStore;
+type CheckpointStore = FsCheckpointStore;
+type LeaseStore = FsLeaseStore;
+
 pub struct S3Manifest<K, V> {
-    inner: Manifest<K, V, S3HeadStore, S3SegmentStore, S3CheckpointStore, S3LeaseStore>,
+    inner: Manifest<K, V, HeadStore, SegmentStore, CheckpointStore, LeaseStore>,
+    cfg: Config,
 }
 
 impl<K, V> S3Manifest<K, V>
 where
-    K: Ord + serde::Serialize + for<'de> serde::Deserialize<'de>,
+    K: PartialOrd + Eq + Hash + serde::Serialize + for<'de> serde::Deserialize<'de>,
     V: serde::Serialize + for<'de> serde::Deserialize<'de>,
 {
     pub async fn session_write(
         &self,
-    ) -> crate::types::Result<
-        crate::session::Session<K, V, S3HeadStore, S3SegmentStore, S3CheckpointStore, S3LeaseStore>,
-    > {
+    ) -> Result<Session<K, V, HeadStore, SegmentStore, CheckpointStore, LeaseStore>> {
         self.inner.session_write().await
     }
 
     pub async fn session_read(
         &self,
-        pin: bool,
-    ) -> crate::types::Result<
-        crate::session::Session<K, V, S3HeadStore, S3SegmentStore, S3CheckpointStore, S3LeaseStore>,
-    > {
-        self.inner.session_read(pin).await
+    ) -> Result<Session<K, V, HeadStore, SegmentStore, CheckpointStore, LeaseStore>> {
+        self.inner.session_read().await
     }
 
-    pub fn session_at(
+    pub async fn session_at(
         &self,
-        snapshot: crate::snapshot::Snapshot,
-    ) -> crate::session::Session<K, V, S3HeadStore, S3SegmentStore, S3CheckpointStore, S3LeaseStore>
-    {
-        self.inner.session_at(snapshot)
+        snapshot: Snapshot,
+    ) -> Result<Session<K, V, HeadStore, SegmentStore, CheckpointStore, LeaseStore>> {
+        self.inner.session_at(snapshot).await
     }
 
-    pub async fn snapshot(&self) -> crate::types::Result<crate::snapshot::Snapshot> {
+    pub async fn snapshot(&self) -> Result<Snapshot> {
         self.inner.snapshot().await
     }
 
-    pub async fn compact_once(
-        &self,
-    ) -> crate::types::Result<(crate::checkpoint::CheckpointId, crate::head::HeadTag)> {
-        self.inner.compact_once().await
-    }
-
-    pub async fn get_latest(&self, key: &K) -> crate::types::Result<Option<V>> {
+    pub async fn get_latest(&self, key: &K) -> Result<Option<V>> {
         self.inner.get_latest(key).await
     }
 
     pub async fn scan_latest(
         &self,
         range: Option<crate::snapshot::ScanRange<K>>,
-    ) -> crate::types::Result<Vec<(K, V)>> {
+    ) -> Result<Vec<(K, V)>> {
         self.inner.scan_latest(range).await
+    }
+
+    /// Construct an `S3Compactor` over the same configuration as this manifest.
+    pub fn compactor(&self) -> S3Compactor<K, V> {
+        self.cfg.clone().into()
     }
 }
 
@@ -214,28 +216,40 @@ where
 
 /// Wrapper that hides the GC plan store and exposes ergonomic GC methods.
 pub struct S3Compactor<K, V> {
-    inner: Compactor<K, V, S3HeadStore, S3SegmentStore, S3CheckpointStore, S3LeaseStore>,
-    plan: S3GcPlanStore,
+    inner: Compactor<K, V, HeadStore, SegmentStore, CheckpointStore, LeaseStore>,
+    plan: FsGcPlanStore<AmazonS3>,
 }
 
 impl<K, V> S3Compactor<K, V>
 where
-    K: Ord + serde::Serialize + for<'de> serde::Deserialize<'de>,
+    K: PartialOrd + Eq + Hash + serde::Serialize + for<'de> serde::Deserialize<'de>,
     V: serde::Serialize + for<'de> serde::Deserialize<'de>,
 {
-    pub async fn run_once(&self) -> crate::types::Result<()> {
+    pub async fn compact_once(
+        &self,
+    ) -> Result<(crate::checkpoint::CheckpointId, crate::head::HeadTag)> {
+        self.inner.compact_once().await
+    }
+
+    pub async fn compact_and_gc(
+        &self,
+    ) -> Result<(crate::checkpoint::CheckpointId, crate::head::HeadTag)> {
+        self.inner.compact_and_gc().await
+    }
+
+    pub async fn run_once(&self) -> Result<()> {
         self.inner.run_once().await
     }
 
-    pub async fn gc_compute(&self) -> crate::types::Result<Option<crate::gc::GcTag>> {
+    pub async fn gc_compute(&self) -> Result<Option<crate::gc::GcTag>> {
         self.inner.gc_compute(&self.plan).await
     }
 
-    pub async fn gc_apply(&self) -> crate::types::Result<()> {
+    pub async fn gc_apply(&self) -> Result<()> {
         self.inner.gc_apply(&self.plan).await
     }
 
-    pub async fn gc_delete_and_reset(&self) -> crate::types::Result<()> {
+    pub async fn gc_delete_and_reset(&self) -> Result<()> {
         self.inner.gc_delete_and_reset(&self.plan).await
     }
 }
@@ -243,22 +257,33 @@ where
 /// Open an S3 compactor over the given config (consumes `Config`).
 pub fn compactor<K, V>(cfg: Config) -> S3Compactor<K, V>
 where
-    K: Ord + serde::Serialize + for<'de> serde::Deserialize<'de>,
+    K: PartialOrd + Eq + Hash + serde::Serialize + for<'de> serde::Deserialize<'de>,
     V: serde::Serialize + for<'de> serde::Deserialize<'de>,
 {
-    let head = S3HeadStore::new(cfg.s3.clone(), cfg.head_key());
-    let segs = S3SegmentStore::new(cfg.s3.clone(), join_path(&cfg.prefix, "segments"));
-    let ckpt = S3CheckpointStore::new(cfg.s3.clone(), cfg.prefix.clone());
-    let leases = S3LeaseStore::new(cfg.s3.clone(), cfg.prefix.clone());
-    let inner = Compactor::<K, V, _, _, _, _>::new(head, segs, ckpt, leases, cfg.opts.clone());
-    let plan = S3GcPlanStore::new(cfg.s3.clone(), cfg.prefix.clone());
+    let head = FsHeadStore::new(cfg.s3.clone(), cfg.head_key());
+    let segs = FsSegmentStore::new(cfg.s3.clone(), join_path(&cfg.prefix, "segments"));
+    let ckpt = FsCheckpointStore::new(cfg.s3.clone(), cfg.prefix.clone());
+    let leases = FsLeaseStore::new(
+        cfg.s3.clone(),
+        cfg.prefix.clone(),
+        cfg.opts.backoff,
+        cfg.opts.timer.clone(),
+    );
+    let opts = cfg.opts.clone();
+    let inner = Compactor::<K, V, _, _, _, _>::new(head, segs, ckpt, leases, opts.clone());
+    let plan = FsGcPlanStore::new(
+        cfg.s3.clone(),
+        cfg.prefix.clone(),
+        opts.backoff,
+        opts.timer.clone(),
+    );
     S3Compactor { inner, plan }
 }
 
 /// Open using a `Builder`, constructing `AmazonS3` internally.
 pub fn open_with_builder<K, V>(builder: Builder) -> S3Manifest<K, V>
 where
-    K: Ord + serde::Serialize + for<'de> serde::Deserialize<'de>,
+    K: PartialOrd + Eq + Hash + serde::Serialize + for<'de> serde::Deserialize<'de>,
     V: serde::Serialize + for<'de> serde::Deserialize<'de>,
 {
     let cfg = builder.build();
@@ -268,7 +293,7 @@ where
 /// Create a compactor using a `Builder`, constructing `AmazonS3` internally.
 pub fn compactor_with_builder<K, V>(builder: Builder) -> S3Compactor<K, V>
 where
-    K: Ord + serde::Serialize + for<'de> serde::Deserialize<'de>,
+    K: PartialOrd + Eq + Hash + serde::Serialize + for<'de> serde::Deserialize<'de>,
     V: serde::Serialize + for<'de> serde::Deserialize<'de>,
 {
     let cfg = builder.build();
@@ -277,22 +302,34 @@ where
 
 impl<K, V> From<Config> for S3Manifest<K, V>
 where
-    K: Ord + serde::Serialize + for<'de> serde::Deserialize<'de>,
+    K: PartialOrd + Eq + Hash + serde::Serialize + for<'de> serde::Deserialize<'de>,
     V: serde::Serialize + for<'de> serde::Deserialize<'de>,
 {
     fn from(cfg: Config) -> Self {
-        let head = S3HeadStore::new(cfg.s3.clone(), cfg.head_key());
-        let segs = S3SegmentStore::new(cfg.s3.clone(), join_path(&cfg.prefix, "segments"));
-        let ckpt = S3CheckpointStore::new(cfg.s3.clone(), cfg.prefix.clone());
-        let leases = S3LeaseStore::new(cfg.s3.clone(), cfg.prefix.clone());
-        let inner = Manifest::new_with_opts(head, segs, ckpt, leases, cfg.opts.clone());
-        S3Manifest { inner }
+        let cfg_cloned = cfg.clone();
+        let head = FsHeadStore::new(cfg_cloned.s3.clone(), cfg_cloned.head_key());
+        let segs = FsSegmentStore::new(
+            cfg_cloned.s3.clone(),
+            join_path(&cfg_cloned.prefix, "segments"),
+        );
+        let ckpt = FsCheckpointStore::new(cfg_cloned.s3.clone(), cfg_cloned.prefix.clone());
+        let leases = FsLeaseStore::new(
+            cfg_cloned.s3.clone(),
+            cfg_cloned.prefix.clone(),
+            cfg_cloned.opts.backoff,
+            cfg_cloned.opts.timer.clone(),
+        );
+        let inner = Manifest::new_with_opts(head, segs, ckpt, leases, cfg_cloned.opts.clone());
+        S3Manifest {
+            inner,
+            cfg: cfg_cloned,
+        }
     }
 }
 
 impl<K, V> From<Config> for S3Compactor<K, V>
 where
-    K: Ord + serde::Serialize + for<'de> serde::Deserialize<'de>,
+    K: PartialOrd + Eq + Hash + serde::Serialize + for<'de> serde::Deserialize<'de>,
     V: serde::Serialize + for<'de> serde::Deserialize<'de>,
 {
     fn from(cfg: Config) -> Self {
