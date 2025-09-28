@@ -2,17 +2,19 @@
 
 pub(crate) mod checkpoint;
 pub mod compactor; // Headless remote compactor façade
-pub(crate) mod gc; // TODO: GC plan (stub)
+pub(crate) mod gc;
 pub(crate) mod head;
 pub(crate) mod lease;
 pub mod manifest;
 pub mod session;
 pub mod snapshot; // Snapshot types and snapshot-bound reader // Unified read/write session API
                   // Re-export lease handle type for public read-lease APIs
-pub use lease::LeaseHandle;
+pub use lease::{keeper::LeaseKeeper, LeaseHandle};
 pub(crate) mod backoff;
-pub use backoff::{BackoffPolicy, TimerHandle};
-pub mod options;
+pub use backoff::BackoffPolicy;
+pub mod context;
+pub use context::ManifestContext;
+pub use fusio::executor::BlockingExecutor;
 pub mod retention;
 pub(crate) mod segment;
 pub(crate) mod store;
@@ -21,14 +23,14 @@ pub mod types;
 // Ergonomic S3 entrypoint (single config wires all stores).
 pub mod s3;
 
-// Backend implementations (grouped by provider)
-pub(crate) mod impls;
+#[cfg(test)]
+pub(crate) mod testing;
 
 #[cfg(test)]
 mod tests {
     use crate::{
         head::{HeadJson, HeadStore},
-        impls::mem::head::MemHeadStore,
+        testing::new_inmemory_stores,
         types::Error,
     };
 
@@ -37,7 +39,7 @@ mod tests {
         use futures_executor::block_on;
 
         use crate::head::PutCondition;
-        let store = MemHeadStore::new();
+        let (store, _, _, _) = new_inmemory_stores();
         let head = HeadJson {
             version: 1,
             snapshot: None,
@@ -67,20 +69,18 @@ mod tests {
 mod segment_tests {
     use futures_executor::block_on;
 
-    use crate::segment::SegmentIo;
+    use crate::{segment::SegmentIo, testing::new_inmemory_stores};
 
     #[test]
     fn mem_segment_put_get_list() {
-        use crate::impls::mem::segment::MemSegmentStore;
-
-        let store = MemSegmentStore::new();
+        let (_, store, _, _) = new_inmemory_stores();
         block_on(async {
             let id1 = store
-                .put_next(1, b"hello", "application/json")
+                .put_next(1, 10, b"hello", "application/json")
                 .await
                 .unwrap();
             let id2 = store
-                .put_next(3, b"world", "application/json")
+                .put_next(3, 12, b"world", "application/json")
                 .await
                 .unwrap();
             assert_eq!(id1.seq, 1);

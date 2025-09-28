@@ -6,9 +6,13 @@ pub mod head;
 pub mod lease;
 pub mod segment;
 
-use crate::{manifest::Manifest, options::Options};
+use std::{hash::Hash, sync::Arc};
 
-/// Test-only type alias for a Manifest backed by in-memory stores.
+use serde::{de::DeserializeOwned, Serialize};
+
+use crate::{context::ManifestContext, manifest::Manifest, BlockingExecutor};
+
+/// Test-only type alias for a Manifest backed by in-memory stores via the shared Fs implementation.
 pub type MemManifest<K, V> = Manifest<
     K,
     V,
@@ -18,13 +22,18 @@ pub type MemManifest<K, V> = Manifest<
     lease::MemLeaseStore,
 >;
 
-/// Construct an in-memory Manifest with custom Options.
-pub fn new_manifest_with_opts<K, V>(opts: Options) -> MemManifest<K, V> {
-    Manifest::new_with_opts(
+/// Construct an in-memory manifest with a custom context.
+pub fn new_manifest_with_context<K, V, C>(opts: C) -> MemManifest<K, V>
+where
+    K: PartialOrd + Eq + Hash + Serialize + DeserializeOwned,
+    V: Serialize + DeserializeOwned,
+    C: Into<Arc<ManifestContext<BlockingExecutor>>>,
+{
+    Manifest::new_with_context(
         head::MemHeadStore::new(),
         segment::MemSegmentStore::new(),
         checkpoint::MemCheckpointStore::new(),
         lease::MemLeaseStore::new(),
-        opts,
+        opts.into(),
     )
 }

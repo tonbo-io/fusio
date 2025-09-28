@@ -1,37 +1,22 @@
-use std::{collections::HashMap, hash::Hash, time::Duration};
+use std::{collections::HashMap, hash::Hash, marker::PhantomData, sync::Arc, time::Duration};
 
+use fusio::executor::{Executor, Timer};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 use crate::{
     backoff::{classify_error, ExponentialBackoff, RetryClass},
     checkpoint::CheckpointStore,
     head::{HeadJson, HeadStore, PutCondition},
-    lease::{LeaseHandle, LeaseStore},
+    lease::{keeper::LeaseKeeper, LeaseHandle, LeaseStore},
     manifest::{Op, Record, Segment},
     segment::SegmentIo,
     snapshot::{ScanRange, Snapshot},
-    store::StoreHandle,
+    store::Store,
     types::{Error, Result},
+    BlockingExecutor,
 };
 
-/// Unified Session: can be read-only or writable; may pin GC via a lease.
-pub struct Session<K, V, HS, SS, CS, LS>
-where
-    HS: HeadStore + Clone,
-    SS: SegmentIo + Clone,
-    CS: CheckpointStore + Clone,
-    LS: LeaseStore + Clone,
-{
-    store: StoreHandle<HS, SS, CS, LS>,
-    lease: Option<LeaseHandle>,
-    snapshot: Snapshot,
-    writable: bool,
-    pinned: bool,
-    ttl: Duration,
-    staged: Vec<(K, Op, Option<V>)>,
-}
-
-impl<K, V, HS, SS, CS, LS> Session<K, V, HS, SS, CS, LS>
+struct SessionInner<K, V, HS, SS, CS, LS, E = BlockingExecutor>
 where
     K: PartialOrd + Eq + Hash + Serialize + DeserializeOwned,
     V: Serialize + DeserializeOwned,
@@ -39,13 +24,48 @@ where
     SS: SegmentIo + Clone,
     CS: CheckpointStore + Clone,
     LS: LeaseStore + Clone,
+    E: Executor + Timer + Send + Sync + 'static,
 {
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn new(
-        store: StoreHandle<HS, SS, CS, LS>,
+    store: Arc<Store<HS, SS, CS, LS, E>>,
+    lease: Option<LeaseHandle>,
+    snapshot: Snapshot,
+    pinned: bool,
+    ttl: Duration,
+    _marker: PhantomData<(K, V)>,
+}
+
+impl<K, V, HS, SS, CS, LS, E> Drop for SessionInner<K, V, HS, SS, CS, LS, E>
+where
+    K: PartialOrd + Eq + Hash + Serialize + DeserializeOwned,
+    V: Serialize + DeserializeOwned,
+    HS: HeadStore + Clone,
+    SS: SegmentIo + Clone,
+    CS: CheckpointStore + Clone,
+    LS: LeaseStore + Clone,
+    E: Executor + Timer + Send + Sync + 'static,
+{
+    fn drop(&mut self) {
+        debug_assert!(
+            self.lease.is_none(),
+            "Session dropped without releasing its lease; call end().await or commit().await",
+        );
+    }
+}
+
+impl<K, V, HS, SS, CS, LS, E> SessionInner<K, V, HS, SS, CS, LS, E>
+where
+    K: PartialOrd + Eq + Hash + Serialize + DeserializeOwned,
+    V: Serialize + DeserializeOwned,
+    HS: HeadStore + Clone,
+    SS: SegmentIo + Clone,
+    CS: CheckpointStore + Clone,
+    LS: LeaseStore + Clone,
+    E: Executor + Timer + Send + Sync + 'static,
+{
+    fn new(
+        store: Arc<Store<HS, SS, CS, LS, E>>,
         lease: Option<LeaseHandle>,
         snapshot: Snapshot,
-        writable: bool,
         pinned: bool,
         ttl: Duration,
     ) -> Self {
@@ -53,18 +73,43 @@ where
             store,
             lease,
             snapshot,
-            writable,
             pinned,
             ttl,
-            staged: Vec::new(),
+            _marker: PhantomData,
         }
     }
 
-    pub fn snapshot(&self) -> &Snapshot {
+    fn store(&self) -> &Arc<Store<HS, SS, CS, LS, E>> {
+        &self.store
+    }
+
+    fn snapshot(&self) -> &Snapshot {
         &self.snapshot
     }
 
-    pub async fn heartbeat(&self) -> Result<()> {
+    fn lease_mut(&mut self) -> &mut Option<LeaseHandle> {
+        &mut self.lease
+    }
+
+    fn timer(&self) -> ArcTimer {
+        self.store.opts.timer()
+    }
+
+    async fn release_lease(&mut self) -> Result<()> {
+        if let Some(lease) = self.lease.take() {
+            self.store.leases.release(lease).await
+        } else {
+            Ok(())
+        }
+    }
+
+    async fn release_lease_silent(&mut self) {
+        if let Some(lease) = self.lease.take() {
+            let _ = self.store.leases.release(lease).await;
+        }
+    }
+
+    async fn heartbeat(&self) -> Result<()> {
         if self.pinned {
             if let Some(lease) = self.lease.as_ref() {
                 return self.store.leases.heartbeat(lease, self.ttl).await;
@@ -73,18 +118,115 @@ where
         Ok(())
     }
 
-    pub async fn end(mut self) -> Result<()> {
-        if let Some(lease) = self.lease.take() {
-            self.store.leases.release(lease).await
-        } else {
-            Ok(())
+    fn start_lease_keeper(&self) -> Result<LeaseKeeper>
+    where
+        HS: Clone,
+        SS: Clone,
+        CS: Clone,
+        LS: Clone + 'static,
+    {
+        if !self.pinned {
+            return Err(Error::Unimplemented(
+                "lease keeper requires a pinned session",
+            ));
         }
+        let lease = self
+            .lease
+            .as_ref()
+            .ok_or(Error::Unimplemented("lease keeper requires active lease"))?
+            .clone();
+        let executor = Arc::clone(self.store.opts.executor());
+        let timer = self.timer();
+        let leases = self.store.leases.clone();
+        let ttl = self.ttl;
+        LeaseKeeper::spawn(executor, timer, leases, lease, ttl)
     }
 
-    pub async fn get(&self, key: &K) -> Result<Option<V>> {
-        let snap = &self.snapshot;
-        if let Some(last_seq) = snap.last_segment_seq {
-            let start_seq = snap
+    async fn fold_into_map(&self, map: &mut HashMap<K, V>) -> Result<()> {
+        #[derive(Deserialize)]
+        struct CkptPayload<K, V> {
+            entries: Vec<(K, V)>,
+        }
+
+        if let Some(id) = self.snapshot.checkpoint_id.as_ref() {
+            let (_meta, bytes) = self.store.checkpoint.get_checkpoint(id).await?;
+            let payload: CkptPayload<K, V> = serde_json::from_slice(&bytes)
+                .map_err(|e| Error::Corrupt(format!("ckpt decode: {e}")))?;
+            for (k, v) in payload.entries {
+                map.insert(k, v);
+            }
+        }
+
+        let last_seq = match self.snapshot.last_segment_seq {
+            Some(s) => s,
+            None => return Ok(()),
+        };
+        let mut cursor = self
+            .snapshot
+            .checkpoint_seq
+            .map(|s| s.saturating_add(1))
+            .unwrap_or(0);
+
+        loop {
+            let ids = self.store.segment.list_from(cursor, 256).await?;
+            if ids.is_empty() {
+                break;
+            }
+            for id in ids {
+                if id.seq > last_seq {
+                    return Ok(());
+                }
+                if id.seq < cursor {
+                    continue;
+                }
+                let bytes = self.store.segment.get(&id).await?;
+                let seg: Segment<K, V> = serde_json::from_slice(&bytes)
+                    .map_err(|e| Error::Corrupt(format!("kv segment decode: {e}")))?;
+                if seg.txn_id > self.snapshot.txn_id.0 {
+                    return Ok(());
+                }
+                for record in seg.records.into_iter() {
+                    match record.op {
+                        Op::Put => {
+                            if let Some(v) = record.value {
+                                map.insert(record.key, v);
+                            }
+                        }
+                        Op::Del => {
+                            map.remove(&record.key);
+                        }
+                    }
+                }
+                cursor = id.seq.saturating_add(1);
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn base_scan(&self) -> Result<Vec<(K, V)>> {
+        let mut map: HashMap<K, V> = HashMap::new();
+        self.fold_into_map(&mut map).await?;
+        Ok(map.into_iter().collect())
+    }
+
+    async fn base_scan_range(&self, range: ScanRange<K>) -> Result<Vec<(K, V)>> {
+        let mut map: HashMap<K, V> = HashMap::new();
+        self.fold_into_map(&mut map).await?;
+        let mut out: Vec<(K, V)> = map.into_iter().collect();
+        if let Some(start) = range.start.as_ref() {
+            out.retain(|(k, _)| k >= start);
+        }
+        if let Some(end) = range.end.as_ref() {
+            out.retain(|(k, _)| k < end);
+        }
+        Ok(out)
+    }
+
+    async fn base_get(&self, key: &K) -> Result<Option<V>> {
+        if let Some(last_seq) = self.snapshot.last_segment_seq {
+            let start_seq = self
+                .snapshot
                 .checkpoint_seq
                 .map(|s| s.saturating_add(1))
                 .unwrap_or(0);
@@ -110,7 +252,7 @@ where
                 let bytes = self.store.segment.get(&id).await?;
                 let seg: Segment<K, V> = serde_json::from_slice(&bytes)
                     .map_err(|e| Error::Corrupt(format!("kv segment decode: {e}")))?;
-                if seg.txn_id > snap.txn_id.0 {
+                if seg.txn_id > self.snapshot.txn_id.0 {
                     continue;
                 }
                 for r in seg.records.into_iter().rev() {
@@ -122,12 +264,12 @@ where
                     }
                 }
             }
-            if let Some(ckpt_id) = snap.checkpoint_id.clone() {
-                let (_meta, bytes) = self.store.checkpoint.get_checkpoint(&ckpt_id).await?;
+            if let Some(ckpt_id) = self.snapshot.checkpoint_id.clone() {
                 #[derive(Deserialize)]
                 struct CkptPayload<K, V> {
                     entries: Vec<(K, V)>,
                 }
+                let (_meta, bytes) = self.store.checkpoint.get_checkpoint(&ckpt_id).await?;
                 let payload: CkptPayload<K, V> = serde_json::from_slice(&bytes)
                     .map_err(|e| Error::Corrupt(format!("ckpt decode: {e}")))?;
                 for (k, v) in payload.entries.into_iter().rev() {
@@ -140,134 +282,192 @@ where
         }
         Ok(None)
     }
+}
+
+type ArcTimer = Arc<dyn Timer + Send + Sync>;
+
+/// Read-only pinned session.
+#[must_use = "Sessions hold a lease; call end().await before dropping"]
+pub struct ReadSession<K, V, HS, SS, CS, LS, E = BlockingExecutor>
+where
+    K: PartialOrd + Eq + Hash + Serialize + DeserializeOwned,
+    V: Serialize + DeserializeOwned,
+    HS: HeadStore + Clone,
+    SS: SegmentIo + Clone,
+    CS: CheckpointStore + Clone,
+    LS: LeaseStore + Clone,
+    E: Executor + Timer + Send + Sync + 'static,
+{
+    inner: SessionInner<K, V, HS, SS, CS, LS, E>,
+}
+
+impl<K, V, HS, SS, CS, LS, E> ReadSession<K, V, HS, SS, CS, LS, E>
+where
+    K: PartialOrd + Eq + Hash + Serialize + DeserializeOwned,
+    V: Serialize + DeserializeOwned,
+    HS: HeadStore + Clone,
+    SS: SegmentIo + Clone,
+    CS: CheckpointStore + Clone,
+    LS: LeaseStore + Clone,
+    E: Executor + Timer + Send + Sync + 'static,
+{
+    pub(crate) fn new(
+        store: Arc<Store<HS, SS, CS, LS, E>>,
+        lease: Option<LeaseHandle>,
+        snapshot: Snapshot,
+        pinned: bool,
+        ttl: Duration,
+    ) -> Self {
+        Self {
+            inner: SessionInner::new(store, lease, snapshot, pinned, ttl),
+        }
+    }
+
+    pub fn snapshot(&self) -> &Snapshot {
+        self.inner.snapshot()
+    }
+
+    pub fn start_lease_keeper(&self) -> Result<LeaseKeeper>
+    where
+        HS: Clone,
+        SS: Clone,
+        CS: Clone,
+        LS: Clone + 'static,
+    {
+        self.inner.start_lease_keeper()
+    }
+
+    pub async fn heartbeat(&self) -> Result<()> {
+        self.inner.heartbeat().await
+    }
+
+    pub async fn end(mut self) -> Result<()> {
+        self.inner.release_lease().await
+    }
+
+    pub async fn get(&self, key: &K) -> Result<Option<V>> {
+        self.inner.base_get(key).await
+    }
 
     pub async fn scan(&self) -> Result<Vec<(K, V)>> {
-        let mut map: HashMap<K, V> = HashMap::new();
-        self.fold_until(&mut map, &self.snapshot).await?;
-        Ok(map.into_iter().collect())
+        self.inner.base_scan().await
     }
 
     pub async fn scan_range(&self, range: ScanRange<K>) -> Result<Vec<(K, V)>> {
-        let mut map: HashMap<K, V> = HashMap::new();
-        self.fold_until(&mut map, &self.snapshot).await?;
-        let mut out: Vec<(K, V)> = map.into_iter().collect();
-        if let Some(start) = range.start.as_ref() {
-            out.retain(|(k, _)| k >= start);
+        self.inner.base_scan_range(range).await
+    }
+}
+
+/// Writable session with staged operations.
+#[must_use = "Sessions hold a lease; call commit().await or end().await before dropping"]
+pub struct WriteSession<K, V, HS, SS, CS, LS, E = BlockingExecutor>
+where
+    K: PartialOrd + Eq + Hash + Serialize + DeserializeOwned,
+    V: Serialize + DeserializeOwned,
+    HS: HeadStore + Clone,
+    SS: SegmentIo + Clone,
+    CS: CheckpointStore + Clone,
+    LS: LeaseStore + Clone,
+    E: Executor + Timer + Send + Sync + 'static,
+{
+    inner: SessionInner<K, V, HS, SS, CS, LS, E>,
+    staged: Vec<(K, Op, Option<V>)>,
+}
+
+impl<K, V, HS, SS, CS, LS, E> WriteSession<K, V, HS, SS, CS, LS, E>
+where
+    K: PartialOrd + Eq + Hash + Serialize + DeserializeOwned,
+    V: Serialize + DeserializeOwned,
+    HS: HeadStore + Clone,
+    SS: SegmentIo + Clone,
+    CS: CheckpointStore + Clone,
+    LS: LeaseStore + Clone,
+    E: Executor + Timer + Send + Sync + 'static,
+{
+    pub(crate) fn new(
+        store: Arc<Store<HS, SS, CS, LS, E>>,
+        lease: Option<LeaseHandle>,
+        snapshot: Snapshot,
+        pinned: bool,
+        ttl: Duration,
+    ) -> Self {
+        Self {
+            inner: SessionInner::new(store, lease, snapshot, pinned, ttl),
+            staged: Vec::new(),
         }
-        if let Some(end) = range.end.as_ref() {
-            out.retain(|(k, _)| k < end);
-        }
-        Ok(out)
     }
 
-    async fn fold_until(&self, map: &mut HashMap<K, V>, snap: &Snapshot) -> Result<()> {
-        let last_seq = match snap.last_segment_seq {
-            Some(s) => s,
-            None => return Ok(()),
-        };
-        let mut cursor = snap
-            .checkpoint_seq
-            .map(|s| s.saturating_add(1))
-            .unwrap_or(0);
-        loop {
-            let ids = self.store.segment.list_from(cursor, 256).await?;
-            if ids.is_empty() {
-                break;
-            }
-            for id in ids {
-                if id.seq > last_seq {
-                    return Ok(());
-                }
-                let bytes = self.store.segment.get(&id).await?;
-                let seg: Segment<K, V> = serde_json::from_slice(&bytes)
-                    .map_err(|e| Error::Corrupt(format!("kv segment decode: {e}")))?;
-                if seg.txn_id > snap.txn_id.0 {
-                    return Ok(());
-                }
-                for r in seg.records.into_iter() {
-                    match r.op {
-                        Op::Put => {
-                            if let Some(v) = r.value {
-                                map.insert(r.key, v);
-                            }
-                        }
-                        Op::Del => {
-                            map.remove(&r.key);
-                        }
-                    }
-                }
-                cursor = id.seq + 1;
-            }
-        }
-        Ok(())
+    pub fn snapshot(&self) -> &Snapshot {
+        self.inner.snapshot()
     }
 
-    pub fn put(&mut self, k: K, v: V) -> Result<()> {
-        if !self.writable {
-            return Err(Error::Unimplemented("put on read-only session"));
-        }
-        self.staged.push((k, Op::Put, Some(v)));
-        Ok(())
+    pub fn start_lease_keeper(&self) -> Result<LeaseKeeper>
+    where
+        HS: Clone,
+        SS: Clone,
+        CS: Clone,
+        LS: Clone + 'static,
+    {
+        self.inner.start_lease_keeper()
     }
 
-    pub fn delete(&mut self, k: K) -> Result<()> {
-        if !self.writable {
-            return Err(Error::Unimplemented("delete on read-only session"));
-        }
-        self.staged.push((k, Op::Del, None));
-        Ok(())
+    pub async fn heartbeat(&self) -> Result<()> {
+        self.inner.heartbeat().await
     }
 
-    fn clone_via_json<T: Serialize + DeserializeOwned>(t: &T) -> Result<T> {
-        let bytes = serde_json::to_vec(t)
-            .map_err(|e| Error::Corrupt(format!("local clone encode: {e}")))?;
-        let val = serde_json::from_slice(&bytes)
-            .map_err(|e| Error::Corrupt(format!("local clone decode: {e}")))?;
-        Ok(val)
+    pub fn put(&mut self, key: K, value: V) {
+        self.staged.push((key, Op::Put, Some(value)));
     }
 
-    /// Read-your-writes for a single key. Does not affect global visibility.
+    pub fn delete(&mut self, key: K) {
+        self.staged.push((key, Op::Del, None));
+    }
+
+    pub async fn get(&self, key: &K) -> Result<Option<V>> {
+        self.inner.base_get(key).await
+    }
+
     pub async fn get_local(&self, key: &K) -> Result<Option<V>> {
-        if self.writable {
-            for (k, op, v) in self.staged.iter().rev() {
-                if k == key {
-                    return Ok(match op {
-                        Op::Del => None,
-                        Op::Put => match v {
-                            Some(val) => Some(Self::clone_via_json(val)?),
-                            None => None,
-                        },
-                    });
-                }
+        for (k, op, v) in self.staged.iter().rev() {
+            if k == key {
+                return Ok(match op {
+                    Op::Del => None,
+                    Op::Put => match v {
+                        Some(val) => Some(Self::clone_via_json(val)?),
+                        None => None,
+                    },
+                });
             }
         }
-        self.get(key).await
+        self.inner.base_get(key).await
     }
 
-    /// Read-your-writes for a range or full scan.
+    pub async fn scan(&self) -> Result<Vec<(K, V)>> {
+        self.inner.base_scan().await
+    }
+
     pub async fn scan_local(&self, range: Option<ScanRange<K>>) -> Result<Vec<(K, V)>> {
         let mut base_entries: Vec<(K, V)> = match range.as_ref() {
-            None => self.scan().await?,
+            None => self.inner.base_scan().await?,
             Some(r) => {
-                self.scan_range(ScanRange {
-                    start: r.start.as_ref().map(Self::clone_via_json).transpose()?,
-                    end: r.end.as_ref().map(Self::clone_via_json).transpose()?,
-                })
-                .await?
+                self.inner
+                    .base_scan_range(ScanRange {
+                        start: r.start.as_ref().map(Self::clone_via_json).transpose()?,
+                        end: r.end.as_ref().map(Self::clone_via_json).transpose()?,
+                    })
+                    .await?
             }
         };
         let mut map: HashMap<K, V> = base_entries.drain(..).collect();
 
-        if self.writable {
-            for (k, op, v) in &self.staged {
-                match op {
-                    Op::Del => {
-                        map.remove(k);
-                    }
-                    Op::Put => {
-                        if let Some(val) = v.as_ref() {
-                            map.insert(Self::clone_via_json(k)?, Self::clone_via_json(val)?);
-                        }
+        for (k, op, v) in &self.staged {
+            match op {
+                Op::Del => {
+                    map.remove(k);
+                }
+                Op::Put => {
+                    if let Some(val) = v.as_ref() {
+                        map.insert(Self::clone_via_json(k)?, Self::clone_via_json(val)?);
                     }
                 }
             }
@@ -285,22 +485,22 @@ where
         Ok(out)
     }
 
-    /// Commit staged changes. Only valid for writable sessions.
-    pub async fn commit(mut self) -> Result<()> {
-        if !self.writable {
-            return Err(Error::Unimplemented("commit on read-only session"));
-        }
-        // Determine new transaction id and segment seq based on our snapshot
-        let base_txn = self.snapshot.txn_id.0;
-        let next_txn = base_txn.saturating_add(1);
-        let next_seq = self
-            .snapshot
-            .last_segment_seq
-            .unwrap_or(0)
-            .saturating_add(1);
-        let expected_tag = self.snapshot.head_tag.clone();
+    pub async fn end(mut self) -> Result<()> {
+        self.inner.release_lease().await
+    }
 
-        // Encode the staged operations once; retry loop reuses the payload.
+    pub async fn commit(mut self) -> Result<()> {
+        let snapshot = self.inner.snapshot().clone();
+        let store = self.inner.store().clone();
+        let pol = store.opts.backoff;
+        let timer = store.opts.timer();
+        let mut bo = ExponentialBackoff::new(pol, timer.clone());
+
+        let base_txn = snapshot.txn_id.0;
+        let next_txn = base_txn.saturating_add(1);
+        let next_seq = snapshot.last_segment_seq.unwrap_or(0).saturating_add(1);
+        let expected_tag = snapshot.head_tag.clone();
+
         let staged = core::mem::take(&mut self.staged);
         let mut records = Vec::with_capacity(staged.len());
         for (k, op, v) in staged.into_iter() {
@@ -310,52 +510,31 @@ where
                 value: v,
             });
         }
-        let seg = Segment {
+        let segment = Segment {
             txn_id: next_txn,
             records,
         };
-        let payload =
-            serde_json::to_vec(&seg).map_err(|e| Error::Corrupt(format!("kv encode: {e}")))?;
-        let new_head = HeadJson {
-            version: 1,
-            snapshot: None,
-            last_segment_seq: Some(next_seq),
-            last_txn_id: next_txn,
-        };
-
+        let payload = serde_json::to_vec(&segment)
+            .map_err(|e| Error::Corrupt(format!("segment encode: {e}")))?;
         let mut seg_written = false;
-        let mut bo = ExponentialBackoff::new(self.store.opts.backoff);
-        let timer = self.store.opts.timer.clone();
 
         loop {
-            // Reload HEAD to ensure our snapshot tag is still current.
-            let current = match self.store.head.load().await {
-                Ok(v) => v,
-                Err(e) => match classify_error(&e) {
-                    RetryClass::RetryTransient if !bo.exhausted() => {
-                        let delay = bo.next_delay();
-                        timer.sleep(delay).await;
-                        continue;
-                    }
-                    _ => return Err(e),
-                },
-            };
-
-            let stale = match (expected_tag.as_ref(), current.as_ref()) {
+            let head_loaded = store.head.load().await?;
+            let stale = match (&expected_tag, head_loaded.as_ref()) {
                 (None, None) => false,
                 (Some(t), Some((_h, cur))) => t != cur,
                 (None, Some(_)) => true,
                 (Some(_), None) => true,
             };
             if stale {
+                self.inner.release_lease_silent().await;
                 return Err(Error::PreconditionFailed);
             }
 
             if !seg_written {
-                match self
-                    .store
+                match store
                     .segment
-                    .put_next(next_seq, payload.as_slice(), "application/json")
+                    .put_next(next_seq, next_txn, payload.as_slice(), "application/json")
                     .await
                 {
                     Ok(_) => {
@@ -367,20 +546,43 @@ where
                             timer.sleep(delay).await;
                             continue;
                         }
-                        _ => return Err(e),
+                        RetryClass::RetryTransient => {
+                            self.inner.release_lease_silent().await;
+                            return Err(e);
+                        }
+                        _ => {
+                            self.inner.release_lease_silent().await;
+                            return Err(e);
+                        }
                     },
                 }
             }
+
+            let cur_head = head_loaded.map(|(h, _)| h);
+            let new_head = match cur_head {
+                None => HeadJson {
+                    version: 1,
+                    snapshot: None,
+                    last_segment_seq: Some(next_seq),
+                    last_txn_id: next_txn,
+                },
+                Some(h) => HeadJson {
+                    version: h.version,
+                    snapshot: h.snapshot,
+                    last_segment_seq: Some(next_seq),
+                    last_txn_id: next_txn,
+                },
+            };
 
             let cond = match expected_tag.as_ref() {
                 Some(tag) => PutCondition::IfMatch(tag.clone()),
                 None => PutCondition::IfNotExists,
             };
 
-            match self.store.head.put(&new_head, cond).await {
+            match store.head.put(&new_head, cond).await {
                 Ok(_) => {
-                    if let Some(lease) = self.lease.take() {
-                        let _ = self.store.leases.release(lease).await;
+                    if let Some(lease) = self.inner.lease_mut().take() {
+                        let _ = store.leases.release(lease).await;
                     }
                     return Ok(());
                 }
@@ -390,46 +592,106 @@ where
                         timer.sleep(delay).await;
                         continue;
                     }
-                    RetryClass::DurableConflict => return Err(Error::PreconditionFailed),
-                    _ => return Err(e),
+                    RetryClass::RetryTransient => {
+                        self.inner.release_lease_silent().await;
+                        return Err(e);
+                    }
+                    RetryClass::DurableConflict => {
+                        self.inner.release_lease_silent().await;
+                        return Err(Error::PreconditionFailed);
+                    }
+                    _ => {
+                        self.inner.release_lease_silent().await;
+                        return Err(e);
+                    }
                 },
             }
         }
+    }
+
+    fn clone_via_json<T: Serialize + DeserializeOwned>(t: &T) -> Result<T> {
+        let bytes = serde_json::to_vec(t)
+            .map_err(|e| Error::Corrupt(format!("local clone encode: {e}")))?;
+        let val = serde_json::from_slice(&bytes)
+            .map_err(|e| Error::Corrupt(format!("local clone decode: {e}")))?;
+        Ok(val)
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::{sync::Arc, time::Duration};
+
+    use fusio::executor::NoopExecutor;
     use futures_executor::block_on;
 
     use super::*;
-    use crate::impls::mem::{
-        checkpoint::MemCheckpointStore, head::MemHeadStore, lease::MemLeaseStore,
-        segment::MemSegmentStore,
-    };
+    use crate::{context::ManifestContext, testing::new_inmemory_stores};
 
     #[test]
-    fn commit_preflight_rejects_stale_snapshot() {
+    fn read_session_end_releases_lease() {
         block_on(async move {
-            let head = MemHeadStore::new();
-            let seg = MemSegmentStore::new();
-            let ck = MemCheckpointStore::new();
-            let ls = MemLeaseStore::new();
-            let m: crate::manifest::Manifest<String, String, _, _, _, _> =
-                crate::manifest::Manifest::new(head.clone(), seg.clone(), ck.clone(), ls.clone());
+            let (head, seg, ck, ls) = new_inmemory_stores();
+            let opts: ManifestContext<NoopExecutor> =
+                ManifestContext::new(Arc::new(NoopExecutor::default()));
+            let manifest: crate::manifest::Manifest<String, String, _, _, _, _, NoopExecutor> =
+                crate::manifest::Manifest::new_with_context(
+                    head,
+                    seg,
+                    ck,
+                    ls.clone(),
+                    Arc::new(opts),
+                );
 
-            let mut a = m.session_write().await.unwrap();
-            a.put("k".into(), "v1".into()).unwrap();
+            let session = manifest.session_read().await.unwrap();
+            session.end().await.unwrap();
 
-            let mut b = m.session_write().await.unwrap();
-            b.put("k".into(), "v2".into()).unwrap();
-            let _ = b.commit().await.unwrap();
+            let active = ls.list_active(Duration::from_secs(0)).await.unwrap();
+            assert!(active.is_empty());
+        })
+    }
 
-            let r = a.commit().await;
-            assert!(matches!(r, Err(crate::types::Error::PreconditionFailed)));
+    #[test]
+    fn write_session_commit_conflict() {
+        block_on(async move {
+            let (head, seg, ck, ls) = new_inmemory_stores();
+            let opts: ManifestContext<NoopExecutor> =
+                ManifestContext::new(Arc::new(NoopExecutor::default()));
+            let shared = Arc::new(opts);
+            let manifest: crate::manifest::Manifest<String, String, _, _, _, _, NoopExecutor> =
+                crate::manifest::Manifest::new_with_context(
+                    head.clone(),
+                    seg.clone(),
+                    ck.clone(),
+                    ls.clone(),
+                    Arc::clone(&shared),
+                );
 
-            let segs = seg.list_from(0, 1024).await.unwrap();
-            assert_eq!(segs.len(), 1);
+            let mut writer = manifest.session_write().await.unwrap();
+            writer.put("k".into(), "v".into());
+            writer.commit().await.unwrap();
+
+            let mut writer2 = manifest.session_write().await.unwrap();
+            writer2.put("k".into(), "v2".into());
+
+            // Simulate conflicting head advance
+            let (_, tag) = head.load().await.unwrap().unwrap();
+            head.put(
+                &HeadJson {
+                    version: 1,
+                    snapshot: None,
+                    last_segment_seq: Some(10),
+                    last_txn_id: 10,
+                },
+                PutCondition::IfMatch(tag),
+            )
+            .await
+            .unwrap();
+
+            assert!(matches!(
+                writer2.commit().await,
+                Err(Error::PreconditionFailed)
+            ));
         })
     }
 }

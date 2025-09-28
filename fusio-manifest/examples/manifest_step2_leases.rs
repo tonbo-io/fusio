@@ -1,7 +1,8 @@
 use std::{env, sync::Arc, time::Duration};
 
+use fusio::executor::tokio::TokioExecutor;
 use fusio_manifest::{
-    options::Options,
+    context::ManifestContext,
     retention::DefaultRetention,
     s3,
     types::{Error, Result},
@@ -17,15 +18,17 @@ async fn main() -> Result<()> {
     let retention = DefaultRetention::default()
         .with_checkpoints_min_ttl(Duration::ZERO)
         .with_segments_min_ttl(Duration::ZERO);
-    let opts = Options::default().with_retention(Arc::new(retention));
+    let runtime = Arc::new(TokioExecutor::default());
+    let opts = Arc::new(ManifestContext::new(runtime).with_retention(Arc::new(retention)));
 
-    let manifest: s3::S3Manifest<String, String> = setup.config.clone().with_options(opts).into();
-    let compactor: s3::S3Compactor<String, String> = manifest.compactor();
+    let manifest: s3::S3Manifest<String, String, TokioExecutor> =
+        setup.config.clone().with_context(Arc::clone(&opts)).into();
+    let compactor: s3::S3Compactor<String, String, TokioExecutor> = manifest.compactor();
 
     println!("== seed a few commits");
     for (k, v) in [("user:1", "alice"), ("user:2", "bob"), ("user:1", "carol")] {
         let mut session = manifest.session_write().await?;
-        session.put(k.to_string(), v.to_string())?;
+        session.put(k.to_string(), v.to_string());
         session.commit().await?;
     }
 

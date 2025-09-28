@@ -5,46 +5,53 @@
 //! constructs a temporary `Manifest` over the provided stores and invokes the
 //! existing logic. This keeps `Manifest` as the primary user API while enabling
 //! remote/scheduled compaction jobs.
-//!
-//! TODO:
-//! - Add bounded backoff/retry with jitter for CAS and storage conflicts.
-//! - Batch deletes in phase 3 for object stores that support bulk APIs.
-//! - Tracing/metrics for plan compute/apply/reset and deletions.
 
 use core::{hash::Hash, marker::PhantomData, time::Duration};
 use std::{collections::HashMap, sync::Arc, time::SystemTime};
 
-use serde::{de::DeserializeOwned, Serialize};
+use fusio::executor::{Executor, Timer};
+use futures_util::TryStreamExt;
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 use crate::{
     backoff::{classify_error, ExponentialBackoff, RetryClass},
     checkpoint::{CheckpointId, CheckpointMeta, CheckpointStore},
+    context::ManifestContext,
     gc::{GcPlan, GcPlanStore, GcTag, SegmentRange},
     head::{HeadJson, HeadStore, HeadTag, PutCondition},
     lease::LeaseStore,
     manifest::{Manifest, Op, Segment},
-    options::Options,
     segment::SegmentIo,
     snapshot::Snapshot,
-    store::{Store, StoreHandle},
+    store::Store,
     types::{Error, Result, TxnId},
+    BlockingExecutor,
 };
 
 /// Headless compactor that orchestrates compaction + GC using the same logic
 /// as `Manifest`, without requiring a long‑lived manifest instance owned by
 /// the caller.
-pub struct Compactor<K, V, HS, SS, CS, LS>
+pub struct Compactor<K, V, HS, SS, CS, LS, E = BlockingExecutor>
 where
     HS: HeadStore + Clone,
     SS: SegmentIo + Clone,
     CS: CheckpointStore + Clone,
     LS: LeaseStore + Clone,
+    E: Executor + Timer + Send + Sync + 'static,
 {
     _phantom: PhantomData<(K, V)>,
-    store: StoreHandle<HS, SS, CS, LS>,
+    store: Arc<Store<HS, SS, CS, LS, E>>,
 }
 
-impl<K, V, HS, SS, CS, LS> Compactor<K, V, HS, SS, CS, LS>
+#[derive(Default)]
+struct CheckpointRetentionStats {
+    entries: Vec<(CheckpointId, CheckpointMeta)>,
+    newest: Option<(CheckpointId, CheckpointMeta)>,
+    floor: Option<(CheckpointId, CheckpointMeta)>,
+    keep_last_ids: std::collections::BTreeSet<CheckpointId>,
+}
+
+impl<K, V, HS, SS, CS, LS, E> Compactor<K, V, HS, SS, CS, LS, E>
 where
     K: PartialOrd + Eq + Hash + Serialize + DeserializeOwned,
     V: Serialize + DeserializeOwned,
@@ -52,33 +59,24 @@ where
     SS: SegmentIo + Clone,
     CS: CheckpointStore + Clone,
     LS: LeaseStore + Clone,
+    E: Executor + Timer + Send + Sync + 'static,
 {
-    pub fn new(head: HS, seg: SS, ckpt: CS, leases: LS, opts: Options) -> Self {
+    pub fn new(head: HS, seg: SS, ckpt: CS, leases: LS, opts: Arc<ManifestContext<E>>) -> Self {
         Self {
             _phantom: PhantomData,
             store: Arc::new(Store::new(head, seg, ckpt, leases, opts)),
         }
     }
 
-    pub(crate) fn from_store(store: StoreHandle<HS, SS, CS, LS>) -> Self {
+    pub(crate) fn from_store(store: Arc<Store<HS, SS, CS, LS, E>>) -> Self {
         Self {
             _phantom: PhantomData,
             store,
         }
     }
-}
 
-impl<K, V, HS, SS, CS, LS> Compactor<K, V, HS, SS, CS, LS>
-where
-    K: PartialOrd + Eq + Hash + Serialize + DeserializeOwned,
-    V: Serialize + DeserializeOwned,
-    HS: HeadStore + Clone,
-    SS: SegmentIo + Clone,
-    CS: CheckpointStore + Clone,
-    LS: LeaseStore + Clone,
-{
-    fn manifest(&self) -> Manifest<K, V, HS, SS, CS, LS> {
-        Manifest::new_with_opts(
+    fn manifest(&self) -> Manifest<K, V, HS, SS, CS, LS, E> {
+        Manifest::new_with_context(
             self.store.head.clone(),
             self.store.segment.clone(),
             self.store.checkpoint.clone(),
@@ -116,6 +114,20 @@ where
     }
 
     async fn fold_until(&self, map: &mut HashMap<K, V>, snap: &Snapshot) -> Result<()> {
+        if let Some(id) = snap.checkpoint_id.as_ref() {
+            #[derive(Deserialize)]
+            struct CkptPayload<K, V> {
+                entries: Vec<(K, V)>,
+            }
+
+            let (_meta, bytes) = self.store.checkpoint.get_checkpoint(id).await?;
+            let payload: CkptPayload<K, V> = serde_json::from_slice(&bytes)
+                .map_err(|e| Error::Corrupt(format!("ckpt decode: {e}")))?;
+            for (k, v) in payload.entries {
+                map.insert(k, v);
+            }
+        }
+
         let last_seq = match snap.last_segment_seq {
             Some(s) => s,
             None => return Ok(()),
@@ -181,7 +193,7 @@ where
             lsn: snap.txn_id.0,
             key_count: entries_len,
             byte_size: payload.len(),
-            created_at_ms: system_time_to_ms(self.store.opts.timer.now()),
+            created_at_ms: system_time_to_ms(self.store.opts.timer().now()),
             format: "application/json".into(),
             last_segment_seq_at_ckpt: snap.last_segment_seq.unwrap_or(0),
         };
@@ -201,8 +213,7 @@ where
                     last_txn_id: 0,
                 };
                 let pol = self.store.opts.backoff;
-                let mut bo = ExponentialBackoff::new(pol);
-                let timer = self.store.opts.timer.clone();
+                let mut bo = ExponentialBackoff::new(pol, self.store.opts.timer());
                 let tag = loop {
                     match self
                         .store
@@ -215,7 +226,7 @@ where
                         Err(e) => match crate::backoff::classify_error(&e) {
                             RetryClass::RetryTransient if !bo.exhausted() => {
                                 let delay = bo.next_delay();
-                                timer.sleep(delay).await;
+                                self.store.opts.timer().sleep(delay).await;
                                 continue;
                             }
                             _ => return Err(e),
@@ -232,8 +243,8 @@ where
                     last_txn_id: cur.last_txn_id,
                 };
                 let pol = self.store.opts.backoff;
-                let mut bo = ExponentialBackoff::new(pol);
-                let timer = self.store.opts.timer.clone();
+                let timer = self.store.opts.timer();
+                let mut bo = ExponentialBackoff::new(pol, timer.clone());
                 let tag = loop {
                     match self
                         .store
@@ -266,15 +277,15 @@ where
             _ => {}
         }
 
-        let now_ms_u64 = system_time_to_ms(self.store.opts.timer.now());
-        let leases = self.store.leases.list_active(now_ms_u64).await?;
+        let now = Duration::from_millis(system_time_to_ms(self.store.opts.timer().now()));
+        let leases = self.store.leases.list_active(now).await?;
         let watermark = leases
             .iter()
             .map(|l| l.snapshot_txn_id)
             .min()
             .unwrap_or(u64::MAX);
 
-        let (meta, _bytes) = self.store.checkpoint.get_checkpoint(&ckpt_id).await?;
+        let meta = self.store.checkpoint.get_checkpoint_meta(&ckpt_id).await?;
         if watermark > meta.lsn {
             let _ = self
                 .store
@@ -290,8 +301,11 @@ where
             .checkpoints_min_ttl()
             .as_millis()
             .min(u128::from(u64::MAX)) as u64;
-        let now_ms2 = system_time_to_ms(self.store.opts.timer.now());
-        let mut list = self.store.checkpoint.list().await.unwrap_or_default();
+        let now_ms2 = system_time_to_ms(self.store.opts.timer().now());
+        let mut list = match self.store.checkpoint.list().await {
+            Ok(stream) => stream.try_collect::<Vec<_>>().await.unwrap_or_default(),
+            Err(_) => Vec::new(),
+        };
         list.sort_by_key(|(_id, m)| m.lsn);
         let newest = list.iter().max_by_key(|(_id, m)| m.lsn).cloned();
         let floor = list
@@ -334,8 +348,8 @@ where
         store: &S,
     ) -> Result<Option<GcTag>> {
         let pol = self.store.opts.backoff;
-        let mut bo = ExponentialBackoff::new(pol);
-        let timer = self.store.opts.timer.clone();
+        let timer = self.store.opts.timer();
+        let mut bo = ExponentialBackoff::new(pol, timer.clone());
         loop {
             // Read current HEAD snapshot/tag
             let head = match self.store.head.load().await {
@@ -354,9 +368,9 @@ where
                 Some(v) => v,
             };
             // Determine watermark from active leases
-            let now_ms = system_time_to_ms(timer.now());
+            let now_ms = system_time_to_ms(self.store.opts.timer().now());
             let now = Duration::from_millis(now_ms);
-            let leases = match self.store.leases.list_active(now_ms).await {
+            let leases = match self.store.leases.list_active(now).await {
                 Ok(ls) => ls,
                 Err(e) => match classify_error(&e) {
                     RetryClass::RetryTransient if !bo.exhausted() => {
@@ -387,47 +401,11 @@ where
                 .min(u128::from(u64::MAX)) as u64;
             let keep_last = self.store.opts.retention.checkpoints_keep_last();
 
-            // List checkpoints and compute floor/newest/keep_last
-            // TODO: paginate and bound list size if the store returns many entries.
-            let mut ckpts = self.store.checkpoint.list().await.unwrap_or_default();
-            ckpts.sort_by_key(|(_id, m)| m.lsn);
-            let newest = ckpts.iter().max_by_key(|(_id, m)| m.lsn).cloned();
-            let floor = ckpts
-                .iter()
-                .filter(|(_id, m)| m.lsn <= watermark)
-                .max_by_key(|(_id, m)| m.lsn)
-                .cloned();
-            let newest_ids: std::collections::BTreeSet<_> = ckpts
-                .iter()
-                .rev()
-                .take(keep_last)
-                .map(|(id, _)| id.clone())
-                .collect();
-
-            let mut delete_checkpoints = Vec::new();
-            for (id, m) in ckpts.iter() {
-                let keep_newest = newest.as_ref().map(|(i, _)| i == id).unwrap_or(false);
-                let keep_floor = floor.as_ref().map(|(i, _)| i == id).unwrap_or(false);
-                let keep_in_last = newest_ids.contains(id);
-                let age_ok = now_ms.saturating_sub(m.created_at_ms) >= ttl_ms;
-                if !keep_newest && !keep_floor && !keep_in_last && age_ok {
-                    delete_checkpoints.push(id.0.clone());
-                }
-            }
-
-            // Segment delete set: if we have a floor checkpoint (<= watermark), we can plan to
-            // delete segments up to its last_segment_seq_at_ckpt after phase-2 ensures HEAD no
-            // longer references those segments.
-            let mut delete_segments = Vec::new();
-            if let Some((_floor_id, floor_meta)) = &floor {
-                let upto = floor_meta.last_segment_seq_at_ckpt;
-                if let Some(last_seq) = head_json.last_segment_seq {
-                    let to = core::cmp::min(upto, last_seq);
-                    if to > 0 {
-                        delete_segments.push(SegmentRange::new(1, to));
-                    }
-                }
-            }
+            let retention = self
+                .collect_checkpoint_retention_state(watermark, keep_last)
+                .await?;
+            let delete_checkpoints = Self::checkpoints_to_delete(&retention, now_ms, ttl_ms);
+            let delete_segments = Self::segments_to_delete(&retention, &head_json);
 
             let plan = GcPlan {
                 against_head_tag: Some(head_tag.0.clone()),
@@ -458,6 +436,102 @@ where
         }
     }
 
+    async fn collect_checkpoint_retention_state(
+        &self,
+        watermark: u64,
+        keep_last: usize,
+    ) -> Result<CheckpointRetentionStats> {
+        use core::cmp::Reverse;
+        use std::collections::BinaryHeap;
+
+        let mut state = CheckpointRetentionStats::default();
+        let mut keep_last_heap = BinaryHeap::<Reverse<(u64, CheckpointId)>>::new();
+
+        if let Ok(stream) = self.store.checkpoint.list().await {
+            futures_util::pin_mut!(stream);
+            loop {
+                match stream.as_mut().try_next().await {
+                    Ok(Some((id, meta))) => {
+                        let lsn = meta.lsn;
+                        if state
+                            .newest
+                            .as_ref()
+                            .map(|(_, m)| m.lsn < lsn)
+                            .unwrap_or(true)
+                        {
+                            state.newest = Some((id.clone(), meta.clone()));
+                        }
+                        if lsn <= watermark
+                            && state
+                                .floor
+                                .as_ref()
+                                .map(|(_, m)| m.lsn < lsn)
+                                .unwrap_or(true)
+                        {
+                            state.floor = Some((id.clone(), meta.clone()));
+                        }
+                        if keep_last > 0 {
+                            keep_last_heap.push(Reverse((lsn, id.clone())));
+                            if keep_last_heap.len() > keep_last {
+                                keep_last_heap.pop();
+                            }
+                        }
+                        state.entries.push((id, meta));
+                    }
+                    Ok(None) => break,
+                    Err(_) => return Ok(CheckpointRetentionStats::default()),
+                }
+            }
+        }
+
+        state.keep_last_ids = keep_last_heap
+            .into_iter()
+            .map(|Reverse((_lsn, id))| id)
+            .collect();
+
+        Ok(state)
+    }
+
+    fn checkpoints_to_delete(
+        state: &CheckpointRetentionStats,
+        now_ms: u64,
+        ttl_ms: u64,
+    ) -> Vec<String> {
+        let newest_id = state.newest.as_ref().map(|(id, _)| id);
+        let floor_id = state.floor.as_ref().map(|(id, _)| id);
+
+        state
+            .entries
+            .iter()
+            .filter_map(|(id, meta)| {
+                let keep_newest = newest_id.map(|candidate| candidate == id).unwrap_or(false);
+                let keep_floor = floor_id.map(|candidate| candidate == id).unwrap_or(false);
+                let keep_in_last = state.keep_last_ids.contains(id);
+                let age_ok = now_ms.saturating_sub(meta.created_at_ms) >= ttl_ms;
+                if !keep_newest && !keep_floor && !keep_in_last && age_ok {
+                    Some(id.0.clone())
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    fn segments_to_delete(
+        state: &CheckpointRetentionStats,
+        head_json: &HeadJson,
+    ) -> Vec<SegmentRange> {
+        if let Some((_floor_id, floor_meta)) = &state.floor {
+            if let Some(last_seq) = head_json.last_segment_seq {
+                let upto = core::cmp::min(floor_meta.last_segment_seq_at_ckpt, last_seq);
+                if upto > 0 {
+                    return vec![SegmentRange::new(1, upto)];
+                }
+            }
+        }
+        Vec::new()
+    }
+
     /// Apply the plan to HEAD.
     ///
     /// Ensures HEAD references a checkpoint whose `last_segment_seq_at_ckpt` is
@@ -465,8 +539,8 @@ where
     /// plan was computed, CAS-resets the plan to empty to signal invalidation.
     pub async fn gc_apply<S: GcPlanStore + Clone + 'static>(&self, store: &S) -> Result<()> {
         let pol = self.store.opts.backoff;
-        let mut bo = ExponentialBackoff::new(pol);
-        let timer = self.store.opts.timer.clone();
+        let timer = self.store.opts.timer();
+        let mut bo = ExponentialBackoff::new(pol, timer.clone());
         'outer: loop {
             // Load plan; nothing to do if absent/empty
             let loaded = match store.load().await {
@@ -542,7 +616,10 @@ where
 
             // Decide target checkpoint: one whose last_segment_seq_at_ckpt >= upto, preferring the
             // smallest such.
-            let mut ckpts = self.store.checkpoint.list().await.unwrap_or_default();
+            let mut ckpts = match self.store.checkpoint.list().await {
+                Ok(stream) => stream.try_collect::<Vec<_>>().await.unwrap_or_default(),
+                Err(_) => Vec::new(),
+            };
             ckpts.sort_by_key(|(_id, m)| m.last_segment_seq_at_ckpt);
             let candidate = ckpts
                 .into_iter()
@@ -621,13 +698,10 @@ where
     ///
     /// After `not_before` passes, deletes planned segments and checkpoints
     /// (best-effort, idempotent), then CAS-resets the GC plan to empty.
-    pub async fn gc_delete_and_reset<S: GcPlanStore + Clone + 'static>(
-        &self,
-        store: &S,
-    ) -> Result<()> {
+    pub async fn gc_delete_and_reset<S: GcPlanStore + 'static>(&self, store: &S) -> Result<()> {
         let pol = self.store.opts.backoff;
-        let mut bo = ExponentialBackoff::new(pol);
-        let timer = self.store.opts.timer.clone();
+        let timer = self.store.opts.timer();
+        let mut bo = ExponentialBackoff::new(pol, timer.clone());
         // Load plan
         let loaded = match store.load().await {
             Ok(v) => v,
@@ -649,7 +723,7 @@ where
         }
 
         // Time guard
-        let now = Duration::from_millis(system_time_to_ms(timer.now()));
+        let now = Duration::from_millis(system_time_to_ms(self.store.opts.timer().now()));
         if now < plan.not_before {
             // Not yet — leave plan as-is
             return Ok(());
@@ -701,33 +775,28 @@ mod tests {
 
     use super::*;
     use crate::{
-        impls::{
-            mem,
-            mem::{
-                checkpoint::MemCheckpointStore, head::MemHeadStore, lease::MemLeaseStore,
-                segment::MemSegmentStore,
-            },
-        },
-        options::Options,
+        context::ManifestContext,
+        testing::{new_inmemory_manifest_with_context, new_inmemory_stores},
     };
 
     #[test]
     fn headless_compactor_invokes_manifest_logic() {
         block_on(async move {
-            let opts = Options::default();
+            let opts = Arc::new(ManifestContext::default());
             // Construct a simple Manifest to seed data, then run headless compactor.
-            let m = mem::new_manifest_with_opts::<String, String>(opts.clone());
+            let m = new_inmemory_manifest_with_context::<String, String, _>(Arc::clone(&opts));
             let mut s = m.session_write().await.unwrap();
-            s.put("a".into(), "1".into()).unwrap();
-            s.put("b".into(), "2".into()).unwrap();
+            s.put("a".into(), "1".into());
+            s.put("b".into(), "2".into());
             let _ = s.commit().await.unwrap();
 
+            let (head, segment, checkpoint, lease) = new_inmemory_stores();
             let comp = Compactor::<String, String, _, _, _, _>::new(
-                MemHeadStore::new(),
-                MemSegmentStore::new(),
-                MemCheckpointStore::new(),
-                MemLeaseStore::new(),
-                opts,
+                head,
+                segment,
+                checkpoint,
+                lease,
+                Arc::clone(&opts),
             );
             // Running on empty stores does nothing harmful.
             comp.run_once().await.unwrap();
@@ -740,23 +809,17 @@ mod gc_compute_tests {
     use futures_executor::block_on;
 
     use super::*;
-    use crate::impls::mem::{
-        checkpoint::MemCheckpointStore, gc_plan::MemGcPlanStore, head::MemHeadStore,
-        lease::MemLeaseStore, segment::MemSegmentStore,
-    };
+    use crate::testing::{new_inmemory_gc_plan_store, new_inmemory_stores};
 
     #[test]
     fn compute_plan_no_head_or_no_leases_yields_none() {
         block_on(async move {
-            let opts = Options::default();
+            let opts = Arc::new(ManifestContext::default());
+            let (head, segment, checkpoint, lease) = new_inmemory_stores();
             let comp = Compactor::<String, String, _, _, _, _>::new(
-                MemHeadStore::new(),
-                MemSegmentStore::new(),
-                MemCheckpointStore::new(),
-                MemLeaseStore::new(),
-                opts,
+                head, segment, checkpoint, lease, opts,
             );
-            let store = MemGcPlanStore::new();
+            let store = new_inmemory_gc_plan_store();
             // No head yet → None
             let t = comp.gc_compute(&store).await.unwrap();
             assert!(t.is_none());

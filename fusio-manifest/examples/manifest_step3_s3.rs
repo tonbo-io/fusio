@@ -1,41 +1,46 @@
-use std::env;
+use std::{env, sync::Arc};
 
+use fusio::executor::tokio::TokioExecutor;
 use fusio_manifest::{
+    context::ManifestContext,
     s3,
     types::{Error, Result},
+    BackoffPolicy,
 };
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
-    let setup = match load_env("manifest-step1")? {
+    let setup = match load_env("manifest-step3")? {
         Some(cfg) => cfg,
         None => return Ok(()),
     };
 
-    let manifest: s3::S3Manifest<String, String> = setup.config.clone().into();
+    let runtime = Arc::new(TokioExecutor::default());
+    let opts = Arc::new(ManifestContext::new(runtime).with_backoff(BackoffPolicy {
+        base_ms: 10,
+        max_ms: 500,
+        multiplier_times_100: 150,
+        jitter_frac_times_100: 20,
+        max_retries: 8,
+        max_elapsed_ms: 5_000,
+    }));
 
-    println!("== step 1: begin a write session and commit two keys");
-    let mut write = manifest.session_write().await?;
-    write.put("user:1".into(), "alice".into())?;
-    write.put("user:2".into(), "bob".into())?;
-    write.commit().await?;
-    println!("commit succeeded");
+    let cfg = setup.config.clone().with_context(Arc::clone(&opts));
+    let manifest: s3::S3Manifest<String, String, TokioExecutor> = cfg.clone().into();
+    let compactor: s3::S3Compactor<String, String, TokioExecutor> = manifest.compactor();
+    let mut tx = manifest.session_write().await?;
+    tx.put("config".into(), "s3-example".into());
+    tx.commit().await?;
 
-    println!("== step 2: read back with a snapshot");
-    let snap = manifest.snapshot().await?;
-    let reader = manifest.session_at(snap).await?;
-    for key in ["user:1", "user:2", "user:3"] {
-        let value = reader.get(&key.to_string()).await?;
-        println!("snapshot {key:?} -> {:?}", value);
-    }
+    let snapshot = manifest.snapshot().await?;
+    println!("S3 snapshot -> {:?}", snapshot);
 
-    println!("== step 3: pin a read session (holds a lease)");
-    let pinned = manifest.session_read().await?;
-    let contents = pinned.scan().await?;
-    println!("pinned snapshot contents: {:?}", contents);
-    pinned.end().await?;
+    let (_ckpt, _tag) = compactor.compact_once().await?;
+    println!("wrote checkpoint and published head");
 
-    println!("cleanup: S3 prefix {}", setup.config.prefix);
+    compactor.run_once().await?;
+
+    println!("cleanup: S3 prefix {}", cfg.prefix);
     Ok(())
 }
 

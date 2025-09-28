@@ -23,6 +23,7 @@ pub enum FileSystemTag {
     OPFS,
     // TODO: Remote needs to check whether endpoint and other remote fs are consistent
     S3,
+    Memory,
 }
 
 pub trait Fs: MaybeSend + MaybeSync {
@@ -32,7 +33,7 @@ pub trait Fs: MaybeSend + MaybeSync {
 
     fn file_system(&self) -> FileSystemTag;
 
-    fn open(&self, path: &Path) -> impl Future<Output = Result<Self::File, Error>> {
+    fn open(&self, path: &Path) -> impl Future<Output = Result<Self::File, Error>> + MaybeSend {
         self.open_options(path, OpenOptions::default())
     }
 
@@ -73,8 +74,9 @@ pub trait FsCas: MaybeSend + MaybeSync {
     fn put_conditional(
         &self,
         path: &Path,
-        payload: Vec<u8>,
+        payload: &[u8],
         content_type: Option<&str>,
+        metadata: Option<Vec<(String, String)>>,
         condition: CasCondition,
     ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<String, Error>> + '_>>;
 }

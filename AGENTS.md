@@ -17,11 +17,11 @@
   - `cargo test -p fusio --features tokio,aws,tokio-http`
   - `cargo test -p fusio-parquet --features tokio`
   - `cargo test -p fusio-log --no-default-features --features aws,bytes,monoio,monoio-http`
-- Lint/format: `cargo fmt --all` and `cargo clippy --workspace --all-features -D warnings`.
+- Lint/format: `cargo +nightly fmt --all` and `cargo clippy --workspace --all-features -D warnings`.
 - WASM tests (optional): `wasm-pack test --chrome --headless fusio --features aws,opfs,wasm-http` and `wasm-pack test --chrome --headless fusio-parquet --features web`.
 
 ## Coding Style & Naming Conventions
-- rustfmt (2021 edition) with max width 100, grouped imports; run `cargo fmt --all` before committing.
+- rustfmt (2021 edition) with max width 100, grouped imports; run `cargo +nightly fmt --all` before committing.
 - Prefer idiomatic Rust naming: modules/files `snake_case`, types/traits `CamelCase`, functions `snake_case`, constants `SCREAMING_SNAKE_CASE`.
 - Keep clippy clean; use `allow` sparingly and justify in code when unavoidable.
 
@@ -37,11 +37,12 @@
 ## Commit & Pull Request Guidelines
 - Follow Conventional Commits (observed in history): `feat:`, `fix:`, `docs:`, `chore:`, `refactor:` with optional scope, e.g., `feat(parquet): ...` and reference PRs/issues `(#123)`.
 - PRs: include a clear description, rationale, affected crates, feature flags tested, and test results. Update README/examples when behavior changes.
-- Pre-push checklist: `cargo fmt --all`, `cargo clippy --workspace --all-features -D warnings`, and appropriate `cargo test` runs.
+- Pre-push checklist: `cargo +nightly fmt --all`, `cargo clippy --workspace --all-features -D warnings`, and appropriate `cargo test` runs.
 
 ## Security & Configuration Tips
 - Do not commit credentials. For S3 tests/examples, export `AWS_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` locally; avoid checking these into code.
 - Prefer `--no-default-features` when you need a minimal surface and enable only the features you require.
+- When targeting S3 access points, pass the ARN directly to `AmazonS3Builder::new`; it now infers the alias host/region and switches to virtual-host style automatically.
 
 ## Tooling: ast-grep (AST-aware search)
 
@@ -73,5 +74,5 @@ Notes and tips
 - Use `--globs` to include or exclude paths; example: `--globs '!target/**'` (ignored by default).
 - If you see “Pattern contains an ERROR node,” simplify the pattern (use token search) or try the playground to refine it: https://ast-grep.github.io/playground.html
 
-# IMPORTAT
-We could break any backward compatibility, just make implementation as neat as possibe.
+# IMPORTANT
+We could break any backward compatibility, just make implementation as neat as possible.

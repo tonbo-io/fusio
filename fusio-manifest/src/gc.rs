@@ -1,10 +1,21 @@
 //! GC plan object and CAS operations
-use core::{pin::Pin, time::Duration};
+use core::time::Duration;
+use std::sync::Arc;
 
+use fusio::{
+    fs::{CasCondition, FsCas},
+    path::Path,
+    Error as FsError,
+};
 use fusio_core::{MaybeSend, MaybeSendFuture, MaybeSync};
 use serde::{Deserialize, Serialize};
 
-use crate::{head::PutCondition, types::Error};
+use crate::{
+    backoff::{classify_error, ExponentialBackoff, RetryClass},
+    head::PutCondition,
+    types::Error,
+    BackoffPolicy,
+};
 
 /// Minimal GC plan representation stored at `gc/GARBAGE` under a collection prefix.
 ///
@@ -68,21 +79,122 @@ pub struct GcTag(pub String);
 /// Backend abstraction for publishing and fetching the GC plan with conditional semantics.
 #[allow(dead_code)] // staging: wired by GC coordinator in follow-ups
 pub trait GcPlanStore: MaybeSend + MaybeSync {
-    fn load(
-        &self,
-    ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<Option<(GcPlan, GcTag)>, Error>>>>;
+    fn load(&self) -> impl MaybeSendFuture<Output = Result<Option<(GcPlan, GcTag)>, Error>> + '_;
 
     fn put(
         &self,
         plan: &GcPlan,
         cond: PutCondition,
-    ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<GcTag, Error>>>>;
+    ) -> impl MaybeSendFuture<Output = Result<GcTag, Error>> + '_;
+}
+
+#[derive(Clone)]
+pub struct FsGcPlanStore<C> {
+    cas: C,
+    key: String,
+    backoff: BackoffPolicy,
+    timer: Arc<dyn fusio::executor::Timer + Send + Sync>,
+}
+
+impl<C> FsGcPlanStore<C> {
+    pub fn new(
+        cas: C,
+        prefix: impl Into<String>,
+        backoff: BackoffPolicy,
+        timer: Arc<dyn fusio::executor::Timer + Send + Sync>,
+    ) -> Self {
+        let prefix = prefix.into().trim_end_matches('/').to_string();
+        let key = if prefix.is_empty() {
+            "gc/GARBAGE".to_string()
+        } else {
+            format!("{}/gc/GARBAGE", prefix)
+        };
+        Self {
+            cas,
+            key,
+            backoff,
+            timer,
+        }
+    }
+}
+
+impl<C> GcPlanStore for FsGcPlanStore<C>
+where
+    C: FsCas + Clone + Send + Sync + 'static,
+{
+    fn load(&self) -> impl MaybeSendFuture<Output = Result<Option<(GcPlan, GcTag)>, Error>> + '_ {
+        async move {
+            let path = Path::parse(&self.key).map_err(|e| Error::Other(Box::new(e)))?;
+            let mut bo = ExponentialBackoff::new(self.backoff, self.timer.clone());
+            loop {
+                match self.cas.load_with_tag(&path).await.map_err(map_fs_error) {
+                    Ok(None) => return Ok(None),
+                    Ok(Some((bytes, etag))) => {
+                        let plan: GcPlan = serde_json::from_slice(&bytes)
+                            .map_err(|e| Error::Corrupt(format!("invalid gc plan json: {e}")))?;
+                        return Ok(Some((plan, GcTag(etag))));
+                    }
+                    Err(err) => match classify_error(&err) {
+                        RetryClass::RetryTransient if !bo.exhausted() => {
+                            let delay = bo.next_delay();
+                            self.timer.sleep(delay).await;
+                            continue;
+                        }
+                        _ => return Err(err),
+                    },
+                }
+            }
+        }
+    }
+
+    fn put(
+        &self,
+        plan: &GcPlan,
+        cond: PutCondition,
+    ) -> impl MaybeSendFuture<Output = Result<GcTag, Error>> + '_ {
+        let body =
+            serde_json::to_vec(plan).map_err(|e| Error::Corrupt(format!("serialize gc plan: {e}")));
+        async move {
+            let body = body?;
+            let path = Path::parse(&self.key).map_err(|e| Error::Other(Box::new(e)))?;
+            let mut bo = ExponentialBackoff::new(self.backoff, self.timer.clone());
+            loop {
+                let condition = match cond {
+                    PutCondition::IfNotExists => CasCondition::IfNotExists,
+                    PutCondition::IfMatch(ref tag) => CasCondition::IfMatch(tag.0.clone()),
+                };
+                match self
+                    .cas
+                    .put_conditional(&path, &body, Some("application/json"), None, condition)
+                    .await
+                    .map_err(map_fs_error)
+                {
+                    Ok(etag) => return Ok(GcTag(etag)),
+                    Err(err) => match classify_error(&err) {
+                        RetryClass::RetryTransient if !bo.exhausted() => {
+                            let delay = bo.next_delay();
+                            self.timer.sleep(delay).await;
+                            continue;
+                        }
+                        _ => return Err(err),
+                    },
+                }
+            }
+        }
+    }
+}
+
+fn map_fs_error(err: FsError) -> Error {
+    match err {
+        FsError::PreconditionFailed => Error::PreconditionFailed,
+        other => Error::Other(Box::new(other)),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::impls::mem::gc_plan::MemGcPlanStore;
+    use crate::testing::new_inmemory_gc_plan_store;
 
     #[test]
     fn empty_by_default() {
@@ -95,7 +207,7 @@ mod tests {
     #[test]
     fn mem_gc_plan_store_semantics() {
         use futures_executor::block_on;
-        let store = MemGcPlanStore::new();
+        let store = new_inmemory_gc_plan_store();
         // load none
         assert!(block_on(store.load()).unwrap().is_none());
         // if-not-exists succeeds

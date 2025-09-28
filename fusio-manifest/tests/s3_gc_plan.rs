@@ -1,8 +1,13 @@
 // This test exercises the GC plan phases against real S3. It is ignored by default
 // and requires valid AWS credentials and an existing bucket (see env vars).
 
-use std::{env, sync::Arc, time::Duration};
+use std::{
+    env,
+    sync::Arc,
+    time::{Duration, SystemTime},
+};
 
+use fusio::executor::Timer;
 use fusio_manifest as manifest;
 
 #[tokio::test]
@@ -40,21 +45,24 @@ async fn s3_gc_plan_end_to_end() {
     let token = env::var("AWS_SESSION_TOKEN").ok();
 
     // Unique test prefix
+    let timer = fusio::executor::BlockingSleeper;
     let prefix = format!(
         "fusio-manifest-gc/{}/{}",
         std::env::var("USER").unwrap_or_else(|_| "user".into()),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+        timer
+            .now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap_or_default()
             .as_millis()
     );
 
-    // Options: make GC not_before immediate
-    let mut opts = manifest::options::Options::default();
+    // Context: make GC not_before immediate
+    let mut opts = manifest::context::ManifestContext::default();
     let retention = manifest::retention::DefaultRetention::default()
         .with_segments_min_ttl(Duration::ZERO)
         .with_checkpoints_min_ttl(Duration::ZERO);
     opts.set_retention(Arc::new(retention));
+    let opts = Arc::new(opts);
 
     // Manifest for writing
     let cfg = s3::Builder::new(bucket)
@@ -66,18 +74,18 @@ async fn s3_gc_plan_end_to_end() {
         })
         .region(region)
         .sign_payload(true)
-        .with_options(opts.clone())
+        .with_context(Arc::clone(&opts))
         .build();
     let kv: s3::S3Manifest<String, String> = cfg.clone().into();
     let comp: s3::S3Compactor<String, String> = kv.compactor();
 
     // Seed two segments (two commits)
     let mut s1 = kv.session_write().await.unwrap();
-    s1.put("a".into(), "1".into()).unwrap();
+    s1.put("a".into(), "1".into());
     let _ = s1.commit().await.unwrap();
 
     let mut s2 = kv.session_write().await.unwrap();
-    s2.put("b".into(), "2".into()).unwrap();
+    s2.put("b".into(), "2".into());
     let _ = s2.commit().await.unwrap();
 
     // Compact to create a checkpoint

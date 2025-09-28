@@ -1,5 +1,6 @@
-use std::env;
+use std::{env, time::SystemTime};
 
+use fusio::executor::Timer;
 use fusio_manifest as manifest;
 
 #[tokio::test]
@@ -37,12 +38,14 @@ async fn s3_end_to_end_manifest() {
     let token = env::var("AWS_SESSION_TOKEN").ok();
 
     // Unique test prefix
+    let timer = fusio::executor::BlockingSleeper;
     let prefix = format!(
         "fusio-manifest-blackbox/{}/{}",
         std::env::var("USER").unwrap_or_else(|_| "user".into()),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+        timer
+            .now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap_or_default()
             .as_millis()
     );
 
@@ -62,8 +65,8 @@ async fn s3_end_to_end_manifest() {
 
     // Write
     let mut s = kv.session_write().await.unwrap();
-    s.put("a".into(), "1".into()).unwrap();
-    s.put("b".into(), "2".into()).unwrap();
+    s.put("a".into(), "1".into());
+    s.put("b".into(), "2".into());
     let _ = s.commit().await.unwrap();
 
     // Read

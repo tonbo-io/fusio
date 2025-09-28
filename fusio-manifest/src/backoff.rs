@@ -1,5 +1,11 @@
 use core::time::Duration;
-use std::sync::Arc;
+use std::{
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
+    time::SystemTime,
+};
 
 use fusio::executor::Timer;
 
@@ -60,32 +66,42 @@ impl BackoffPolicy {
 }
 
 /// Runtime-agnostic exponential backoff with jitter.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ExponentialBackoff {
     pol: BackoffPolicy,
     attempt: u32,
-    start: std::time::Instant,
+    start: SystemTime,
     rng: u64,
+    timer: Arc<dyn Timer + Send + Sync>,
 }
 
 impl ExponentialBackoff {
-    pub fn new(pol: BackoffPolicy) -> Self {
-        let seed = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos() as u64;
+    pub fn new(pol: BackoffPolicy, timer: Arc<dyn Timer + Send + Sync>) -> Self {
+        let seed = seed_from_timer(&timer);
+        let start = timer.now();
         Self {
             pol,
             attempt: 0,
-            start: std::time::Instant::now(),
+            start,
             rng: seed ^ 0x9e3779b97f4a7c15,
+            timer,
         }
     }
 
     #[inline]
     pub fn exhausted(&self) -> bool {
-        self.attempt >= self.pol.max_retries
-            || self.start.elapsed() >= Duration::from_millis(self.pol.max_elapsed_ms)
+        if self.attempt >= self.pol.max_retries {
+            return true;
+        }
+        if self.pol.max_elapsed_ms == 0 {
+            return false;
+        }
+        let elapsed = self
+            .timer
+            .now()
+            .duration_since(self.start)
+            .unwrap_or_default();
+        elapsed >= Duration::from_millis(self.pol.max_elapsed_ms)
     }
 
     /// Compute the next delay and advance the attempt counter.
@@ -128,7 +144,16 @@ impl ExponentialBackoff {
     }
 }
 
-pub type TimerHandle = Arc<dyn Timer + Send + Sync>;
+fn seed_from_timer(timer: &Arc<dyn Timer + Send + Sync>) -> u64 {
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let now = timer
+        .now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos() as u64;
+    let counter = COUNTER.fetch_add(0x9e3779b97f4a7c15, Ordering::Relaxed);
+    now ^ counter
+}
 
 #[cfg(test)]
 mod tests {
@@ -137,7 +162,8 @@ mod tests {
     #[test]
     fn backoff_progresses_and_exhausts() {
         let pol = BackoffPolicy::default();
-        let mut bo = ExponentialBackoff::new(pol);
+        let timer: Arc<dyn Timer + Send + Sync> = Arc::new(fusio::executor::BlockingSleeper);
+        let mut bo = ExponentialBackoff::new(pol, timer);
         let mut delays = Vec::new();
         for _ in 0..pol.max_retries {
             delays.push(bo.next_delay());
@@ -149,7 +175,8 @@ mod tests {
     #[test]
     fn disabled_backoff_is_exhausted_immediately() {
         let pol = BackoffPolicy::disabled();
-        let bo = ExponentialBackoff::new(pol);
+        let timer: Arc<dyn Timer + Send + Sync> = Arc::new(fusio::executor::BlockingSleeper);
+        let bo = ExponentialBackoff::new(pol, timer);
         assert!(bo.exhausted());
     }
 }
