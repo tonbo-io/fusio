@@ -14,17 +14,18 @@ variables:
 Every run writes to a unique prefix to avoid collisions. Execute them with
 `cargo run -p fusio-manifest --example <name>`:
 
-1. `manifest_step1_basic`: open an S3 manifest, append a couple of keys, and read
+1. `step1_basic`: open an S3 manifest, append a couple of keys, and read
    them back through snapshots and a pinned read lease.
-2. `manifest_step2_leases`: demonstrates how pinned leases protect segments
+2. `step2_leases`: demonstrates how pinned leases protect segments
    during `compact_and_gc`, then reruns compaction after the lease is released.
-3. `manifest_step3_s3`: overrides the exponential backoff policy and constructs
-   both a writer manifest and a matching compactor via the S3 builder.
-4. `manifest_lease_keeper`: starts a background lease keeper task that maintains
+3. `step3_remote_compactor`: overrides the exponential backoff policy and demonstrates
+   running compaction + GC from a separate process built via the shared S3
+   config/GC plan store.
+4. `step4_lease_keeper`: starts a background lease keeper task that maintains
    a pinned read lease via the configured executor.
 
 Example:
 
 ```bash
-cargo run -p fusio-manifest --example manifest_step1_basic
+cargo run -p fusio-manifest --example step1_basic
 ```

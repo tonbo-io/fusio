@@ -27,20 +27,42 @@ async fn main() -> Result<()> {
 
     let cfg = setup.config.clone().with_context(Arc::clone(&opts));
     let manifest: s3::S3Manifest<String, String, TokioExecutor> = cfg.clone().into();
-    let compactor: s3::S3Compactor<String, String, TokioExecutor> = manifest.compactor();
-    let mut tx = manifest.session_write().await?;
-    tx.put("config".into(), "s3-example".into());
-    tx.commit().await?;
+
+    println!("== seed a few committed writes");
+    for (k, v) in [
+        ("config", "s3-example"),
+        ("feature", "remote-compactor"),
+        ("owner", "fusio"),
+    ] {
+        let mut writer = manifest.session_write().await?;
+        writer.put(k.to_string(), v.to_string());
+        writer.commit().await?;
+    }
 
     let snapshot = manifest.snapshot().await?;
-    println!("S3 snapshot -> {:?}", snapshot);
+    println!("latest snapshot before compaction -> {:?}", snapshot);
 
-    let (_ckpt, _tag) = compactor.compact_once().await?;
-    println!("wrote checkpoint and published head");
+    drop(manifest);
 
-    compactor.run_once().await?;
+    println!("== simulate a remote compactor process using the shared config");
+    let remote_compactor: s3::S3Compactor<String, String, TokioExecutor> = s3::compactor(cfg);
+    let (ckpt, head_tag) = remote_compactor.compact_once().await?;
+    println!(
+        "published checkpoint {:?} with head tag {:?}",
+        ckpt, head_tag
+    );
 
-    println!("cleanup: S3 prefix {}", cfg.prefix);
+    if let Some(gc_tag) = remote_compactor.gc_compute().await? {
+        println!("computed GC plan {:?}", gc_tag);
+        remote_compactor.gc_apply().await?;
+        println!("applied GC plan against HEAD");
+        remote_compactor.gc_delete_and_reset().await?;
+        println!("deleted segments/checkpoints and cleared plan");
+    } else {
+        println!("no GC work pending after compaction");
+    }
+
+    println!("cleanup: S3 prefix {}", setup.config.prefix);
     Ok(())
 }
 
