@@ -80,22 +80,23 @@ jobs:
           command: build
           args: --package fusio-parquet --features=monoio
 
-      - name: Configure aws credentials
-        if: ${{ (github.event_name == 'push' && github.ref_name == 'main') || startsWith(github.ref, 'refs/tags/') }}
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ env.ROLE_TO_ASSUME }}
-          role-session-name: fusio_session
-          aws-region: ${{ env.AWS_REGION }}
-        env:
-          AWS_REGION: ap-southeast-1
-          ROLE_TO_ASSUME: arn:aws:iam::232814779190:role/github
+      # - name: Configure aws credentials
+      #   if: ${{ (github.event_name == 'push' && github.ref_name == 'main') || startsWith(github.ref, 'refs/tags/') }}
+      #   uses: aws-actions/configure-aws-credentials@v4
+      #   with:
+      #     role-to-assume: ${{ env.ROLE_TO_ASSUME }}
+      #     role-session-name: fusio_session
+      #     aws-region: ${{ env.AWS_REGION }}
+      #   env:
+      #     AWS_REGION: ap-southeast-1
+      #     ROLE_TO_ASSUME: arn:aws:iam::232814779190:role/github
 
       - name: Run cargo test on tokio
         uses: actions-rs/cargo@v1
         with:
           command: test
-          args: --package fusio --features=tokio,aws,tokio-http
+          # args: --package fusio --features=tokio,aws,tokio-http
+          args: --package fusio --features=tokio,tokio-http
 
       - name: Run cargo test on monoio
         if: runner.os != 'Windows'
@@ -190,21 +191,24 @@ jobs:
         run: |
           cargo install wasm-pack
 
-      - name: Configure aws credentials
-        if: ${{ (github.event_name == 'push' && github.ref_name == 'main') || startsWith(github.ref, 'refs/tags/') }}
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ env.ROLE_TO_ASSUME }}
-          role-session-name: samplerolesession
-          aws-region: ${{ env.AWS_REGION }}
-        env:
-          AWS_REGION: ap-southeast-1
-          ROLE_TO_ASSUME: arn:aws:iam::232814779190:role/github
+      # - name: Configure aws credentials
+      #   if: ${{ (github.event_name == 'push' && github.ref_name == 'main') || startsWith(github.ref, 'refs/tags/') }}
+      #   uses: aws-actions/configure-aws-credentials@v4
+      #   with:
+      #     role-to-assume: ${{ env.ROLE_TO_ASSUME }}
+      #     role-session-name: samplerolesession
+      #     aws-region: ${{ env.AWS_REGION }}
+      #   env:
+      #     AWS_REGION: ap-southeast-1
+      #     ROLE_TO_ASSUME: arn:aws:iam::232814779190:role/github
 
       - name: Run wasm-pack test on fusion
+        # run: |
+        #   export PATH=$PATH:/tmp/chrome/chrome-linux64/:/tmp/chrome/chromedriver-linux64/
+        #   wasm-pack test --chrome --headless fusio --features aws,opfs,wasm-http
         run: |
           export PATH=$PATH:/tmp/chrome/chrome-linux64/:/tmp/chrome/chromedriver-linux64/
-          wasm-pack test --chrome --headless fusio --features aws,opfs,wasm-http
+          wasm-pack test --chrome --headless fusio --features opfs,wasm-http
 
       - name: Run wasm-pack test on fusion-parquet
         run: |
