@@ -126,15 +126,10 @@ async fn list_segments(setup: &Setup) -> Result<Vec<String>> {
         format!("{}/segments", setup.config.prefix)
     };
     let prefix_path = Path::from(prefix);
-    let stream = setup
-        .config
-        .s3
-        .list(&prefix_path)
-        .await
-        .map_err(|e| Error::Other(Box::new(e)))?;
+    let stream = setup.config.s3.list(&prefix_path).await?;
     pin_mut!(stream);
     while let Some(item) = stream.next().await {
-        let meta = item.map_err(|e| Error::Other(Box::new(e)))?;
+        let meta = item?;
         if let Some(name) = meta.path.filename() {
             out.push(name.to_string());
         }

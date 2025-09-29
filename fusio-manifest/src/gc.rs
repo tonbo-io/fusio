@@ -124,7 +124,7 @@ where
 {
     fn load(&self) -> impl MaybeSendFuture<Output = Result<Option<(GcPlan, GcTag)>, Error>> + '_ {
         async move {
-            let path = Path::parse(&self.key).map_err(|e| Error::Other(Box::new(e)))?;
+            let path = Path::parse(&self.key).map_err(|e| Error::other(e))?;
             let mut bo = ExponentialBackoff::new(self.backoff, self.timer.clone());
             loop {
                 match self.cas.load_with_tag(&path).await.map_err(map_fs_error) {
@@ -156,7 +156,7 @@ where
             serde_json::to_vec(plan).map_err(|e| Error::Corrupt(format!("serialize gc plan: {e}")));
         async move {
             let body = body?;
-            let path = Path::parse(&self.key).map_err(|e| Error::Other(Box::new(e)))?;
+            let path = Path::parse(&self.key).map_err(|e| Error::other(e))?;
             let mut bo = ExponentialBackoff::new(self.backoff, self.timer.clone());
             loop {
                 let condition = match cond {
@@ -187,7 +187,7 @@ where
 fn map_fs_error(err: FsError) -> Error {
     match err {
         FsError::PreconditionFailed => Error::PreconditionFailed,
-        other => Error::Other(Box::new(other)),
+        other => Error::Io(other),
     }
 }
 

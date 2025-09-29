@@ -72,7 +72,7 @@ struct LeaseDoc {
 
 /// Lease store backed by a filesystem implementation.
 #[derive(Clone)]
-pub struct FsLeaseStore<FS, T = Arc<dyn Timer + Send + Sync>>
+pub struct LeaseStoreImpl<FS, T = Arc<dyn Timer + Send + Sync>>
 where
     T: Timer + Clone,
 {
@@ -82,7 +82,7 @@ where
     timer: T,
 }
 
-impl<FS, T> FsLeaseStore<FS, T>
+impl<FS, T> LeaseStoreImpl<FS, T>
 where
     T: Timer + Clone,
 {
@@ -114,7 +114,7 @@ where
     }
 }
 
-impl<FS, T> LeaseStore for FsLeaseStore<FS, T>
+impl<FS, T> LeaseStore for LeaseStoreImpl<FS, T>
 where
     FS: Fs + FsCas + Clone + Send + Sync + 'static,
     T: Timer + Clone + Send + Sync + 'static,
@@ -146,8 +146,7 @@ where
                 };
                 let body = serde_json::to_vec(&doc)
                     .map_err(|e| crate::types::Error::Corrupt(format!("lease encode: {e}")))?;
-                let path =
-                    Path::parse(&key).map_err(|e| crate::types::Error::Other(Box::new(e)))?;
+                let path = Path::parse(&key).map_err(|e| crate::types::Error::other(e))?;
                 match self
                     .fs
                     .put_conditional(
@@ -173,7 +172,7 @@ where
                         let delay = backoff.next_delay();
                         self.timer.sleep(delay).await;
                     }
-                    Err(other) => return Err(crate::types::Error::Other(Box::new(other))),
+                    Err(other) => return Err(other.into()),
                 }
             }
         }
@@ -186,11 +185,10 @@ where
     ) -> impl MaybeSendFuture<Output = Result<(), crate::types::Error>> + '_ {
         let key = self.key_for(&lease.id.0);
         async move {
-            let path = Path::parse(&key).map_err(|e| crate::types::Error::Other(Box::new(e)))?;
-            let (bytes, tag) = match self.fs.load_with_tag(&path).await {
-                Ok(Some(v)) => v,
-                Ok(None) => return Err(crate::types::Error::Corrupt("lease missing".into())),
-                Err(err) => return Err(crate::types::Error::Other(Box::new(err))),
+            let path = Path::parse(&key).map_err(|e| crate::types::Error::other(e))?;
+            let (bytes, tag) = match self.fs.load_with_tag(&path).await? {
+                Some(v) => v,
+                None => return Err(crate::types::Error::Corrupt("lease missing".into())),
             };
             let mut doc: LeaseDoc = serde_json::from_slice(&bytes)
                 .map_err(|e| crate::types::Error::Corrupt(format!("lease decode: {e}")))?;
@@ -210,7 +208,7 @@ where
                 .await
                 .map_err(|e| match e {
                     FsError::PreconditionFailed => crate::types::Error::PreconditionFailed,
-                    other => crate::types::Error::Other(Box::new(other)),
+                    other => other.into(),
                 })?;
             Ok(())
         }
@@ -241,22 +239,17 @@ where
                 format!("{}/leases", self.prefix)
             };
             let prefix_path = Path::from(dir);
-            let stream = self
-                .fs
-                .list(&prefix_path)
-                .await
-                .map_err(|e| crate::types::Error::Other(Box::new(e)))?;
+            let stream = self.fs.list(&prefix_path).await?;
             futures_util::pin_mut!(stream);
             let now_ms = now.as_millis().min(u128::from(u64::MAX)) as u64;
             while let Some(item) = stream.next().await {
-                let meta = item.map_err(|e| crate::types::Error::Other(Box::new(e)))?;
+                let meta = item?;
                 let mut f = self
                     .fs
                     .open_options(&meta.path, OpenOptions::default())
-                    .await
-                    .map_err(|e| crate::types::Error::Other(Box::new(e)))?;
+                    .await?;
                 let (res, bytes) = f.read_to_end_at(Vec::new(), 0).await;
-                res.map_err(|e| crate::types::Error::Other(Box::new(e)))?;
+                res?;
                 if let Ok(doc) = serde_json::from_slice::<LeaseDoc>(&bytes) {
                     if doc.expires_at_ms > now_ms {
                         out.push(ActiveLease {

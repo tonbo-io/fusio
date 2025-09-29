@@ -11,15 +11,15 @@ use fusio::{
 
 use crate::{
     backoff::BackoffPolicy,
-    checkpoint::FsCheckpointStore,
+    checkpoint::CheckpointStoreImpl,
     compactor::Compactor,
     context::ManifestContext,
     gc::FsGcPlanStore,
-    head::FsHeadStore,
-    lease::FsLeaseStore,
+    head::HeadStoreImpl,
+    lease::LeaseStoreImpl,
     manifest::Manifest,
     retention::{DefaultRetention, RetentionPolicy},
-    segment::FsSegmentStore,
+    segment::SegmentStoreImpl,
     session::{ReadSession, WriteSession},
     snapshot::Snapshot,
     types::Result,
@@ -250,10 +250,10 @@ fn join_path(prefix: &str, child: &str) -> String {
 }
 
 /// Public wrapper over a Manifest with S3 stores to avoid leaking store types.
-type HeadStore = FsHeadStore<AmazonS3>;
-type SegmentStore = FsSegmentStore<AmazonS3>;
-type CheckpointStore = FsCheckpointStore<AmazonS3>;
-type LeaseStore = FsLeaseStore<AmazonS3>;
+type HeadStore = HeadStoreImpl<AmazonS3>;
+type SegmentStore = SegmentStoreImpl<AmazonS3>;
+type CheckpointStore = CheckpointStoreImpl<AmazonS3>;
+type LeaseStore = LeaseStoreImpl<AmazonS3>;
 
 pub struct S3Manifest<K, V, E = BlockingExecutor, R = DefaultRetention>
 where
@@ -366,10 +366,10 @@ where
     E: Executor + Timer + Clone + Send + Sync + 'static,
     R: RetentionPolicy + Clone,
 {
-    let head = FsHeadStore::new(cfg.s3.clone(), cfg.head_key());
-    let segs = FsSegmentStore::new(cfg.s3.clone(), join_path(&cfg.prefix, "segments"));
-    let ckpt = FsCheckpointStore::new(cfg.s3.clone(), cfg.prefix.clone());
-    let leases = FsLeaseStore::new(
+    let head = HeadStoreImpl::new(cfg.s3.clone(), cfg.head_key());
+    let segs = SegmentStoreImpl::new(cfg.s3.clone(), join_path(&cfg.prefix, "segments"));
+    let ckpt = CheckpointStoreImpl::new(cfg.s3.clone(), cfg.prefix.clone());
+    let leases = LeaseStoreImpl::new(
         cfg.s3.clone(),
         cfg.prefix.clone(),
         cfg.opts.backoff,
@@ -396,13 +396,13 @@ where
 {
     fn from(cfg: Config<R, E>) -> Self {
         let cfg_cloned = cfg.clone();
-        let head = FsHeadStore::new(cfg_cloned.s3.clone(), cfg_cloned.head_key());
-        let segs = FsSegmentStore::new(
+        let head = HeadStoreImpl::new(cfg_cloned.s3.clone(), cfg_cloned.head_key());
+        let segs = SegmentStoreImpl::new(
             cfg_cloned.s3.clone(),
             join_path(&cfg_cloned.prefix, "segments"),
         );
-        let ckpt = FsCheckpointStore::new(cfg_cloned.s3.clone(), cfg_cloned.prefix.clone());
-        let leases = FsLeaseStore::new(
+        let ckpt = CheckpointStoreImpl::new(cfg_cloned.s3.clone(), cfg_cloned.prefix.clone());
+        let leases = LeaseStoreImpl::new(
             cfg_cloned.s3.clone(),
             cfg_cloned.prefix.clone(),
             cfg_cloned.opts.backoff,

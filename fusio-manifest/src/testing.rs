@@ -1,29 +1,28 @@
 #![cfg(test)]
 
-use std::{hash::Hash, sync::Arc};
+use std::sync::Arc;
 
 use fusio::{
     executor::{BlockingExecutor, Timer},
     impls::mem::fs::InMemoryFs,
 };
-use serde::{de::DeserializeOwned, Serialize};
 
 use crate::{
-    backoff::BackoffPolicy, checkpoint::FsCheckpointStore, gc::FsGcPlanStore, head::FsHeadStore,
-    lease::FsLeaseStore, segment::FsSegmentStore,
+    backoff::BackoffPolicy, checkpoint::CheckpointStoreImpl, head::HeadStoreImpl,
+    lease::LeaseStoreImpl, segment::SegmentStoreImpl,
 };
 
 pub(crate) fn new_inmemory_stores() -> (
-    FsHeadStore<InMemoryFs>,
-    FsSegmentStore<InMemoryFs>,
-    FsCheckpointStore<InMemoryFs>,
-    FsLeaseStore<InMemoryFs>,
+    HeadStoreImpl<InMemoryFs>,
+    SegmentStoreImpl<InMemoryFs>,
+    CheckpointStoreImpl<InMemoryFs>,
+    LeaseStoreImpl<InMemoryFs>,
 ) {
     let fs = InMemoryFs::new();
-    let head = FsHeadStore::new(fs.clone(), "HEAD.json");
-    let segment = FsSegmentStore::new(fs.clone(), "segments");
-    let checkpoint = FsCheckpointStore::new(fs.clone(), "");
+    let head = HeadStoreImpl::new(fs.clone(), "HEAD.json");
+    let segment = SegmentStoreImpl::new(fs.clone(), "segments");
+    let checkpoint = CheckpointStoreImpl::new(fs.clone(), "");
     let timer: Arc<dyn Timer + Send + Sync> = Arc::new(BlockingExecutor::default());
-    let lease = FsLeaseStore::new(fs, "", BackoffPolicy::default(), timer);
+    let lease = LeaseStoreImpl::new(fs, "", BackoffPolicy::default(), timer);
     (head, segment, checkpoint, lease)
 }
