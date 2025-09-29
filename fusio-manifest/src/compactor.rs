@@ -774,7 +774,13 @@ mod tests {
             let opts = Arc::new(ManifestContext::default());
             // Construct a simple Manifest to seed data, then run headless compactor.
             let (head, segment, checkpoint, lease) = new_inmemory_stores();
-            let m = Manifest::new_with_context(head, segment, checkpoint, lease, Arc::clone(&opts));
+            let m = Manifest::<String, String, _, _, _, _>::new_with_context(
+                head,
+                segment,
+                checkpoint,
+                lease,
+                Arc::clone(&opts),
+            );
             let mut s = m.session_write().await.unwrap();
             s.put("a".into(), "1".into());
             s.put("b".into(), "2".into());

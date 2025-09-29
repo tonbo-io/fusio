@@ -60,12 +60,12 @@ pub struct CheckpointMeta {
 }
 
 pub trait CheckpointStore: MaybeSend + MaybeSync + Clone {
-    fn put_checkpoint(
-        &self,
+    fn put_checkpoint<'s>(
+        &'s self,
         meta: &CheckpointMeta,
-        payload: &[u8],
+        payload: &'s [u8],
         content_type: &str,
-    ) -> impl MaybeSendFuture<Output = Result<CheckpointId>> + '_;
+    ) -> impl MaybeSendFuture<Output = Result<CheckpointId>> + 's;
 
     fn get_checkpoint(
         &self,
@@ -89,12 +89,12 @@ pub trait CheckpointStore: MaybeSend + MaybeSync + Clone {
 }
 
 #[derive(Clone)]
-pub struct FsCheckpointStore<FS> {
+pub struct CheckpointStoreImpl<FS> {
     fs: FS,
     prefix: String,
 }
 
-impl<FS> FsCheckpointStore<FS> {
+impl<FS> CheckpointStoreImpl<FS> {
     pub fn new(fs: FS, prefix: impl Into<String>) -> Self {
         Self {
             fs,
@@ -122,20 +122,19 @@ impl<FS> FsCheckpointStore<FS> {
     }
 }
 
-impl<FS> CheckpointStore for FsCheckpointStore<FS>
+impl<FS> CheckpointStore for CheckpointStoreImpl<FS>
 where
     FS: Fs + Clone + Send + Sync + 'static,
     <FS as Fs>::File: FileCommit,
 {
-    fn put_checkpoint(
-        &self,
+    fn put_checkpoint<'s>(
+        &'s self,
         meta: &CheckpointMeta,
-        payload: &[u8],
+        payload: &'s [u8],
         content_type: &str,
-    ) -> impl MaybeSendFuture<Output = Result<CheckpointId>> + '_ {
+    ) -> impl MaybeSendFuture<Output = Result<CheckpointId>> + 's {
         let id = CheckpointId::new(meta.lsn);
         let (meta_key, data_key) = self.keys_for(&id, Self::payload_ext_for(content_type));
-        let payload_bytes = Bytes::copy_from_slice(payload);
         let meta_bytes = serde_json::to_vec(meta)
             .map(Bytes::from)
             .map_err(|e| Error::Corrupt(format!("ckpt meta encode: {e}")));
@@ -150,11 +149,10 @@ where
                             .truncate(true)
                             .write(true),
                     )
-                    .await
-                    .map_err(|e| Error::Other(Box::new(e)))?;
-                let (res, _) = f.write_all(payload_bytes).await;
-                res.map_err(|e| Error::Other(Box::new(e)))?;
-                f.commit().await.map_err(|e| Error::Other(Box::new(e)))?;
+                    .await?;
+                let (res, _) = f.write_all(payload).await;
+                res?;
+                f.commit().await?;
             }
             {
                 let meta_bytes = meta_bytes?;
@@ -167,11 +165,10 @@ where
                             .truncate(true)
                             .write(true),
                     )
-                    .await
-                    .map_err(|e| Error::Other(Box::new(e)))?;
+                    .await?;
                 let (res, _meta_bytes) = f.write_all(meta_bytes).await;
-                res.map_err(|e| Error::Other(Box::new(e)))?;
-                f.commit().await.map_err(|e| Error::Other(Box::new(e)))?;
+                res?;
+                f.commit().await?;
             }
             Ok(id)
         }
@@ -184,15 +181,12 @@ where
         let (meta_key, data_key_json) = self.keys_for(id, ".json");
         let (_mk2, data_key_bin) = self.keys_for(id, ".bin");
         async move {
-            let meta = FsCheckpointStore::load_meta(&self.fs, meta_key).await?;
+            let meta = CheckpointStoreImpl::load_meta(&self.fs, meta_key).await?;
             let fs = &self.fs;
             let read_payload = |k: String| async move {
-                let mut f = fs
-                    .open(&Path::from(k))
-                    .await
-                    .map_err(|e| Error::Other(Box::new(e)))?;
+                let mut f = fs.open(&Path::from(k)).await?;
                 let (res, bytes) = f.read_to_end_at(Vec::new(), 0).await;
-                res.map_err(|e| Error::Other(Box::new(e)))?;
+                res?;
                 Ok::<_, Error>(bytes)
             };
 
@@ -210,7 +204,7 @@ where
     ) -> impl MaybeSendFuture<Output = Result<CheckpointMeta>> + '_ {
         let (meta_key, _) = self.keys_for(id, ".json");
         let fs = &self.fs;
-        async move { FsCheckpointStore::load_meta(fs, meta_key).await }
+        async move { CheckpointStoreImpl::load_meta(fs, meta_key).await }
     }
 
     fn list(
@@ -229,11 +223,10 @@ where
                 let prefix_path = Path::from(dir);
                 let listing = fs
                     .list(&prefix_path)
-                    .await
-                    .map_err(|e| Error::Other(Box::new(e)))?;
+                    .await?;
                 futures_util::pin_mut!(listing);
                 while let Some(item) = listing.next().await {
-                    let meta = item.map_err(|e| Error::Other(Box::new(e)))?;
+                    let meta = item?;
                     let Some(filename) = meta.path.filename() else {
                         continue;
                     };
@@ -244,10 +237,9 @@ where
                     let id = CheckpointId::from(id_str);
                     let mut f = fs
                         .open(&meta.path)
-                        .await
-                        .map_err(|e| Error::Other(Box::new(e)))?;
+                        .await?;
                     let (res, bytes) = f.read_to_end_at(Vec::new(), 0).await;
-                    res.map_err(|e| Error::Other(Box::new(e)))?;
+                    res?;
                     let m: CheckpointMeta = serde_json::from_slice(&bytes)
                         .map_err(|e| Error::Corrupt(format!("ckpt meta decode: {e}")))?;
                     yield (id, m);
@@ -267,7 +259,7 @@ where
                     Ok(()) => {}
                     Err(FsError::Io(err)) if err.kind() == ErrorKind::NotFound => {}
                     Err(FsError::PreconditionFailed) => return Err(Error::PreconditionFailed),
-                    Err(other) => return Err(Error::Other(Box::new(other))),
+                    Err(other) => return Err(Error::Io(other.into())),
                 }
             }
             Ok(())
@@ -275,17 +267,14 @@ where
     }
 }
 
-impl<FS> FsCheckpointStore<FS>
+impl<FS> CheckpointStoreImpl<FS>
 where
     FS: Fs + Send + Sync,
 {
     async fn load_meta(fs: &FS, meta_key: String) -> Result<CheckpointMeta> {
-        let mut mf = fs
-            .open(&Path::from(meta_key))
-            .await
-            .map_err(|e| Error::Other(Box::new(e)))?;
+        let mut mf = fs.open(&Path::from(meta_key)).await?;
         let (res, meta_bytes) = mf.read_to_end_at(Vec::new(), 0).await;
-        res.map_err(|e| Error::Other(Box::new(e)))?;
+        res?;
         let meta: CheckpointMeta = serde_json::from_slice(&meta_bytes)
             .map_err(|e| Error::Corrupt(format!("ckpt meta decode: {e}")))?;
         Ok(meta)

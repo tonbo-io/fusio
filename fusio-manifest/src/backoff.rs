@@ -21,7 +21,7 @@ pub fn classify_error(err: &Error) -> RetryClass {
     match err {
         Error::PreconditionFailed => RetryClass::DurableConflict,
         Error::Unimplemented(_) | Error::Corrupt(_) => RetryClass::Fatal,
-        Error::Other(_) => RetryClass::RetryTransient,
+        Error::Io(_) | Error::Other(_) => RetryClass::RetryTransient,
     }
 }
 

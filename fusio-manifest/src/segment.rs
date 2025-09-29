@@ -20,13 +20,13 @@ pub struct SegmentMeta {
 pub trait SegmentIo: MaybeSend + MaybeSync {
     /// Write the given payload as a new segment with a writer-provided sequence number.
     /// Returns the durable segment identifier.
-    fn put_next(
-        &self,
+    fn put_next<'s>(
+        &'s self,
         seq: u64,
         txn_id: u64,
-        payload: &[u8],
+        payload: &'s [u8],
         content_type: &str,
-    ) -> impl MaybeSendFuture<Output = Result<SegmentId>> + '_;
+    ) -> impl MaybeSendFuture<Output = Result<SegmentId>> + 's;
 
     /// Fetch a previously written segment payload by id.
     fn get(&self, id: &SegmentId) -> impl MaybeSendFuture<Output = Result<Vec<u8>>> + '_;
@@ -46,7 +46,7 @@ pub trait SegmentIo: MaybeSend + MaybeSync {
 }
 
 #[derive(Clone)]
-pub struct FsSegmentStore<FS> {
+pub struct SegmentStoreImpl<FS> {
     fs: FS,
     pub(crate) prefix: String,
 }
@@ -60,7 +60,7 @@ trait ObjectHead {
     ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<Option<HashMap<String, String>>, FsError>> + 'a>>;
 }
 
-impl<FS> FsSegmentStore<FS> {
+impl<FS> SegmentStoreImpl<FS> {
     pub fn new(fs: FS, prefix: impl Into<String>) -> Self {
         Self {
             fs,
@@ -87,23 +87,22 @@ impl<FS> FsSegmentStore<FS> {
     }
 }
 
-impl<FS> SegmentIo for FsSegmentStore<FS>
+impl<FS> SegmentIo for SegmentStoreImpl<FS>
 where
     FS: Fs + FsCas + ObjectHead + Clone + Send + Sync + 'static,
 {
-    fn put_next(
-        &self,
+    fn put_next<'s>(
+        &'s self,
         seq: u64,
         txn_id: u64,
-        payload: &[u8],
+        payload: &'s [u8],
         content_type: &str,
-    ) -> impl MaybeSendFuture<Output = Result<SegmentId>> + '_ {
+    ) -> impl MaybeSendFuture<Output = Result<SegmentId>> + 's {
         let ext = match content_type {
             "application/json" => ".json",
             _ => ".bin",
         };
         let key = self.key_for(seq, ext);
-        let body = payload.to_vec();
         let ct = if content_type.is_empty() {
             None
         } else {
@@ -111,11 +110,11 @@ where
         };
         let meta_headers = vec![(TXN_ID_HEADER.to_string(), txn_id.to_string())];
         async move {
-            let path = Path::parse(&key).map_err(|e| Error::Other(Box::new(e)))?;
+            let path = Path::parse(&key).map_err(|e| Error::other(e))?;
             self.fs
                 .put_conditional(
                     &path,
-                    &body,
+                    payload,
                     ct.as_deref(),
                     Some(meta_headers),
                     CasCondition::IfNotExists,
@@ -135,13 +134,10 @@ where
             where
                 FS: Fs + Send + Sync,
             {
-                let path = Path::parse(key).map_err(|e| Error::Other(Box::new(e)))?;
-                let mut f = fs
-                    .open_options(&path, OpenOptions::default())
-                    .await
-                    .map_err(|e| Error::Other(Box::new(e)))?;
+                let path = Path::parse(key).map_err(|e| Error::other(e))?;
+                let mut f = fs.open_options(&path, OpenOptions::default()).await?;
                 let (res, buf) = f.read_to_end_at(Vec::new(), 0).await;
-                res.map_err(|e| Error::Other(Box::new(e)))?;
+                res?;
                 Ok(buf)
             }
 
@@ -158,7 +154,7 @@ where
         let key_bin = self.key_for(id.seq, ".bin");
         async move {
             let try_key = |key: String, fs: FS| async move {
-                let path = Path::parse(&key).map_err(|e| Error::Other(Box::new(e)))?;
+                let path = Path::parse(&key).map_err(|e| Error::other(e))?;
                 match fs.head_metadata(&path).await {
                     Ok(Some(metadata)) => {
                         let txn = metadata.get(TXN_ID_HEADER).ok_or_else(|| {
@@ -174,7 +170,7 @@ where
                     Ok(None) => Err(Error::Corrupt(format!(
                         "segment metadata missing object for key {key}"
                     ))),
-                    Err(e) => Err(Error::Other(Box::new(e))),
+                    Err(e) => Err(e.into()),
                 }
             };
 
@@ -194,16 +190,12 @@ where
         async move {
             let mut out = Vec::new();
             let prefix_path = Path::from(self.prefix.clone());
-            let stream = self
-                .fs
-                .list(&prefix_path)
-                .await
-                .map_err(|e| Error::Other(Box::new(e)))?;
+            let stream = self.fs.list(&prefix_path).await?;
             futures_util::pin_mut!(stream);
             while let Some(item) = stream.next().await {
-                let meta = item.map_err(|e| Error::Other(Box::new(e)))?;
+                let meta = item?;
                 if let Some(filename) = meta.path.filename() {
-                    if let Some(seq) = FsSegmentStore::<FS>::parse_seq(filename) {
+                    if let Some(seq) = SegmentStoreImpl::<FS>::parse_seq(filename) {
                         if seq >= from_seq {
                             out.push(SegmentId { seq });
                         }
@@ -221,16 +213,12 @@ where
     fn delete_upto(&self, upto_seq: u64) -> impl MaybeSendFuture<Output = Result<()>> + '_ {
         async move {
             let prefix_path = Path::from(self.prefix.clone());
-            let stream = self
-                .fs
-                .list(&prefix_path)
-                .await
-                .map_err(|e| Error::Other(Box::new(e)))?;
+            let stream = self.fs.list(&prefix_path).await?;
             futures_util::pin_mut!(stream);
             while let Some(item) = stream.next().await {
-                let meta = item.map_err(|e| Error::Other(Box::new(e)))?;
+                let meta = item?;
                 if let Some(filename) = meta.path.filename() {
-                    if let Some(seq) = FsSegmentStore::<FS>::parse_seq(filename) {
+                    if let Some(seq) = SegmentStoreImpl::<FS>::parse_seq(filename) {
                         if seq <= upto_seq {
                             let _ = self.fs.remove(&meta.path).await;
                         }
@@ -245,7 +233,7 @@ where
 fn map_fs_error(err: FsError) -> Error {
     match err {
         FsError::PreconditionFailed => Error::PreconditionFailed,
-        other => Error::Other(Box::new(other)),
+        other => Error::Io(other),
     }
 }
 

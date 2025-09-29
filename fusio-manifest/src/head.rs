@@ -46,17 +46,17 @@ pub trait HeadStore: MaybeSend + MaybeSync {
 fn map_fs_error(err: FsError) -> Error {
     match err {
         FsError::PreconditionFailed => Error::PreconditionFailed,
-        other => Error::Other(Box::new(other)),
+        other => Error::Io(other),
     }
 }
 
 #[derive(Clone)]
-pub struct FsHeadStore<C> {
+pub struct HeadStoreImpl<C> {
     cas: C,
     key: String,
 }
 
-impl<C> FsHeadStore<C> {
+impl<C> HeadStoreImpl<C> {
     pub fn new(cas: C, key: impl Into<String>) -> Self {
         Self {
             cas,
@@ -65,7 +65,7 @@ impl<C> FsHeadStore<C> {
     }
 }
 
-impl<C> HeadStore for FsHeadStore<C>
+impl<C> HeadStore for HeadStoreImpl<C>
 where
     C: FsCas + Clone + Send + Sync + 'static,
 {
@@ -73,7 +73,7 @@ where
         &self,
     ) -> impl MaybeSendFuture<Output = Result<Option<(HeadJson, HeadTag)>, Error>> + '_ {
         async {
-            let path = Path::parse(&self.key).map_err(|e| Error::Other(Box::new(e)))?;
+            let path = Path::parse(&self.key).map_err(|e| Error::other(e))?;
             match self.cas.load_with_tag(&path).await.map_err(map_fs_error)? {
                 None => Ok(None),
                 Some((bytes, tag)) => {
@@ -94,7 +94,7 @@ where
             serde_json::to_vec(head).map_err(|e| Error::Corrupt(format!("serialize head: {e}")));
         async move {
             let body = body?;
-            let path = Path::parse(&self.key).map_err(|e| Error::Other(Box::new(e)))?;
+            let path = Path::parse(&self.key).map_err(|e| Error::other(e))?;
             let condition = match cond {
                 PutCondition::IfNotExists => CasCondition::IfNotExists,
                 PutCondition::IfMatch(tag) => CasCondition::IfMatch(tag.0.clone()),

@@ -363,7 +363,7 @@ mod tests {
     use super::*;
     use crate::{
         context::ManifestContext,
-        head::{FsHeadStore, HeadTag},
+        head::{HeadStoreImpl, HeadTag},
         testing::new_inmemory_stores,
     };
 
@@ -378,7 +378,7 @@ mod tests {
 
     #[derive(Clone)]
     struct FlakyHeadStore {
-        inner: FsHeadStore<InMemoryFs>,
+        inner: HeadStoreImpl<InMemoryFs>,
         fail_first: Arc<AtomicBool>,
     }
 
