@@ -56,8 +56,15 @@ impl FileCommit for Box<dyn DynFile + '_> {
     }
 }
 
-/// Dyn-compatible (object safe) version of `Commit` for dynamic files.
-/// All types implementing `Commit` automatically implement this trait.
+/// Dyn-compatible (object safe) version of [`FileCommit`] for dynamic files.
+/// All types implementing [`FileCommit`] automatically implement this trait.
+///
+/// # Safety
+/// Implementors must guarantee that the returned future upholds the same
+/// semantics as [`FileCommit::commit`] on the underlying value and that it
+/// does not outlive the provided `&mut self`. The dynamic dispatch machinery
+/// assumes the future has exclusive access to the file handle for its
+/// lifetime; violating this can lead to aliasing bugs or use-after-free.
 pub unsafe trait DynFileCommit: MaybeSend {
     fn commit(&mut self) -> Pin<Box<dyn MaybeSendFuture<Output = Result<(), Error>> + '_>>;
 }

@@ -1,10 +1,12 @@
-use std::{str::FromStr, sync::Arc};
+use core::pin::Pin;
+use std::{collections::HashMap, str::FromStr, sync::Arc};
 
 use async_stream::stream;
 use bytes::{Buf, Bytes};
 use chrono::{DateTime, Utc};
+use fusio_core::MaybeSendFuture;
 use futures_core::Stream;
-use http::{Method, Request};
+use http::{header, Method, Request, StatusCode};
 use http_body_util::{BodyExt, Empty};
 use serde::{Deserialize, Serialize};
 use url::Url;
@@ -12,7 +14,8 @@ use url::Url;
 use super::{credential::AwsCredential, options::S3Options, S3Error, S3File};
 use crate::{
     error::Error,
-    fs::{FileMeta, FileSystemTag, Fs, OpenOptions},
+    fs::{CasCondition, FileMeta, FileSystemTag, Fs, FsCas, OpenOptions},
+    impls::remotes::aws::head::ETag,
     path::Path,
     remotes::{
         aws::{
@@ -121,6 +124,13 @@ pub struct AmazonS3 {
     pub(super) inner: Arc<AmazonS3Inner>,
 }
 
+#[derive(Debug, Clone)]
+pub struct HeadObject {
+    pub size: u64,
+    pub etag: Option<String>,
+    pub metadata: HashMap<String, String>,
+}
+
 impl AsRef<AmazonS3Inner> for AmazonS3 {
     fn as_ref(&self) -> &AmazonS3Inner {
         self.inner.as_ref()
@@ -139,6 +149,92 @@ impl AmazonS3 {
             #[allow(clippy::arc_with_non_send_sync)]
             inner: Arc::new(AmazonS3Inner { options, client }),
         }
+    }
+
+    pub async fn head_object(&self, path: &Path) -> Result<Option<HeadObject>, Error> {
+        let mut url = Url::from_str(self.as_ref().options.endpoint.as_str())
+            .map_err(|e| S3Error::from(HttpError::from(e)))
+            .map_err(|e| Error::Remote(Box::new(e)))?;
+        url = url
+            .join(path.as_ref())
+            .map_err(|e| Error::Remote(HttpError::from(e).into()))?;
+
+        let mut request = Request::builder()
+            .method(Method::HEAD)
+            .uri(url.as_str())
+            .body(Empty::<Bytes>::new())
+            .map_err(|e| Error::Remote(HttpError::from(e).into()))?;
+        request
+            .sign(&self.as_ref().options)
+            .await
+            .map_err(|err| Error::Remote(err.into()))?;
+
+        let response = self
+            .as_ref()
+            .client
+            .send_request(request)
+            .await
+            .map_err(|err| Error::Remote(err.into()))?;
+
+        if response.status() == StatusCode::NOT_FOUND {
+            let _ = response
+                .into_body()
+                .collect()
+                .await
+                .map_err(|e| Error::Remote(e.into()))?;
+            return Ok(None);
+        }
+
+        if !response.status().is_success() {
+            return Err(Error::Remote(
+                HttpError::HttpNotSuccess {
+                    status: response.status(),
+                    body: String::from_utf8_lossy(
+                        &response
+                            .into_body()
+                            .collect()
+                            .await
+                            .map_err(|e| Error::Remote(e.into()))?
+                            .to_bytes(),
+                    )
+                    .to_string(),
+                }
+                .into(),
+            ));
+        }
+
+        let headers = response.headers().clone();
+        let size = headers
+            .get(header::CONTENT_LENGTH)
+            .and_then(|hv| hv.to_str().ok())
+            .and_then(|s| s.parse::<u64>().ok())
+            .unwrap_or(0);
+        let etag = headers
+            .get(header::ETAG)
+            .and_then(|hv| hv.to_str().ok())
+            .map(|s| s.to_string());
+
+        let mut metadata = HashMap::new();
+        for (name, value) in headers.iter() {
+            let lower = name.as_str().to_ascii_lowercase();
+            if lower.starts_with("x-amz-meta-") {
+                if let Ok(val) = value.to_str() {
+                    metadata.insert(lower.clone(), val.to_string());
+                }
+            }
+        }
+
+        let _ = response
+            .into_body()
+            .collect()
+            .await
+            .map_err(|e| Error::Remote(e.into()))?;
+
+        Ok(Some(HeadObject {
+            size,
+            etag,
+            metadata,
+        }))
     }
 }
 
@@ -302,6 +398,55 @@ impl Fs for AmazonS3 {
     async fn link(&self, _: &Path, _: &Path) -> Result<(), Error> {
         Err(Error::Unsupported {
             message: "s3 does not support link file".to_string(),
+        })
+    }
+}
+
+impl FsCas for AmazonS3 {
+    fn load_with_tag(
+        &self,
+        path: &Path,
+    ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<Option<(Vec<u8>, String)>, Error>> + '_>> {
+        let key = path.to_string();
+        Box::pin(async move {
+            match self.get_with_etag(&key).await? {
+                Some((bytes, etag)) => Ok(Some((bytes.to_vec(), etag.0))),
+                None => Ok(None),
+            }
+        })
+    }
+
+    fn put_conditional(
+        &self,
+        path: &Path,
+        payload: &[u8],
+        content_type: Option<&str>,
+        metadata: Option<Vec<(String, String)>>,
+        condition: CasCondition,
+    ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<String, Error>> + '_>> {
+        let key = path.to_string();
+        let ct = content_type.map(|s| s.to_string());
+        let payload = Bytes::copy_from_slice(payload);
+        let metadata = metadata.unwrap_or_default();
+        Box::pin(async move {
+            let ct_ref = ct.as_deref();
+            let metadata_ref = if metadata.is_empty() {
+                None
+            } else {
+                Some(metadata.as_slice())
+            };
+            let result = match condition {
+                CasCondition::IfNotExists => {
+                    self.put_if_none_match(&key, payload.clone(), ct_ref, metadata_ref)
+                        .await
+                }
+                CasCondition::IfMatch(tag) => {
+                    let etag = ETag(tag);
+                    self.put_if_match(&key, payload, &etag, ct_ref, metadata_ref)
+                        .await
+                }
+            }?;
+            Ok(result.0)
         })
     }
 }

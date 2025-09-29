@@ -58,12 +58,14 @@ pub mod fs;
 pub mod impls;
 pub mod path;
 
-pub use durability::{DirSync, FileCommit, FileSync};
+pub use durability::{DirSync, DurabilityLevel, FileCommit, FileSync};
 #[cfg(all(feature = "dyn", feature = "fs"))]
 pub use dynamic::fs::DynFs;
+#[cfg(feature = "fs")]
+pub use fs::{CasCondition, Fs, FsCas, OpenOptions};
 pub use fusio_core::{
     error::{BoxedError, Error},
-    DurabilityLevel, IoBuf, IoBufMut, MaybeSend, MaybeSync, Read, Write,
+    IoBuf, IoBufMut, MaybeSend, MaybeSync, Read, Write,
 };
 #[cfg(feature = "dyn")]
 pub use fusio_core::{DynRead, DynWrite};

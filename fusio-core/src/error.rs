@@ -17,6 +17,8 @@ pub enum Error {
     Remote(BoxedError),
     #[error("unsupported operation: {message}")]
     Unsupported { message: String },
+    #[error("precondition failed")]
+    PreconditionFailed,
     #[error("Performs dynamic cast failed.")]
     CastError,
     #[error("Error occurs in wasm: {message}")]

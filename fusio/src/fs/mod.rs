@@ -3,8 +3,9 @@
 
 mod options;
 
-use std::future::Future;
+use core::{future::Future, pin::Pin};
 
+use fusio_core::MaybeSendFuture;
 use futures_core::Stream;
 pub use options::*;
 
@@ -22,6 +23,7 @@ pub enum FileSystemTag {
     OPFS,
     // TODO: Remote needs to check whether endpoint and other remote fs are consistent
     S3,
+    Memory,
 }
 
 pub trait Fs: MaybeSend + MaybeSync {
@@ -31,7 +33,7 @@ pub trait Fs: MaybeSend + MaybeSync {
 
     fn file_system(&self) -> FileSystemTag;
 
-    fn open(&self, path: &Path) -> impl Future<Output = Result<Self::File, Error>> {
+    fn open(&self, path: &Path) -> impl Future<Output = Result<Self::File, Error>> + MaybeSend {
         self.open_options(path, OpenOptions::default())
     }
 
@@ -54,6 +56,29 @@ pub trait Fs: MaybeSend + MaybeSync {
     fn copy(&self, from: &Path, to: &Path) -> impl Future<Output = Result<(), Error>> + MaybeSend;
 
     fn link(&self, from: &Path, to: &Path) -> impl Future<Output = Result<(), Error>> + MaybeSend;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CasCondition {
+    IfNotExists,
+    IfMatch(String),
+}
+
+/// Optional CAS extensions for filesystems that support conditional object updates.
+pub trait FsCas: MaybeSend + MaybeSync {
+    fn load_with_tag(
+        &self,
+        path: &Path,
+    ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<Option<(Vec<u8>, String)>, Error>> + '_>>;
+
+    fn put_conditional(
+        &self,
+        path: &Path,
+        payload: &[u8],
+        content_type: Option<&str>,
+        metadata: Option<Vec<(String, String)>>,
+        condition: CasCondition,
+    ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<String, Error>> + '_>>;
 }
 
 #[cfg(test)]

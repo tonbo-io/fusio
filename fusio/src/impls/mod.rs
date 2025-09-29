@@ -2,6 +2,7 @@
 
 pub mod buffered;
 pub mod disk;
+pub mod mem;
 pub mod remotes;
 
 use std::{future::Future, io::Cursor};

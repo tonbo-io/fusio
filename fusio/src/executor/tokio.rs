@@ -1,9 +1,9 @@
 use std::{error::Error, future::Future};
 
-use fusio_core::{MaybeSend, MaybeSync};
+use fusio_core::{MaybeSend, MaybeSendFuture, MaybeSync};
 use tokio::runtime::Handle;
 
-use super::{Executor, JoinHandle, RwLock};
+use super::{Executor, JoinHandle, RwLock, Timer};
 
 impl<R: MaybeSend> JoinHandle<R> for tokio::task::JoinHandle<R> {
     async fn join(self) -> Result<R, Box<dyn Error>> {
@@ -30,6 +30,7 @@ impl<T: MaybeSend + MaybeSync> RwLock<T> for tokio::sync::RwLock<T> {
     }
 }
 
+#[derive(Clone)]
 pub struct TokioExecutor {
     handle: Handle,
 }
@@ -66,5 +67,20 @@ impl Executor for TokioExecutor {
         T: MaybeSend + MaybeSync,
     {
         tokio::sync::RwLock::new(value)
+    }
+}
+
+impl Timer for TokioExecutor {
+    fn sleep(
+        &self,
+        dur: std::time::Duration,
+    ) -> std::pin::Pin<Box<dyn MaybeSendFuture<Output = ()>>> {
+        Box::pin(async move {
+            tokio::time::sleep(dur).await;
+        })
+    }
+
+    fn now(&self) -> std::time::SystemTime {
+        std::time::SystemTime::now()
     }
 }

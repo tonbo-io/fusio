@@ -1,0 +1,114 @@
+use fusio::{
+    fs::{CasCondition, FsCas},
+    path::Path,
+    Error as FsError,
+};
+use fusio_core::{MaybeSend, MaybeSendFuture, MaybeSync};
+use serde::{Deserialize, Serialize};
+
+use crate::types::Error;
+
+/// Opaque tag for conditional updates (e.g., S3 ETag or digest).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HeadTag(pub String);
+
+/// Condition for publishing HEAD.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PutCondition {
+    /// Only create if the object does not already exist.
+    IfNotExists,
+    /// Only replace if the current object's tag matches.
+    IfMatch(HeadTag),
+}
+
+/// JSON-serializable HEAD structure per RFC.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct HeadJson {
+    pub version: u32,
+    pub snapshot: Option<String>,
+    pub last_segment_seq: Option<u64>,
+    pub last_txn_id: u64,
+}
+
+/// Backend abstraction for publishing and fetching HEAD with conditional semantics.
+pub trait HeadStore: MaybeSend + MaybeSync {
+    fn load(
+        &self,
+    ) -> impl MaybeSendFuture<Output = Result<Option<(HeadJson, HeadTag)>, Error>> + '_;
+
+    fn put(
+        &self,
+        head: &HeadJson,
+        cond: PutCondition,
+    ) -> impl MaybeSendFuture<Output = Result<HeadTag, Error>> + '_;
+}
+
+fn map_fs_error(err: FsError) -> crate::types::Error {
+    match err {
+        FsError::PreconditionFailed => crate::types::Error::PreconditionFailed,
+        other => crate::types::Error::Other(Box::new(other)),
+    }
+}
+
+#[derive(Clone)]
+pub struct FsHeadStore<C> {
+    cas: C,
+    key: String,
+}
+
+impl<C> FsHeadStore<C> {
+    pub fn new(cas: C, key: impl Into<String>) -> Self {
+        Self {
+            cas,
+            key: key.into(),
+        }
+    }
+}
+
+impl<C> HeadStore for FsHeadStore<C>
+where
+    C: FsCas + Clone + Send + Sync + 'static,
+{
+    fn load(
+        &self,
+    ) -> impl MaybeSendFuture<Output = Result<Option<(HeadJson, HeadTag)>, crate::types::Error>> + '_
+    {
+        async {
+            let path =
+                Path::parse(&self.key).map_err(|e| crate::types::Error::Other(Box::new(e)))?;
+            match self.cas.load_with_tag(&path).await.map_err(map_fs_error)? {
+                None => Ok(None),
+                Some((bytes, tag)) => {
+                    let head: HeadJson = serde_json::from_slice(&bytes).map_err(|e| {
+                        crate::types::Error::Corrupt(format!("invalid head json: {e}"))
+                    })?;
+                    Ok(Some((head, HeadTag(tag))))
+                }
+            }
+        }
+    }
+
+    fn put(
+        &self,
+        head: &HeadJson,
+        cond: PutCondition,
+    ) -> impl MaybeSendFuture<Output = Result<HeadTag, crate::types::Error>> + '_ {
+        let body = serde_json::to_vec(head)
+            .map_err(|e| crate::types::Error::Corrupt(format!("serialize head: {e}")));
+        async move {
+            let body = body?;
+            let path =
+                Path::parse(&self.key).map_err(|e| crate::types::Error::Other(Box::new(e)))?;
+            let condition = match cond {
+                PutCondition::IfNotExists => CasCondition::IfNotExists,
+                PutCondition::IfMatch(tag) => CasCondition::IfMatch(tag.0.clone()),
+            };
+            let tag = self
+                .cas
+                .put_conditional(&path, &body, Some("application/json"), None, condition)
+                .await
+                .map_err(map_fs_error)?;
+            Ok(HeadTag(tag))
+        }
+    }
+}

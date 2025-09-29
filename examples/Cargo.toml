@@ -13,6 +13,7 @@ tokio = ["dep:tokio", "fusio/tokio"]
 [dependencies]
 fusio = { path = "../fusio" }
 fusio-opendal = { path = "../fusio-opendal" }
+futures-util = "0.3"
 monoio = { version = "0.2", optional = true }
 opendal = { version = "0.50.1", default-features = false, features = [
     "services-memory",

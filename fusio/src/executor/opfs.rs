@@ -1,9 +1,9 @@
-use std::{error::Error, future::Future, sync::Arc};
+use std::{error::Error, future::Future, sync::Arc, time::SystemTime};
 
 use fusio_core::{MaybeSend, MaybeSendFuture, MaybeSync};
 use wasm_bindgen::{prelude::*, JsCast};
 
-use super::{Executor, JoinHandle, RwLock, Sleeper};
+use super::{Executor, JoinHandle, RwLock, Timer};
 
 #[wasm_bindgen]
 pub struct OpfsExecutor;
@@ -89,7 +89,7 @@ impl Executor for OpfsExecutor {
     }
 }
 
-impl Sleeper for OpfsExecutor {
+impl Timer for OpfsExecutor {
     fn sleep(
         &self,
         dur: core::time::Duration,
@@ -109,5 +109,9 @@ impl Sleeper for OpfsExecutor {
             });
             let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
         })
+    }
+
+    fn now(&self) -> SystemTime {
+        SystemTime::now()
     }
 }

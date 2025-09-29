@@ -5,7 +5,6 @@
 extern crate alloc;
 
 pub mod buf;
-pub mod durability;
 #[cfg(feature = "alloc")]
 #[cfg_attr(docsrs, doc(cfg(feature = "alloc")))]
 mod dynamic;
@@ -15,7 +14,6 @@ mod maybe;
 use core::future::Future;
 
 pub use buf::{IoBuf, IoBufMut};
-pub use durability::DurabilityLevel;
 #[cfg(feature = "alloc")]
 #[cfg_attr(docsrs, doc(cfg(feature = "alloc")))]
 pub use dynamic::{DynRead, DynWrite};

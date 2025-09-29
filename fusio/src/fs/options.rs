@@ -1,4 +1,4 @@
-use fusio_core::DurabilityLevel;
+use crate::durability::DurabilityLevel;
 
 #[derive(Debug)]
 pub struct OpenOptions {
