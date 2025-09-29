@@ -73,7 +73,7 @@ where
         &self,
     ) -> impl MaybeSendFuture<Output = Result<Option<(HeadJson, HeadTag)>, Error>> + '_ {
         async {
-            let path = Path::parse(&self.key).map_err(|e| Error::other(e))?;
+            let path = Path::parse(&self.key).map_err(Error::other)?;
             match self.cas.load_with_tag(&path).await.map_err(map_fs_error)? {
                 None => Ok(None),
                 Some((bytes, tag)) => {
@@ -94,7 +94,7 @@ where
             serde_json::to_vec(head).map_err(|e| Error::Corrupt(format!("serialize head: {e}")));
         async move {
             let body = body?;
-            let path = Path::parse(&self.key).map_err(|e| Error::other(e))?;
+            let path = Path::parse(&self.key).map_err(Error::other)?;
             let condition = match cond {
                 PutCondition::IfNotExists => CasCondition::IfNotExists,
                 PutCondition::IfMatch(tag) => CasCondition::IfMatch(tag.0.clone()),

@@ -75,7 +75,7 @@ impl<O: ObjectStore> Read for S3File<O> {
             .get_opts(&self.path, options)
             .await
             .map_err(|err| Error::Remote(err.into()))?;
-        Ok(response.meta.size as u64)
+        Ok(response.meta.size)
     }
 }
 
