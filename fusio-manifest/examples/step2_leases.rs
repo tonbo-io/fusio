@@ -18,8 +18,7 @@ async fn main() -> Result<()> {
     let retention = DefaultRetention::default()
         .with_checkpoints_min_ttl(Duration::ZERO)
         .with_segments_min_ttl(Duration::ZERO);
-    let runtime = Arc::new(TokioExecutor::default());
-    let opts = Arc::new(ManifestContext::new(runtime).with_retention(Arc::new(retention)));
+    let opts = Arc::new(ManifestContext::new(TokioExecutor::default()).with_retention(retention));
 
     let manifest: s3::S3Manifest<String, String, TokioExecutor> =
         setup.config.clone().with_context(Arc::clone(&opts)).into();

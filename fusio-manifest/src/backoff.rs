@@ -1,9 +1,6 @@
 use core::time::Duration;
 use std::{
-    sync::{
-        atomic::{AtomicU64, Ordering},
-        Arc,
-    },
+    sync::atomic::{AtomicU64, Ordering},
     time::SystemTime,
 };
 
@@ -66,17 +63,22 @@ impl BackoffPolicy {
 }
 
 /// Runtime-agnostic exponential backoff with jitter.
-#[derive(Clone)]
-pub struct ExponentialBackoff {
+pub struct ExponentialBackoff<T>
+where
+    T: Timer,
+{
     pol: BackoffPolicy,
     attempt: u32,
     start: SystemTime,
     rng: u64,
-    timer: Arc<dyn Timer + Send + Sync>,
+    timer: T,
 }
 
-impl ExponentialBackoff {
-    pub fn new(pol: BackoffPolicy, timer: Arc<dyn Timer + Send + Sync>) -> Self {
+impl<T> ExponentialBackoff<T>
+where
+    T: Timer,
+{
+    pub fn new(pol: BackoffPolicy, timer: T) -> Self {
         let seed = seed_from_timer(&timer);
         let start = timer.now();
         Self {
@@ -144,7 +146,10 @@ impl ExponentialBackoff {
     }
 }
 
-fn seed_from_timer(timer: &Arc<dyn Timer + Send + Sync>) -> u64 {
+fn seed_from_timer<T>(timer: &T) -> u64
+where
+    T: Timer,
+{
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     let now = timer
         .now()
@@ -157,6 +162,8 @@ fn seed_from_timer(timer: &Arc<dyn Timer + Send + Sync>) -> u64 {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
 
     #[test]

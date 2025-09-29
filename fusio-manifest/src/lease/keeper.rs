@@ -16,7 +16,7 @@ pub struct LeaseKeeper {
 
 impl LeaseKeeper {
     pub(crate) fn spawn<E, LS>(
-        executor: Arc<E>,
+        executor: E,
         timer: Arc<dyn Timer + Send + Sync>,
         leases: LS,
         lease: LeaseHandle,
@@ -24,7 +24,7 @@ impl LeaseKeeper {
     ) -> Result<Self>
     where
         LS: LeaseStore + Clone + 'static,
-        E: Executor + Timer + Send + Sync + 'static,
+        E: Executor + Timer + Clone + Send + Sync + 'static,
     {
         if ttl == Duration::from_millis(0) {
             return Err(Error::Unimplemented("lease keeper requires positive ttl"));

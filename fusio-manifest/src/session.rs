@@ -9,6 +9,7 @@ use crate::{
     head::{HeadJson, HeadStore, PutCondition},
     lease::{keeper::LeaseKeeper, LeaseHandle, LeaseStore},
     manifest::{Op, Record, Segment},
+    retention::{DefaultRetention, RetentionPolicy},
     segment::SegmentIo,
     snapshot::{ScanRange, Snapshot},
     store::Store,
@@ -16,17 +17,18 @@ use crate::{
     BlockingExecutor,
 };
 
-struct SessionInner<K, V, HS, SS, CS, LS, E = BlockingExecutor>
+struct SessionInner<K, V, HS, SS, CS, LS, E = BlockingExecutor, R = DefaultRetention>
 where
     K: PartialOrd + Eq + Hash + Serialize + DeserializeOwned,
     V: Serialize + DeserializeOwned,
-    HS: HeadStore + Clone,
-    SS: SegmentIo + Clone,
-    CS: CheckpointStore + Clone,
-    LS: LeaseStore + Clone,
-    E: Executor + Timer + Send + Sync + 'static,
+    HS: HeadStore,
+    SS: SegmentIo,
+    CS: CheckpointStore,
+    LS: LeaseStore,
+    E: Executor + Timer + Clone + Send + Sync + 'static,
+    R: RetentionPolicy + Clone,
 {
-    store: Arc<Store<HS, SS, CS, LS, E>>,
+    store: Arc<Store<HS, SS, CS, LS, E, R>>,
     lease: Option<LeaseHandle>,
     snapshot: Snapshot,
     pinned: bool,
@@ -34,15 +36,16 @@ where
     _marker: PhantomData<(K, V)>,
 }
 
-impl<K, V, HS, SS, CS, LS, E> Drop for SessionInner<K, V, HS, SS, CS, LS, E>
+impl<K, V, HS, SS, CS, LS, E, R> Drop for SessionInner<K, V, HS, SS, CS, LS, E, R>
 where
     K: PartialOrd + Eq + Hash + Serialize + DeserializeOwned,
     V: Serialize + DeserializeOwned,
-    HS: HeadStore + Clone,
-    SS: SegmentIo + Clone,
-    CS: CheckpointStore + Clone,
-    LS: LeaseStore + Clone,
-    E: Executor + Timer + Send + Sync + 'static,
+    HS: HeadStore,
+    SS: SegmentIo,
+    CS: CheckpointStore,
+    LS: LeaseStore,
+    E: Executor + Timer + Clone + Send + Sync + 'static,
+    R: RetentionPolicy + Clone,
 {
     fn drop(&mut self) {
         debug_assert!(
@@ -52,18 +55,19 @@ where
     }
 }
 
-impl<K, V, HS, SS, CS, LS, E> SessionInner<K, V, HS, SS, CS, LS, E>
+impl<K, V, HS, SS, CS, LS, E, R> SessionInner<K, V, HS, SS, CS, LS, E, R>
 where
     K: PartialOrd + Eq + Hash + Serialize + DeserializeOwned,
     V: Serialize + DeserializeOwned,
-    HS: HeadStore + Clone,
-    SS: SegmentIo + Clone,
-    CS: CheckpointStore + Clone,
-    LS: LeaseStore + Clone,
-    E: Executor + Timer + Send + Sync + 'static,
+    HS: HeadStore,
+    SS: SegmentIo,
+    CS: CheckpointStore,
+    LS: LeaseStore,
+    E: Executor + Timer + Clone + Send + Sync + 'static,
+    R: RetentionPolicy + Clone,
 {
     fn new(
-        store: Arc<Store<HS, SS, CS, LS, E>>,
+        store: Arc<Store<HS, SS, CS, LS, E, R>>,
         lease: Option<LeaseHandle>,
         snapshot: Snapshot,
         pinned: bool,
@@ -79,7 +83,7 @@ where
         }
     }
 
-    fn store(&self) -> &Arc<Store<HS, SS, CS, LS, E>> {
+    fn store(&self) -> &Arc<Store<HS, SS, CS, LS, E, R>> {
         &self.store
     }
 
@@ -92,7 +96,8 @@ where
     }
 
     fn timer(&self) -> ArcTimer {
-        self.store.opts.timer()
+        let timer = self.store.opts.timer().clone();
+        Arc::new(timer) as ArcTimer
     }
 
     async fn release_lease(&mut self) -> Result<()> {
@@ -120,10 +125,7 @@ where
 
     fn start_lease_keeper(&self) -> Result<LeaseKeeper>
     where
-        HS: Clone,
-        SS: Clone,
-        CS: Clone,
-        LS: Clone + 'static,
+        LS: LeaseStore + Clone + 'static,
     {
         if !self.pinned {
             return Err(Error::Unimplemented(
@@ -135,7 +137,7 @@ where
             .as_ref()
             .ok_or(Error::Unimplemented("lease keeper requires active lease"))?
             .clone();
-        let executor = Arc::clone(self.store.opts.executor());
+        let executor = self.store.opts.executor().clone();
         let timer = self.timer();
         let leases = self.store.leases.clone();
         let ttl = self.ttl;
@@ -288,31 +290,33 @@ type ArcTimer = Arc<dyn Timer + Send + Sync>;
 
 /// Read-only pinned session.
 #[must_use = "Sessions hold a lease; call end().await before dropping"]
-pub struct ReadSession<K, V, HS, SS, CS, LS, E = BlockingExecutor>
+pub struct ReadSession<K, V, HS, SS, CS, LS, E = BlockingExecutor, R = DefaultRetention>
 where
     K: PartialOrd + Eq + Hash + Serialize + DeserializeOwned,
     V: Serialize + DeserializeOwned,
-    HS: HeadStore + Clone,
-    SS: SegmentIo + Clone,
-    CS: CheckpointStore + Clone,
-    LS: LeaseStore + Clone,
-    E: Executor + Timer + Send + Sync + 'static,
+    HS: HeadStore,
+    SS: SegmentIo,
+    CS: CheckpointStore,
+    LS: LeaseStore,
+    E: Executor + Timer + Clone + Send + Sync + 'static,
+    R: RetentionPolicy + Clone,
 {
-    inner: SessionInner<K, V, HS, SS, CS, LS, E>,
+    inner: SessionInner<K, V, HS, SS, CS, LS, E, R>,
 }
 
-impl<K, V, HS, SS, CS, LS, E> ReadSession<K, V, HS, SS, CS, LS, E>
+impl<K, V, HS, SS, CS, LS, E, R> ReadSession<K, V, HS, SS, CS, LS, E, R>
 where
     K: PartialOrd + Eq + Hash + Serialize + DeserializeOwned,
     V: Serialize + DeserializeOwned,
-    HS: HeadStore + Clone,
-    SS: SegmentIo + Clone,
-    CS: CheckpointStore + Clone,
-    LS: LeaseStore + Clone,
-    E: Executor + Timer + Send + Sync + 'static,
+    HS: HeadStore,
+    SS: SegmentIo,
+    CS: CheckpointStore,
+    LS: LeaseStore,
+    E: Executor + Timer + Clone + Send + Sync + 'static,
+    R: RetentionPolicy + Clone,
 {
     pub(crate) fn new(
-        store: Arc<Store<HS, SS, CS, LS, E>>,
+        store: Arc<Store<HS, SS, CS, LS, E, R>>,
         lease: Option<LeaseHandle>,
         snapshot: Snapshot,
         pinned: bool,
@@ -329,10 +333,7 @@ where
 
     pub fn start_lease_keeper(&self) -> Result<LeaseKeeper>
     where
-        HS: Clone,
-        SS: Clone,
-        CS: Clone,
-        LS: Clone + 'static,
+        LS: LeaseStore + Clone + 'static,
     {
         self.inner.start_lease_keeper()
     }
@@ -360,32 +361,34 @@ where
 
 /// Writable session with staged operations.
 #[must_use = "Sessions hold a lease; call commit().await or end().await before dropping"]
-pub struct WriteSession<K, V, HS, SS, CS, LS, E = BlockingExecutor>
+pub struct WriteSession<K, V, HS, SS, CS, LS, E = BlockingExecutor, R = DefaultRetention>
 where
     K: PartialOrd + Eq + Hash + Serialize + DeserializeOwned,
     V: Serialize + DeserializeOwned,
-    HS: HeadStore + Clone,
-    SS: SegmentIo + Clone,
-    CS: CheckpointStore + Clone,
-    LS: LeaseStore + Clone,
-    E: Executor + Timer + Send + Sync + 'static,
+    HS: HeadStore,
+    SS: SegmentIo,
+    CS: CheckpointStore,
+    LS: LeaseStore,
+    E: Executor + Timer + Clone + Send + Sync + 'static,
+    R: RetentionPolicy + Clone,
 {
-    inner: SessionInner<K, V, HS, SS, CS, LS, E>,
+    inner: SessionInner<K, V, HS, SS, CS, LS, E, R>,
     staged: Vec<(K, Op, Option<V>)>,
 }
 
-impl<K, V, HS, SS, CS, LS, E> WriteSession<K, V, HS, SS, CS, LS, E>
+impl<K, V, HS, SS, CS, LS, E, R> WriteSession<K, V, HS, SS, CS, LS, E, R>
 where
     K: PartialOrd + Eq + Hash + Serialize + DeserializeOwned,
     V: Serialize + DeserializeOwned,
-    HS: HeadStore + Clone,
-    SS: SegmentIo + Clone,
-    CS: CheckpointStore + Clone,
-    LS: LeaseStore + Clone,
-    E: Executor + Timer + Send + Sync + 'static,
+    HS: HeadStore,
+    SS: SegmentIo,
+    CS: CheckpointStore,
+    LS: LeaseStore,
+    E: Executor + Timer + Clone + Send + Sync + 'static,
+    R: RetentionPolicy + Clone,
 {
     pub(crate) fn new(
-        store: Arc<Store<HS, SS, CS, LS, E>>,
+        store: Arc<Store<HS, SS, CS, LS, E, R>>,
         lease: Option<LeaseHandle>,
         snapshot: Snapshot,
         pinned: bool,
@@ -562,13 +565,13 @@ where
             let new_head = match cur_head {
                 None => HeadJson {
                     version: 1,
-                    snapshot: None,
+                    checkpoint_id: None,
                     last_segment_seq: Some(next_seq),
                     last_txn_id: next_txn,
                 },
                 Some(h) => HeadJson {
                     version: h.version,
-                    snapshot: h.snapshot,
+                    checkpoint_id: h.checkpoint_id,
                     last_segment_seq: Some(next_seq),
                     last_txn_id: next_txn,
                 },
@@ -632,8 +635,8 @@ mod tests {
     fn read_session_end_releases_lease() {
         block_on(async move {
             let (head, seg, ck, ls) = new_inmemory_stores();
-            let opts: ManifestContext<NoopExecutor> =
-                ManifestContext::new(Arc::new(NoopExecutor::default()));
+            let opts: ManifestContext<DefaultRetention, NoopExecutor> =
+                ManifestContext::new(NoopExecutor::default());
             let manifest: crate::manifest::Manifest<String, String, _, _, _, _, NoopExecutor> =
                 crate::manifest::Manifest::new_with_context(
                     head,
@@ -655,8 +658,8 @@ mod tests {
     fn write_session_commit_conflict() {
         block_on(async move {
             let (head, seg, ck, ls) = new_inmemory_stores();
-            let opts: ManifestContext<NoopExecutor> =
-                ManifestContext::new(Arc::new(NoopExecutor::default()));
+            let opts: ManifestContext<DefaultRetention, NoopExecutor> =
+                ManifestContext::new(NoopExecutor::default());
             let shared = Arc::new(opts);
             let manifest: crate::manifest::Manifest<String, String, _, _, _, _, NoopExecutor> =
                 crate::manifest::Manifest::new_with_context(
@@ -679,7 +682,7 @@ mod tests {
             head.put(
                 &HeadJson {
                     version: 1,
-                    snapshot: None,
+                    checkpoint_id: None,
                     last_segment_seq: Some(10),
                     last_txn_id: 10,
                 },

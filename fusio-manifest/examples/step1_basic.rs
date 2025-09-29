@@ -14,8 +14,7 @@ async fn main() -> Result<()> {
         None => return Ok(()),
     };
 
-    let runtime = Arc::new(TokioExecutor::default());
-    let context = Arc::new(ManifestContext::new(runtime));
+    let context = Arc::new(ManifestContext::new(TokioExecutor::default()));
     let manifest: s3::S3Manifest<String, String, TokioExecutor> =
         setup.config.clone().with_context(context).into();
 

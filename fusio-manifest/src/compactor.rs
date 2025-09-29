@@ -21,6 +21,7 @@ use crate::{
     head::{HeadJson, HeadStore, HeadTag, PutCondition},
     lease::LeaseStore,
     manifest::{Manifest, Op, Segment},
+    retention::{DefaultRetention, RetentionPolicy},
     segment::SegmentIo,
     snapshot::Snapshot,
     store::Store,
@@ -31,16 +32,17 @@ use crate::{
 /// Headless compactor that orchestrates compaction + GC using the same logic
 /// as `Manifest`, without requiring a long‑lived manifest instance owned by
 /// the caller.
-pub struct Compactor<K, V, HS, SS, CS, LS, E = BlockingExecutor>
+pub struct Compactor<K, V, HS, SS, CS, LS, E = BlockingExecutor, R = DefaultRetention>
 where
-    HS: HeadStore + Clone,
-    SS: SegmentIo + Clone,
-    CS: CheckpointStore + Clone,
-    LS: LeaseStore + Clone,
-    E: Executor + Timer + Send + Sync + 'static,
+    HS: HeadStore + Send + Sync + 'static,
+    SS: SegmentIo + Send + Sync + 'static,
+    CS: CheckpointStore + Send + Sync + 'static,
+    LS: LeaseStore + Send + Sync + 'static,
+    E: Executor + Timer + Clone + Send + Sync + 'static,
+    R: RetentionPolicy + Clone,
 {
     _phantom: PhantomData<(K, V)>,
-    store: Arc<Store<HS, SS, CS, LS, E>>,
+    store: Arc<Store<HS, SS, CS, LS, E, R>>,
 }
 
 #[derive(Default)]
@@ -51,38 +53,33 @@ struct CheckpointRetentionStats {
     keep_last_ids: std::collections::BTreeSet<CheckpointId>,
 }
 
-impl<K, V, HS, SS, CS, LS, E> Compactor<K, V, HS, SS, CS, LS, E>
+impl<K, V, HS, SS, CS, LS, E, R> Compactor<K, V, HS, SS, CS, LS, E, R>
 where
     K: PartialOrd + Eq + Hash + Serialize + DeserializeOwned,
     V: Serialize + DeserializeOwned,
-    HS: HeadStore + Clone,
-    SS: SegmentIo + Clone,
-    CS: CheckpointStore + Clone,
-    LS: LeaseStore + Clone,
-    E: Executor + Timer + Send + Sync + 'static,
+    HS: HeadStore + Send + Sync + 'static,
+    SS: SegmentIo + Send + Sync + 'static,
+    CS: CheckpointStore + Send + Sync + 'static,
+    LS: LeaseStore + Send + Sync + 'static,
+    E: Executor + Timer + Clone + Send + Sync + 'static,
+    R: RetentionPolicy + Clone,
 {
-    pub fn new(head: HS, seg: SS, ckpt: CS, leases: LS, opts: Arc<ManifestContext<E>>) -> Self {
+    pub fn new(head: HS, seg: SS, ckpt: CS, leases: LS, opts: Arc<ManifestContext<R, E>>) -> Self {
         Self {
             _phantom: PhantomData,
             store: Arc::new(Store::new(head, seg, ckpt, leases, opts)),
         }
     }
 
-    pub(crate) fn from_store(store: Arc<Store<HS, SS, CS, LS, E>>) -> Self {
+    pub(crate) fn from_store(store: Arc<Store<HS, SS, CS, LS, E, R>>) -> Self {
         Self {
             _phantom: PhantomData,
             store,
         }
     }
 
-    fn manifest(&self) -> Manifest<K, V, HS, SS, CS, LS, E> {
-        Manifest::new_with_context(
-            self.store.head.clone(),
-            self.store.segment.clone(),
-            self.store.checkpoint.clone(),
-            self.store.leases.clone(),
-            self.store.opts.clone(),
-        )
+    fn manifest(&self) -> Manifest<K, V, HS, SS, CS, LS, E, R> {
+        Manifest::from_store(self.store.clone())
     }
 
     async fn snapshot(&self) -> Result<Snapshot> {
@@ -95,10 +92,9 @@ where
                 checkpoint_id: None,
             }),
             Some((h, tag)) => {
-                let (checkpoint_id, checkpoint_seq) = if let Some(id) = h.snapshot.as_ref() {
-                    let id = CheckpointId(id.clone());
-                    let (meta, _payload) = self.store.checkpoint.get_checkpoint(&id).await?;
-                    (Some(id), Some(meta.last_segment_seq_at_ckpt))
+                let (checkpoint_id, checkpoint_seq) = if let Some(id) = h.checkpoint_id.as_ref() {
+                    let (meta, _payload) = self.store.checkpoint.get_checkpoint(id).await?;
+                    (Some(id.clone()), Some(meta.last_segment_seq_at_ckpt))
                 } else {
                     (None, None)
                 };
@@ -208,12 +204,13 @@ where
             None => {
                 let new_head = HeadJson {
                     version: 1,
-                    snapshot: Some(id.0.clone()),
+                    checkpoint_id: Some(id.clone()),
                     last_segment_seq: None,
                     last_txn_id: 0,
                 };
                 let pol = self.store.opts.backoff;
-                let mut bo = ExponentialBackoff::new(pol, self.store.opts.timer());
+                let timer = self.store.opts.timer().clone();
+                let mut bo = ExponentialBackoff::new(pol, timer.clone());
                 let tag = loop {
                     match self
                         .store
@@ -226,7 +223,7 @@ where
                         Err(e) => match crate::backoff::classify_error(&e) {
                             RetryClass::RetryTransient if !bo.exhausted() => {
                                 let delay = bo.next_delay();
-                                self.store.opts.timer().sleep(delay).await;
+                                timer.sleep(delay).await;
                                 continue;
                             }
                             _ => return Err(e),
@@ -238,12 +235,12 @@ where
             Some((cur, cur_tag)) => {
                 let new_head = HeadJson {
                     version: cur.version,
-                    snapshot: Some(id.0.clone()),
+                    checkpoint_id: Some(id.clone()),
                     last_segment_seq: cur.last_segment_seq,
                     last_txn_id: cur.last_txn_id,
                 };
                 let pol = self.store.opts.backoff;
-                let timer = self.store.opts.timer();
+                let timer = self.store.opts.timer().clone();
                 let mut bo = ExponentialBackoff::new(pol, timer.clone());
                 let tag = loop {
                     match self
@@ -348,7 +345,7 @@ where
         store: &S,
     ) -> Result<Option<GcTag>> {
         let pol = self.store.opts.backoff;
-        let timer = self.store.opts.timer();
+        let timer = self.store.opts.timer().clone();
         let mut bo = ExponentialBackoff::new(pol, timer.clone());
         loop {
             // Read current HEAD snapshot/tag
@@ -539,7 +536,7 @@ where
     /// plan was computed, CAS-resets the plan to empty to signal invalidation.
     pub async fn gc_apply<S: GcPlanStore + Clone + 'static>(&self, store: &S) -> Result<()> {
         let pol = self.store.opts.backoff;
-        let timer = self.store.opts.timer();
+        let timer = self.store.opts.timer().clone();
         let mut bo = ExponentialBackoff::new(pol, timer.clone());
         'outer: loop {
             // Load plan; nothing to do if absent/empty
@@ -639,13 +636,8 @@ where
             };
 
             // If HEAD already references a sufficient checkpoint, nothing to do.
-            let already_ok = if let Some(cur_ckpt_id) = cur_head.snapshot.as_ref() {
-                match self
-                    .store
-                    .checkpoint
-                    .get_checkpoint(&CheckpointId(cur_ckpt_id.clone()))
-                    .await
-                {
+            let already_ok = if let Some(cur_ckpt_id) = cur_head.checkpoint_id.as_ref() {
+                match self.store.checkpoint.get_checkpoint(cur_ckpt_id).await {
                     Ok((meta, _)) => meta.last_segment_seq_at_ckpt >= upto,
                     Err(_) => false,
                 }
@@ -656,10 +648,10 @@ where
                 return Ok(());
             }
 
-            // Publish new HEAD with updated snapshot via CAS against current head tag
+            // Publish new HEAD with updated checkpoint id via CAS against current head tag
             let new_head = crate::head::HeadJson {
                 version: cur_head.version,
-                snapshot: Some(target_id.0.clone()),
+                checkpoint_id: Some(target_id.clone()),
                 last_segment_seq: cur_head.last_segment_seq,
                 last_txn_id: cur_head.last_txn_id,
             };
@@ -700,7 +692,7 @@ where
     /// (best-effort, idempotent), then CAS-resets the GC plan to empty.
     pub async fn gc_delete_and_reset<S: GcPlanStore + 'static>(&self, store: &S) -> Result<()> {
         let pol = self.store.opts.backoff;
-        let timer = self.store.opts.timer();
+        let timer = self.store.opts.timer().clone();
         let mut bo = ExponentialBackoff::new(pol, timer.clone());
         // Load plan
         let loaded = match store.load().await {
@@ -774,17 +766,15 @@ mod tests {
     use futures_executor::block_on;
 
     use super::*;
-    use crate::{
-        context::ManifestContext,
-        testing::{new_inmemory_manifest_with_context, new_inmemory_stores},
-    };
+    use crate::{context::ManifestContext, manifest::Manifest, testing::new_inmemory_stores};
 
     #[test]
     fn headless_compactor_invokes_manifest_logic() {
         block_on(async move {
             let opts = Arc::new(ManifestContext::default());
             // Construct a simple Manifest to seed data, then run headless compactor.
-            let m = new_inmemory_manifest_with_context::<String, String, _>(Arc::clone(&opts));
+            let (head, segment, checkpoint, lease) = new_inmemory_stores();
+            let m = Manifest::new_with_context(head, segment, checkpoint, lease, Arc::clone(&opts));
             let mut s = m.session_write().await.unwrap();
             s.put("a".into(), "1".into());
             s.put("b".into(), "2".into());
@@ -806,10 +796,14 @@ mod tests {
 
 #[cfg(test)]
 mod gc_compute_tests {
+    use fusio::{
+        executor::{BlockingExecutor, Timer},
+        impls::mem::fs::InMemoryFs,
+    };
     use futures_executor::block_on;
 
     use super::*;
-    use crate::testing::{new_inmemory_gc_plan_store, new_inmemory_stores};
+    use crate::{backoff::BackoffPolicy, gc::FsGcPlanStore, testing::new_inmemory_stores};
 
     #[test]
     fn compute_plan_no_head_or_no_leases_yields_none() {
@@ -819,7 +813,8 @@ mod gc_compute_tests {
             let comp = Compactor::<String, String, _, _, _, _>::new(
                 head, segment, checkpoint, lease, opts,
             );
-            let store = new_inmemory_gc_plan_store();
+            let timer: Arc<dyn Timer + Send + Sync> = Arc::new(BlockingExecutor::default());
+            let store = FsGcPlanStore::new(InMemoryFs::new(), "", BackoffPolicy::default(), timer);
             // No head yet → None
             let t = comp.gc_compute(&store).await.unwrap();
             assert!(t.is_none());

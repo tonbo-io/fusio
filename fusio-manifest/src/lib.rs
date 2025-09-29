@@ -42,7 +42,7 @@ mod tests {
         let (store, _, _, _) = new_inmemory_stores();
         let head = HeadJson {
             version: 1,
-            snapshot: None,
+            checkpoint_id: None,
             last_segment_seq: None,
             last_txn_id: 7,
         };

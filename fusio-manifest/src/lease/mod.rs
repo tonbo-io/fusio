@@ -4,6 +4,7 @@ use std::{
 };
 
 use fusio::{
+    executor::Timer,
     fs::{CasCondition, Fs, FsCas, OpenOptions},
     path::Path,
     Error as FsError, Read,
@@ -71,20 +72,21 @@ struct LeaseDoc {
 
 /// Lease store backed by a filesystem implementation.
 #[derive(Clone)]
-pub struct FsLeaseStore<FS> {
+pub struct FsLeaseStore<FS, T = Arc<dyn Timer + Send + Sync>>
+where
+    T: Timer + Clone,
+{
     fs: FS,
     prefix: String,
     backoff: BackoffPolicy,
-    timer: Arc<dyn fusio::executor::Timer + Send + Sync>,
+    timer: T,
 }
 
-impl<FS> FsLeaseStore<FS> {
-    pub fn new(
-        fs: FS,
-        prefix: impl Into<String>,
-        backoff: BackoffPolicy,
-        timer: Arc<dyn fusio::executor::Timer + Send + Sync>,
-    ) -> Self {
+impl<FS, T> FsLeaseStore<FS, T>
+where
+    T: Timer + Clone,
+{
+    pub fn new(fs: FS, prefix: impl Into<String>, backoff: BackoffPolicy, timer: T) -> Self {
         let prefix = prefix.into().trim_end_matches('/').to_string();
         Self {
             fs,
@@ -102,17 +104,20 @@ impl<FS> FsLeaseStore<FS> {
         }
     }
 
-    fn wall_clock_now_ms() -> u64 {
-        SystemTime::now()
+    fn wall_clock_now_ms(&self) -> u64 {
+        self.timer
+            .now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap_or_default()
-            .as_millis() as u64
+            .as_millis()
+            .min(u128::from(u64::MAX)) as u64
     }
 }
 
-impl<FS> LeaseStore for FsLeaseStore<FS>
+impl<FS, T> LeaseStore for FsLeaseStore<FS, T>
 where
     FS: Fs + FsCas + Clone + Send + Sync + 'static,
+    T: Timer + Clone + Send + Sync + 'static,
 {
     fn create(
         &self,
@@ -125,7 +130,7 @@ where
             let mut attempt: u32 = 0;
             let mut backoff = ExponentialBackoff::new(self.backoff, self.timer.clone());
             loop {
-                let now = Self::wall_clock_now_ms();
+                let now = self.wall_clock_now_ms();
                 let expires_at_ms = now.saturating_add(ttl_ms);
                 let id = if attempt == 0 {
                     format!("lease-{}", now)
@@ -189,7 +194,7 @@ where
             };
             let mut doc: LeaseDoc = serde_json::from_slice(&bytes)
                 .map_err(|e| crate::types::Error::Corrupt(format!("lease decode: {e}")))?;
-            let now = Self::wall_clock_now_ms();
+            let now = self.wall_clock_now_ms();
             let ttl_ms = ttl.as_millis().min(u128::from(u64::MAX)) as u64;
             doc.expires_at_ms = now.saturating_add(ttl_ms);
             let body = serde_json::to_vec(&doc)
