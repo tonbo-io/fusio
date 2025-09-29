@@ -193,8 +193,12 @@ fn map_fs_error(err: FsError) -> Error {
 
 #[cfg(test)]
 mod tests {
+    use fusio::{
+        executor::{BlockingExecutor, Timer},
+        impls::mem::fs::InMemoryFs,
+    };
+
     use super::*;
-    use crate::testing::new_inmemory_gc_plan_store;
 
     #[test]
     fn empty_by_default() {
@@ -207,7 +211,8 @@ mod tests {
     #[test]
     fn mem_gc_plan_store_semantics() {
         use futures_executor::block_on;
-        let store = new_inmemory_gc_plan_store();
+        let timer: Arc<dyn Timer + Send + Sync> = Arc::new(BlockingExecutor::default());
+        let store = FsGcPlanStore::new(InMemoryFs::new(), "", BackoffPolicy::default(), timer);
         // load none
         assert!(block_on(store.load()).unwrap().is_none());
         // if-not-exists succeeds

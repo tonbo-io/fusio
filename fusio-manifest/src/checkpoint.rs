@@ -13,8 +13,40 @@ use serde::{Deserialize, Serialize};
 
 use crate::types::{Error, Result};
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct CheckpointId(pub String);
+
+impl CheckpointId {
+    /// Construct a checkpoint id using the canonical `ckpt-<lsn>` format.
+    pub fn new(lsn: u64) -> Self {
+        Self(format!("ckpt-{lsn:020}"))
+    }
+
+    /// Borrow the underlying string representation (e.g., for object keys).
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// Attempt to extract the LSN from a canonical checkpoint id.
+    pub fn lsn(&self) -> Option<u64> {
+        self.0
+            .strip_prefix("ckpt-")
+            .and_then(|rest| rest.parse::<u64>().ok())
+    }
+}
+
+impl From<String> for CheckpointId {
+    fn from(value: String) -> Self {
+        Self(value)
+    }
+}
+
+impl From<&str> for CheckpointId {
+    fn from(value: &str) -> Self {
+        Self(value.to_owned())
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CheckpointMeta {
@@ -70,15 +102,11 @@ impl<FS> FsCheckpointStore<FS> {
         }
     }
 
-    fn id_for(lsn: u64) -> CheckpointId {
-        CheckpointId(format!("ckpt-{:020}", lsn))
-    }
-
     fn keys_for(&self, id: &CheckpointId, payload_ext: &str) -> (String, String) {
         let base = if self.prefix.is_empty() {
-            format!("checkpoints/{}", id.0)
+            format!("checkpoints/{}", id.as_str())
         } else {
-            format!("{}/checkpoints/{}", self.prefix, id.0)
+            format!("{}/checkpoints/{}", self.prefix, id.as_str())
         };
         (
             format!("{}.meta.json", base),
@@ -105,7 +133,7 @@ where
         payload: &[u8],
         content_type: &str,
     ) -> impl MaybeSendFuture<Output = Result<CheckpointId>> + '_ {
-        let id = Self::id_for(meta.lsn);
+        let id = CheckpointId::new(meta.lsn);
         let (meta_key, data_key) = self.keys_for(&id, Self::payload_ext_for(content_type));
         let payload_bytes = Bytes::copy_from_slice(payload);
         let meta_bytes = serde_json::to_vec(meta)
@@ -213,7 +241,7 @@ where
                         continue;
                     }
                     let id_str = filename.trim_end_matches(".meta.json");
-                    let id = CheckpointId(id_str.to_string());
+                    let id = CheckpointId::from(id_str);
                     let mut f = fs
                         .open(&meta.path)
                         .await

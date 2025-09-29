@@ -1,4 +1,4 @@
-# RFD-0001: fusio-manifest — Backend-Agnostic Manifest/WAL with Serializable KV and Compaction
+# fusio-manifest — Backend-Agnostic Manifest with Serializable KV and Compaction
 
 Status: Draft (Unified RFD — Supersedes RFC-0001 through RFC-0006)
 
@@ -53,7 +53,7 @@ Data flow:
 Storage layout (prefix owned by the embedding application):
 - `segments/seg-<seq>.{json|bin}` — immutable segment objects (backend-defined content type) storing `{ txn_id, records }`.
 - `checkpoints/ckpt-<txn>.meta.json` + payload `.json|.bin` — immutable checkpoint payload and metadata keyed by the checkpoint’s transaction id.
-- `HEAD.json` — JSON `{ version, snapshot: Option<CheckpointId>, last_segment_seq: Option<u64>, last_txn_id: u64 }`.
+- `HEAD.json` — JSON `{ version, checkpoint_id: Option<CheckpointId>, last_segment_seq: Option<u64>, last_txn_id: u64 }`.
 - `gc/GARBAGE` — CAS-protected GC plan document.
 
 ## Durability and Acknowledgement
@@ -108,15 +108,15 @@ GC plan (multi-actor):
 ## Runtime Integration
 
 - `fusio-manifest` remains runtime-agnostic; callers own scheduling and can run on block-on executors or native async runtimes.
-- `ManifestContext::timer` holds an `Arc<dyn fusio::executor::Timer + Send + Sync>` so applications can swap in runtime-specific clocks/timers; the default uses the blocking timer in native builds.
+- `ManifestContext` stores the executor/timer by value (`E: Executor + Timer + Clone`); applications can call `ctx.timer().clone()` when they need a concrete timer handle (e.g., backoff loops) and swap in runtime-specific executors via `with_executor`.
 
 ## Crate: fusio-manifest (API Surface)
 
 Top-level type:
-- `Manifest<K, V, HS, SS, CS, LS, E = BlockingExecutor>`
+- `Manifest<K, V, HS, SS, CS, LS, E = BlockingExecutor, R = DefaultRetention>`
   - Constructors:
     - `Manifest::new(head: HS, seg: SS, ckpt: CS, leases: LS)`
-    - `Manifest::new_with_context(..., ctx: Arc<ManifestContext<E>>)`
+    - `Manifest::new_with_context(..., ctx: Arc<ManifestContext<R, E>>)`
   - Methods:
     - `session_write() -> WriteSession<…>` — opens a pinned writer after orphan recovery and leases the next txn id.
     - `session_read() -> ReadSession<…>` — pins the latest snapshot under a lease.
@@ -124,18 +124,18 @@ Top-level type:
     - `snapshot() -> Snapshot` — returns snapshot metadata without retaining a lease.
     - `get_latest(&K) -> Option<V>` / `scan_latest(Option<ScanRange<K>>) -> Vec<(K, V)>` — one-shot reads scoped to the latest HEAD.
     - `recover_orphans() -> usize` — adopts durable segments that were written but not yet published.
-    - `compactor() -> Compactor<K, V, HS, SS, CS, LS, E>` — clones stores/options for orchestration.
+    - `compactor() -> Compactor<K, V, HS, SS, CS, LS, E, R>` — clones the shared store/options for orchestration without re-cloning each backend handle.
 
-- `ReadSession<K, V, HS, SS, CS, LS, E>`
+- `ReadSession<K, V, HS, SS, CS, LS, E, R>`
   - Methods: `get(&K)`, `scan()`, `scan_range(ScanRange<K>)`, `heartbeat()`, `start_lease_keeper()`, `end()`.
 
-- `WriteSession<K, V, HS, SS, CS, LS, E>`
+- `WriteSession<K, V, HS, SS, CS, LS, E, R>`
   - Methods: `put(K, V)`, `delete(K)`, `get(&K)`, `get_local(&K)`, `scan()`, `scan_local(Option<ScanRange<K>>)` plus `heartbeat()`, `start_lease_keeper()`, `commit()`, `end()`.
 
-- `Compactor<K, V, HS, SS, CS, LS, E>`
+- `Compactor<K, V, HS, SS, CS, LS, E, R>`
   - Methods: `compact_once() -> (CheckpointId, HeadTag)`, `compact_and_gc() -> (CheckpointId, HeadTag)`, `run_once() -> Result<()>`, `gc_compute(&impl GcPlanStore) -> Option<GcTag>`, `gc_apply(&impl GcPlanStore) -> Result<()>`, `gc_delete_and_reset(&impl GcPlanStore) -> Result<()>`.
 
-- S3 convenience layer (`s3` module): `Config<E>` / `Builder<E>` construct `AmazonS3`; `S3Manifest<K, V, E>` wraps the generic manifest and retains the same session API plus `compactor() -> S3Compactor<K, V, E>`; `S3Compactor<K, V, E>` wires the GC plan store and forwards all compaction/GC calls.
+- S3 convenience layer (`s3` module): `Config<R, E>` / `Builder<R, E>` construct `AmazonS3`; `S3Manifest<K, V, E, R>` wraps the generic manifest and retains the same session API plus `compactor() -> S3Compactor<K, V, E, R>`; `S3Compactor<K, V, E, R>` wires the GC plan store and forwards all compaction/GC calls.
 
 Example (targeting S3 or LocalStack via the convenience wrapper):
 ```rust
@@ -151,8 +151,7 @@ use fusio_manifest::{
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
     // Configure runtime + manifest context (retention, backoff, timers).
-    let runtime = Arc::new(TokioExecutor::default());
-    let ctx = Arc::new(ManifestContext::new(runtime));
+    let ctx = Arc::new(ManifestContext::new(TokioExecutor::default()));
 
     // Builder picks up AWS credentials from the environment; add `endpoint(...)`
     // for LocalStack/MinIO.
@@ -205,7 +204,7 @@ For S3, use role-based credentials; consider SSE-S3/KMS. Configure lifecycle rul
 
 - This unified RFD replaces and consolidates RFC-0001 through RFC-0006.
 - Where they differ, this RFD follows the current `fusio-manifest` implementation:
-  - HEAD JSON uses `snapshot: Option<CheckpointId>`; “snapshot” refers to a checkpoint id.
+  - HEAD JSON now uses `checkpoint_id: Option<CheckpointId>` to record the canonical checkpoint.
 - Segment payloads are JSON-framed KV records; a v2 binary framing with CRC is a follow-up.
 - Compaction preserves append order (txn/log order) rather than imposing a persistent key sort; introducing key ordering would require an LSM-style index outside this RFD's scope.
   - Leases and the CAS-protected GC plan are part of the public API.
@@ -226,5 +225,4 @@ For S3, use role-based credentials; consider SSE-S3/KMS. Configure lifecycle rul
 - Integrity guard on GC plans (record setsum of segments/snapshots we intend to drop and verify before applying).
 - Rate-limit CAS-heavy metadata paths (leases, gc plan) with per-process semaphores so S3 412 storms are less likely.
 - Cursor store (independent of HEAD) for downstream readers; include in GC cutoffs.
-- Rename `HeadJson.snapshot` → `checkpoint` for clarity.
 - Sharded segment keys were removed from the initial milestone to simplify correctness validation; consider reintroducing them only with clear perf data and upgrade guidance.

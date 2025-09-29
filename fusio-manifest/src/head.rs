@@ -6,7 +6,7 @@ use fusio::{
 use fusio_core::{MaybeSend, MaybeSendFuture, MaybeSync};
 use serde::{Deserialize, Serialize};
 
-use crate::types::Error;
+use crate::{checkpoint::CheckpointId, types::Error};
 
 /// Opaque tag for conditional updates (e.g., S3 ETag or digest).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -25,7 +25,7 @@ pub enum PutCondition {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct HeadJson {
     pub version: u32,
-    pub snapshot: Option<String>,
+    pub checkpoint_id: Option<CheckpointId>,
     pub last_segment_seq: Option<u64>,
     pub last_txn_id: u64,
 }
@@ -43,10 +43,10 @@ pub trait HeadStore: MaybeSend + MaybeSync {
     ) -> impl MaybeSendFuture<Output = Result<HeadTag, Error>> + '_;
 }
 
-fn map_fs_error(err: FsError) -> crate::types::Error {
+fn map_fs_error(err: FsError) -> Error {
     match err {
-        FsError::PreconditionFailed => crate::types::Error::PreconditionFailed,
-        other => crate::types::Error::Other(Box::new(other)),
+        FsError::PreconditionFailed => Error::PreconditionFailed,
+        other => Error::Other(Box::new(other)),
     }
 }
 
@@ -71,17 +71,14 @@ where
 {
     fn load(
         &self,
-    ) -> impl MaybeSendFuture<Output = Result<Option<(HeadJson, HeadTag)>, crate::types::Error>> + '_
-    {
+    ) -> impl MaybeSendFuture<Output = Result<Option<(HeadJson, HeadTag)>, Error>> + '_ {
         async {
-            let path =
-                Path::parse(&self.key).map_err(|e| crate::types::Error::Other(Box::new(e)))?;
+            let path = Path::parse(&self.key).map_err(|e| Error::Other(Box::new(e)))?;
             match self.cas.load_with_tag(&path).await.map_err(map_fs_error)? {
                 None => Ok(None),
                 Some((bytes, tag)) => {
-                    let head: HeadJson = serde_json::from_slice(&bytes).map_err(|e| {
-                        crate::types::Error::Corrupt(format!("invalid head json: {e}"))
-                    })?;
+                    let head: HeadJson = serde_json::from_slice(&bytes)
+                        .map_err(|e| Error::Corrupt(format!("invalid head json: {e}")))?;
                     Ok(Some((head, HeadTag(tag))))
                 }
             }
@@ -92,13 +89,12 @@ where
         &self,
         head: &HeadJson,
         cond: PutCondition,
-    ) -> impl MaybeSendFuture<Output = Result<HeadTag, crate::types::Error>> + '_ {
-        let body = serde_json::to_vec(head)
-            .map_err(|e| crate::types::Error::Corrupt(format!("serialize head: {e}")));
+    ) -> impl MaybeSendFuture<Output = Result<HeadTag, Error>> + '_ {
+        let body =
+            serde_json::to_vec(head).map_err(|e| Error::Corrupt(format!("serialize head: {e}")));
         async move {
             let body = body?;
-            let path =
-                Path::parse(&self.key).map_err(|e| crate::types::Error::Other(Box::new(e)))?;
+            let path = Path::parse(&self.key).map_err(|e| Error::Other(Box::new(e)))?;
             let condition = match cond {
                 PutCondition::IfNotExists => CasCondition::IfNotExists,
                 PutCondition::IfMatch(tag) => CasCondition::IfMatch(tag.0.clone()),

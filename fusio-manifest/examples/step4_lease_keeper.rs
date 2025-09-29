@@ -24,8 +24,7 @@ async fn main() -> Result<()> {
         .with_lease_ttl(Duration::from_secs(2))
         .with_checkpoints_min_ttl(Duration::from_secs(1))
         .with_segments_min_ttl(Duration::from_secs(1));
-    let mut opts = ManifestContext::new(Arc::new(TokioExecutor::default()));
-    opts.set_retention(Arc::new(retention));
+    let opts = ManifestContext::new(TokioExecutor::default()).with_retention(retention);
     let manifest: s3::S3Manifest<String, String, TokioExecutor> =
         setup.config.clone().with_context(Arc::new(opts)).into();
 

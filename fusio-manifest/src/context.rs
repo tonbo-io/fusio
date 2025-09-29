@@ -1,48 +1,56 @@
-use std::{future::Future, sync::Arc};
+use std::future::Future;
 
 use fusio::executor::{BlockingExecutor, Executor, Timer};
 use fusio_core::MaybeSend;
 
 use crate::{
     backoff::BackoffPolicy,
-    retention::{DefaultRetention, RetentionHandle},
+    retention::{DefaultRetention, RetentionPolicy},
     types::Error,
 };
 
 /// ManifestContext shared across manifest components, parameterised by an executor that also
 /// implements the timer abstraction.
-pub struct ManifestContext<E = BlockingExecutor>
+#[derive(Clone)]
+pub struct ManifestContext<R = DefaultRetention, E = BlockingExecutor>
 where
-    E: Executor + Timer + Send + Sync + 'static,
+    R: RetentionPolicy + Clone,
+    E: Executor + Timer + Clone,
 {
     /// Retention/GC policy.
-    pub retention: RetentionHandle,
+    pub retention: R,
     /// Backoff policy for CAS/storage contention.
     pub backoff: BackoffPolicy,
-    executor: Arc<E>,
+    executor: E,
 }
 
-impl<E> ManifestContext<E>
+impl<E> ManifestContext<DefaultRetention, E>
 where
-    E: Executor + Timer + Send + Sync + 'static,
+    E: Executor + Timer + Clone,
 {
     /// Construct a context using the provided executor.
-    pub fn new(executor: Arc<E>) -> Self {
+    pub fn new(executor: E) -> Self {
         Self {
-            retention: Arc::new(DefaultRetention::default()),
+            retention: DefaultRetention::default(),
             backoff: BackoffPolicy::default(),
             executor,
         }
     }
+}
 
+impl<R, E> ManifestContext<R, E>
+where
+    R: RetentionPolicy + Clone,
+    E: Executor + Timer + Clone,
+{
     /// Borrow the executor handle.
-    pub fn executor(&self) -> &Arc<E> {
+    pub fn executor(&self) -> &E {
         &self.executor
     }
 
     /// Obtain the executor as a timer trait object.
-    pub fn timer(&self) -> Arc<dyn Timer + Send + Sync> {
-        self.executor.clone()
+    pub fn timer(&self) -> &E {
+        &self.executor
     }
 
     /// Spawn a detached background task.
@@ -55,15 +63,15 @@ where
         Ok(())
     }
 
-    /// Replace the executor handle in-place.
-    pub fn set_executor(&mut self, executor: Arc<E>) {
-        self.executor = executor;
-    }
-
     /// Replace the executor, returning the modified context.
-    pub fn with_executor(mut self, executor: Arc<E>) -> Self {
+    pub fn with_executor(mut self, executor: E) -> Self {
         self.executor = executor;
         self
+    }
+
+    /// Mutably replace the executor in-place.
+    pub fn set_executor(&mut self, executor: E) {
+        self.executor = executor;
     }
 
     /// Override the retry/backoff policy used by publish/GC loops.
@@ -72,47 +80,42 @@ where
         self
     }
 
-    /// Mutably set the retry/backoff policy.
+    /// Mutably replace the retry/backoff policy.
     pub fn set_backoff(&mut self, backoff: BackoffPolicy) {
         self.backoff = backoff;
     }
 
-    /// Override the retention policy used by GC/lease management.
-    pub fn with_retention(mut self, retention: RetentionHandle) -> Self {
-        self.retention = retention;
-        self
-    }
-
-    pub fn set_retention(&mut self, retention: RetentionHandle) {
-        self.retention = retention;
-    }
-}
-
-impl<E> Default for ManifestContext<E>
-where
-    E: Executor + Timer + Send + Sync + Default + 'static,
-{
-    fn default() -> Self {
-        Self::new(Arc::new(E::default()))
-    }
-}
-
-impl<E> Clone for ManifestContext<E>
-where
-    E: Executor + Timer + Send + Sync + 'static,
-{
-    fn clone(&self) -> Self {
-        Self {
-            retention: self.retention.clone(),
+    /// Replace the retention policy, consuming `self` and allowing a new policy type.
+    pub fn with_retention<R2>(self, retention: R2) -> ManifestContext<R2, E>
+    where
+        R2: RetentionPolicy + Clone,
+    {
+        ManifestContext {
+            retention,
             backoff: self.backoff,
-            executor: Arc::clone(&self.executor),
+            executor: self.executor,
         }
     }
+
+    /// Mutably replace the retention policy in-place when keeping the same type.
+    pub fn set_retention(&mut self, retention: R) {
+        self.retention = retention;
+    }
 }
 
-impl<E> core::fmt::Debug for ManifestContext<E>
+impl<E> Default for ManifestContext<DefaultRetention, E>
 where
-    E: Executor + Timer + Send + Sync + 'static,
+    E: Executor + Timer + Clone + Default,
+{
+    fn default() -> Self {
+        Self::new(E::default())
+    }
+}
+
+impl<R, E> core::fmt::Debug for ManifestContext<R, E>
+where
+    R: RetentionPolicy + Clone,
+    E: Executor + Timer + Clone,
 {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("ManifestContext")

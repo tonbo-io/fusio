@@ -1,7 +1,7 @@
-use std::{sync::Arc, time::Duration};
+use std::time::Duration;
 
 /// Policy interface governing TTLs for checkpoints, segments, and leases.
-pub trait RetentionPolicy {
+pub trait RetentionPolicy: Send + Sync + 'static {
     /// Keep at least this many recent checkpoints regardless of age.
     fn checkpoints_keep_last(&self) -> usize;
     /// Minimum time to keep old checkpoints before they become GC candidates.
@@ -71,6 +71,3 @@ impl DefaultRetention {
         self
     }
 }
-
-/// Convenience alias for a shareable retention handle.
-pub type RetentionHandle = Arc<dyn RetentionPolicy + Send + Sync>;

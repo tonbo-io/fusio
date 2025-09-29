@@ -15,15 +15,16 @@ async fn main() -> Result<()> {
         None => return Ok(()),
     };
 
-    let runtime = Arc::new(TokioExecutor::default());
-    let opts = Arc::new(ManifestContext::new(runtime).with_backoff(BackoffPolicy {
-        base_ms: 10,
-        max_ms: 500,
-        multiplier_times_100: 150,
-        jitter_frac_times_100: 20,
-        max_retries: 8,
-        max_elapsed_ms: 5_000,
-    }));
+    let opts = Arc::new(ManifestContext::new(TokioExecutor::default()).with_backoff(
+        BackoffPolicy {
+            base_ms: 10,
+            max_ms: 500,
+            multiplier_times_100: 150,
+            jitter_frac_times_100: 20,
+            max_retries: 8,
+            max_elapsed_ms: 5_000,
+        },
+    ));
 
     let cfg = setup.config.clone().with_context(Arc::clone(&opts));
     let manifest: s3::S3Manifest<String, String, TokioExecutor> = cfg.clone().into();
@@ -45,7 +46,7 @@ async fn main() -> Result<()> {
     drop(manifest);
 
     println!("== simulate a remote compactor process using the shared config");
-    let remote_compactor: s3::S3Compactor<String, String, TokioExecutor> = s3::compactor(cfg);
+    let remote_compactor: s3::S3Compactor<String, String, TokioExecutor> = cfg.into();
     let (ckpt, head_tag) = remote_compactor.compact_once().await?;
     println!(
         "published checkpoint {:?} with head tag {:?}",

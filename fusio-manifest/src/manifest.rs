@@ -11,11 +11,12 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 use crate::{
     backoff::{classify_error, ExponentialBackoff, RetryClass},
-    checkpoint::{CheckpointId, CheckpointStore},
+    checkpoint::CheckpointStore,
     compactor::Compactor,
     context::ManifestContext,
     head::{HeadJson, HeadStore, PutCondition},
     lease::LeaseStore,
+    retention::{DefaultRetention, RetentionPolicy},
     segment::SegmentIo,
     session::{ReadSession, WriteSession},
     snapshot::{ScanRange, Snapshot},
@@ -47,65 +48,70 @@ pub(crate) struct Segment<K, V> {
 }
 
 /// KV database facade over HeadStore + SegmentIo + CheckpointStore.
-pub struct Manifest<K, V, HS, SS, CS, LS, E = BlockingExecutor>
+pub struct Manifest<K, V, HS, SS, CS, LS, E = BlockingExecutor, R = DefaultRetention>
 where
-    HS: HeadStore + Clone,
-    SS: SegmentIo + Clone,
-    CS: CheckpointStore + Clone,
-    LS: LeaseStore + Clone,
-    E: Executor + Timer + Send + Sync + 'static,
+    HS: HeadStore + Send + Sync + 'static,
+    SS: SegmentIo + Send + Sync + 'static,
+    CS: CheckpointStore + Send + Sync + 'static,
+    LS: LeaseStore + Send + Sync + 'static,
+    E: Executor + Timer + Clone + Send + Sync + 'static,
+    R: RetentionPolicy + Clone,
 {
     _phantom: PhantomData<(K, V)>,
-    store: Arc<Store<HS, SS, CS, LS, E>>,
+    store: Arc<Store<HS, SS, CS, LS, E, R>>,
 }
 
 impl<K, V, HS, SS, CS, LS> Manifest<K, V, HS, SS, CS, LS>
 where
-    HS: HeadStore + Clone,
-    SS: SegmentIo + Clone,
-    CS: CheckpointStore + Clone,
-    LS: LeaseStore + Clone,
+    K: PartialOrd + Eq + Hash + Serialize + DeserializeOwned,
+    V: Serialize + DeserializeOwned,
+    HS: HeadStore + Send + Sync + 'static,
+    SS: SegmentIo + Send + Sync + 'static,
+    CS: CheckpointStore + Send + Sync + 'static,
+    LS: LeaseStore + Send + Sync + 'static,
 {
     pub fn new(head: HS, seg: SS, ckpt: CS, leases: LS) -> Self {
-        Self {
-            _phantom: PhantomData,
-            store: Arc::new(Store::new(
-                head,
-                seg,
-                ckpt,
-                leases,
-                Arc::new(ManifestContext::<BlockingExecutor>::default()),
-            )),
-        }
+        Self::new_with_context(
+            head,
+            seg,
+            ckpt,
+            leases,
+            Arc::new(ManifestContext::<DefaultRetention, BlockingExecutor>::default()),
+        )
     }
 }
 
-impl<K, V, HS, SS, CS, LS, E> Manifest<K, V, HS, SS, CS, LS, E>
+impl<K, V, HS, SS, CS, LS, E, R> Manifest<K, V, HS, SS, CS, LS, E, R>
 where
     K: PartialOrd + Eq + Hash + Serialize + DeserializeOwned,
     V: Serialize + DeserializeOwned,
-    HS: HeadStore + Clone,
-    SS: SegmentIo + Clone,
-    CS: CheckpointStore + Clone,
-    LS: LeaseStore + Clone,
-    E: Executor + Timer + Send + Sync + 'static,
+    HS: HeadStore + Send + Sync + 'static,
+    SS: SegmentIo + Send + Sync + 'static,
+    CS: CheckpointStore + Send + Sync + 'static,
+    LS: LeaseStore + Send + Sync + 'static,
+    E: Executor + Timer + Clone + Send + Sync + 'static,
+    R: RetentionPolicy + Clone,
 {
     pub fn new_with_context(
         head: HS,
         seg: SS,
         ckpt: CS,
         leases: LS,
-        opts: Arc<ManifestContext<E>>,
+        opts: Arc<ManifestContext<R, E>>,
     ) -> Self {
+        Self::from_store(Arc::new(Store::new(head, seg, ckpt, leases, opts)))
+    }
+
+    pub(crate) fn from_store(store: Arc<Store<HS, SS, CS, LS, E, R>>) -> Self {
         Self {
             _phantom: PhantomData,
-            store: Arc::new(Store::new(head, seg, ckpt, leases, opts)),
+            store,
         }
     }
 
     /// Build a `Compactor` over the same stores and context. Callers can use this to run
     /// compaction/GC cycles without `Manifest` needing to expose those behaviors directly.
-    pub fn compactor(&self) -> Compactor<K, V, HS, SS, CS, LS, E> {
+    pub fn compactor(&self) -> Compactor<K, V, HS, SS, CS, LS, E, R> {
         Compactor::from_store(self.store.clone())
     }
 
@@ -121,7 +127,7 @@ where
     ///   increasing without gaps and optionally validate a checksum header).
     /// - Yield between batches if recovery spans many windows to avoid starving other tasks.
     pub async fn recover_orphans(&self) -> Result<usize> {
-        let timer = self.store.opts.timer();
+        let timer = self.store.opts.timer().clone();
         let pol = self.store.opts.backoff;
         let mut bo = ExponentialBackoff::new(pol, timer.clone());
 
@@ -151,7 +157,7 @@ where
                 None => (
                     HeadJson {
                         version: 1,
-                        snapshot: None,
+                        checkpoint_id: None,
                         last_segment_seq: None,
                         last_txn_id: 0,
                     },
@@ -213,7 +219,7 @@ where
             // Publish updated HEAD via CAS. Retry on conflicts with backoff until exhausted.
             let new_head = HeadJson {
                 version: cur.version.max(1),
-                snapshot: cur.snapshot.clone(),
+                checkpoint_id: cur.checkpoint_id.clone(),
                 last_segment_seq: Some(max_seq),
                 last_txn_id: last_txn,
             };
@@ -236,24 +242,25 @@ where
 
 /// Convenience constructors and alias for an in-memory Manifest using Mem backends.
 // In-memory constructors live in `testing` helpers (test-only).
-impl<K, V, HS, SS, CS, LS, E> Manifest<K, V, HS, SS, CS, LS, E>
+impl<K, V, HS, SS, CS, LS, E, R> Manifest<K, V, HS, SS, CS, LS, E, R>
 where
     K: PartialOrd + Eq + Hash + Serialize + DeserializeOwned,
     V: Serialize + DeserializeOwned,
-    HS: HeadStore + Clone,
-    SS: SegmentIo + Clone,
-    CS: CheckpointStore + Clone,
-    LS: LeaseStore + Clone,
-    E: Executor + Timer + Send + Sync + 'static,
+    HS: HeadStore + Send + Sync + 'static,
+    SS: SegmentIo + Send + Sync + 'static,
+    CS: CheckpointStore + Send + Sync + 'static,
+    LS: LeaseStore + Send + Sync + 'static,
+    E: Executor + Timer + Clone + Send + Sync + 'static,
+    R: RetentionPolicy + Clone,
 {
     /// Open a read session, always acquiring a lease so GC honors the snapshot.
-    pub async fn session_read(&self) -> Result<ReadSession<K, V, HS, SS, CS, LS, E>> {
+    pub async fn session_read(&self) -> Result<ReadSession<K, V, HS, SS, CS, LS, E, R>> {
         let snap = self.snapshot().await?;
         self.session_at(snap).await
     }
 
     /// Open a write session (pinned, with lease)
-    pub async fn session_write(&self) -> Result<WriteSession<K, V, HS, SS, CS, LS, E>> {
+    pub async fn session_write(&self) -> Result<WriteSession<K, V, HS, SS, CS, LS, E, R>> {
         // Opportunistically adopt durable-but-unpublished segments before opening a writer.
         self.recover_orphans().await?;
         let snap = self.snapshot().await?;
@@ -278,7 +285,7 @@ where
     pub async fn session_at(
         &self,
         snapshot: Snapshot,
-    ) -> Result<ReadSession<K, V, HS, SS, CS, LS, E>> {
+    ) -> Result<ReadSession<K, V, HS, SS, CS, LS, E, R>> {
         let ttl = self.store.opts.retention.lease_ttl();
         let lease = self
             .store
@@ -321,10 +328,9 @@ where
                 checkpoint_id: None,
             }),
             Some((h, tag)) => {
-                let (checkpoint_id, checkpoint_seq) = if let Some(id) = h.snapshot.as_ref() {
-                    let id = CheckpointId(id.clone());
-                    let meta = self.store.checkpoint.get_checkpoint_meta(&id).await?;
-                    (Some(id), Some(meta.last_segment_seq_at_ckpt))
+                let (checkpoint_id, checkpoint_seq) = if let Some(id) = h.checkpoint_id.as_ref() {
+                    let meta = self.store.checkpoint.get_checkpoint_meta(id).await?;
+                    (Some(id.clone()), Some(meta.last_segment_seq_at_ckpt))
                 } else {
                     (None, None)
                 };
@@ -720,8 +726,8 @@ mod tests {
             let head = FlakyHeadStore::new();
             let (_, seg, ck, ls) = new_inmemory_stores();
 
-            let opts: ManifestContext<fusio::executor::NoopExecutor> =
-                ManifestContext::new(Arc::new(fusio::executor::NoopExecutor::default()));
+            let opts: ManifestContext<DefaultRetention, fusio::executor::NoopExecutor> =
+                ManifestContext::new(fusio::executor::NoopExecutor::default());
             let mut backoff = crate::backoff::BackoffPolicy::default();
             backoff.base_ms = 1;
             backoff.max_ms = 1;

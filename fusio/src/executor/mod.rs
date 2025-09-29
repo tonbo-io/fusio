@@ -3,6 +3,7 @@ use std::{
     error::Error,
     future::Future,
     ops::{Deref, DerefMut},
+    sync::Arc,
     time::SystemTime,
 };
 
@@ -28,7 +29,7 @@ pub trait RwLock<T> {
     fn write(&self) -> impl Future<Output = Self::WriteGuard<'_>> + MaybeSend;
 }
 
-pub trait Executor: 'static {
+pub trait Executor: MaybeSend + MaybeSync + 'static {
     type JoinHandle<R>: JoinHandle<R>
     where
         R: MaybeSend;
@@ -48,7 +49,7 @@ pub trait Executor: 'static {
 }
 
 /// Minimal timer abstraction to decouple libraries from concrete runtimes.
-pub trait Timer: MaybeSend + MaybeSync {
+pub trait Timer: MaybeSend + MaybeSync + 'static {
     /// Sleep for the given duration and yield back to the runtime.
     fn sleep(&self, dur: Duration) -> Pin<Box<dyn MaybeSendFuture<Output = ()>>>;
 
@@ -160,6 +161,19 @@ impl Timer for BlockingExecutor {
 
     fn now(&self) -> SystemTime {
         SystemTime::now()
+    }
+}
+
+impl<T> Timer for Arc<T>
+where
+    T: Timer + ?Sized,
+{
+    fn sleep(&self, dur: Duration) -> Pin<Box<dyn MaybeSendFuture<Output = ()>>> {
+        (**self).sleep(dur)
+    }
+
+    fn now(&self) -> SystemTime {
+        (**self).now()
     }
 }
 
