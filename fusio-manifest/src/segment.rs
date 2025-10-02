@@ -110,7 +110,7 @@ where
         };
         let meta_headers = vec![(TXN_ID_HEADER.to_string(), txn_id.to_string())];
         async move {
-            let path = Path::parse(&key).map_err(|e| Error::other(e))?;
+            let path = Path::parse(&key).map_err(Error::other)?;
             self.fs
                 .put_conditional(
                     &path,
@@ -134,7 +134,7 @@ where
             where
                 FS: Fs + Send + Sync,
             {
-                let path = Path::parse(key).map_err(|e| Error::other(e))?;
+                let path = Path::parse(key).map_err(Error::other)?;
                 let mut f = fs.open_options(&path, OpenOptions::default()).await?;
                 let (res, buf) = f.read_to_end_at(Vec::new(), 0).await;
                 res?;
@@ -154,7 +154,7 @@ where
         let key_bin = self.key_for(id.seq, ".bin");
         async move {
             let try_key = |key: String, fs: FS| async move {
-                let path = Path::parse(&key).map_err(|e| Error::other(e))?;
+                let path = Path::parse(&key).map_err(Error::other)?;
                 match fs.head_metadata(&path).await {
                     Ok(Some(metadata)) => {
                         let txn = metadata.get(TXN_ID_HEADER).ok_or_else(|| {

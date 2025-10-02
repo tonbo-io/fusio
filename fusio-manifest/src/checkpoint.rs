@@ -259,7 +259,7 @@ where
                     Ok(()) => {}
                     Err(FsError::Io(err)) if err.kind() == ErrorKind::NotFound => {}
                     Err(FsError::PreconditionFailed) => return Err(Error::PreconditionFailed),
-                    Err(other) => return Err(Error::Io(other.into())),
+                    Err(other) => return Err(other.into()),
                 }
             }
             Ok(())

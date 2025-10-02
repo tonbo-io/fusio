@@ -802,10 +802,7 @@ mod tests {
 
 #[cfg(test)]
 mod gc_compute_tests {
-    use fusio::{
-        executor::{BlockingExecutor, Timer},
-        impls::mem::fs::InMemoryFs,
-    };
+    use fusio::{executor::BlockingExecutor, impls::mem::fs::InMemoryFs};
     use futures_executor::block_on;
 
     use super::*;
@@ -819,7 +816,7 @@ mod gc_compute_tests {
             let comp = Compactor::<String, String, _, _, _, _>::new(
                 head, segment, checkpoint, lease, opts,
             );
-            let timer: Arc<dyn Timer + Send + Sync> = Arc::new(BlockingExecutor::default());
+            let timer = BlockingExecutor::default();
             let store = FsGcPlanStore::new(InMemoryFs::new(), "", BackoffPolicy::default(), timer);
             // No head yet → None
             let t = comp.gc_compute(&store).await.unwrap();

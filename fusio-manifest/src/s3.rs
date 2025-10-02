@@ -253,14 +253,14 @@ fn join_path(prefix: &str, child: &str) -> String {
 type HeadStore = HeadStoreImpl<AmazonS3>;
 type SegmentStore = SegmentStoreImpl<AmazonS3>;
 type CheckpointStore = CheckpointStoreImpl<AmazonS3>;
-type LeaseStore = LeaseStoreImpl<AmazonS3>;
+type LeaseStore<T> = LeaseStoreImpl<AmazonS3, T>;
 
 pub struct S3Manifest<K, V, E = BlockingExecutor, R = DefaultRetention>
 where
     E: Executor + Timer + Clone + Send + Sync + 'static,
     R: RetentionPolicy + Clone,
 {
-    inner: Manifest<K, V, HeadStore, SegmentStore, CheckpointStore, LeaseStore, E, R>,
+    inner: Manifest<K, V, HeadStore, SegmentStore, CheckpointStore, LeaseStore<E>, E, R>,
     cfg: Config<R, E>,
 }
 
@@ -273,21 +273,23 @@ where
 {
     pub async fn session_write(
         &self,
-    ) -> Result<WriteSession<K, V, HeadStore, SegmentStore, CheckpointStore, LeaseStore, E, R>>
+    ) -> Result<WriteSession<K, V, HeadStore, SegmentStore, CheckpointStore, LeaseStore<E>, E, R>>
     {
         self.inner.session_write().await
     }
 
     pub async fn session_read(
         &self,
-    ) -> Result<ReadSession<K, V, HeadStore, SegmentStore, CheckpointStore, LeaseStore, E, R>> {
+    ) -> Result<ReadSession<K, V, HeadStore, SegmentStore, CheckpointStore, LeaseStore<E>, E, R>>
+    {
         self.inner.session_read().await
     }
 
     pub async fn session_at(
         &self,
         snapshot: Snapshot,
-    ) -> Result<ReadSession<K, V, HeadStore, SegmentStore, CheckpointStore, LeaseStore, E, R>> {
+    ) -> Result<ReadSession<K, V, HeadStore, SegmentStore, CheckpointStore, LeaseStore<E>, E, R>>
+    {
         self.inner.session_at(snapshot).await
     }
 
@@ -318,8 +320,8 @@ where
     E: Executor + Timer + Clone + Send + Sync + 'static,
     R: RetentionPolicy + Clone,
 {
-    inner: Compactor<K, V, HeadStore, SegmentStore, CheckpointStore, LeaseStore, E, R>,
-    plan: FsGcPlanStore<AmazonS3>,
+    inner: Compactor<K, V, HeadStore, SegmentStore, CheckpointStore, LeaseStore<E>, E, R>,
+    plan: FsGcPlanStore<AmazonS3, E>,
 }
 
 impl<K, V, E, R> S3Compactor<K, V, E, R>
@@ -373,7 +375,7 @@ where
         cfg.s3.clone(),
         cfg.prefix.clone(),
         cfg.opts.backoff,
-        Arc::new(cfg.opts.timer().clone()) as Arc<dyn Timer + Send + Sync>,
+        cfg.opts.timer().clone(),
     );
     let opts = cfg.opts.clone();
     let inner =
@@ -382,7 +384,7 @@ where
         cfg.s3.clone(),
         cfg.prefix.clone(),
         opts.backoff,
-        Arc::new(opts.timer().clone()) as Arc<dyn Timer + Send + Sync>,
+        opts.timer().clone(),
     );
     S3Compactor { inner, plan }
 }
@@ -395,24 +397,17 @@ where
     R: RetentionPolicy + Clone,
 {
     fn from(cfg: Config<R, E>) -> Self {
-        let cfg_cloned = cfg.clone();
-        let head = HeadStoreImpl::new(cfg_cloned.s3.clone(), cfg_cloned.head_key());
-        let segs = SegmentStoreImpl::new(
-            cfg_cloned.s3.clone(),
-            join_path(&cfg_cloned.prefix, "segments"),
-        );
-        let ckpt = CheckpointStoreImpl::new(cfg_cloned.s3.clone(), cfg_cloned.prefix.clone());
+        let head = HeadStoreImpl::new(cfg.s3.clone(), cfg.head_key());
+        let segs = SegmentStoreImpl::new(cfg.s3.clone(), join_path(&cfg.prefix, "segments"));
+        let ckpt = CheckpointStoreImpl::new(cfg.s3.clone(), cfg.prefix.clone());
         let leases = LeaseStoreImpl::new(
-            cfg_cloned.s3.clone(),
-            cfg_cloned.prefix.clone(),
-            cfg_cloned.opts.backoff,
-            Arc::new(cfg_cloned.opts.timer().clone()) as Arc<dyn Timer + Send + Sync>,
+            cfg.s3.clone(),
+            cfg.prefix.clone(),
+            cfg.opts.backoff,
+            cfg.opts.timer().clone(),
         );
-        let inner = Manifest::new_with_context(head, segs, ckpt, leases, cfg_cloned.opts.clone());
-        S3Manifest {
-            inner,
-            cfg: cfg_cloned,
-        }
+        let inner = Manifest::new_with_context(head, segs, ckpt, leases, cfg.opts.clone());
+        S3Manifest { inner, cfg }
     }
 }
 
