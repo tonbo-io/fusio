@@ -23,7 +23,7 @@
 //!
 //! ### Option 2: Against LocalStack
 //!
-//! 1. Start LocalStack: ```bash cd .personal && ./start-localstack.sh ```
+//! 1. Start LocalStack
 //!
 //! 2. Set environment variables:
 //!    ```bash
@@ -90,6 +90,7 @@ fn create_test_manifest(test_name: &str) -> Result<S3Manifest<String, String, To
     Ok(manifest)
 }
 
+/// Helper function to create an S3 manifest, returning the manifest, dropping the result.
 fn create_test_manifest_without_result(
     test_name: &str,
 ) -> S3Manifest<String, String, TokioExecutor> {
@@ -99,6 +100,7 @@ fn create_test_manifest_without_result(
     result.unwrap()
 }
 
+/// Helper function to write a key-value pair and commit the transaction.
 async fn write_and_commit_data(
     manifest: &S3Manifest<String, String, TokioExecutor>,
     key: String,
@@ -111,7 +113,7 @@ async fn write_and_commit_data(
 }
 
 // ============================================================================
-// Basic Sanity Tests
+// Basic Sanity Test
 // ============================================================================
 
 #[tokio::test]
@@ -149,8 +151,10 @@ async fn test_basic_write_read() -> Result<()> {
 }
 
 // ============================================================================
-// Concurrency Tests (from test-scenarios.md Category 1)
+// Concurrency Tests
 // ============================================================================
+
+// Scenario 1.1 - Concurrent Writer Conflicts - Same Key Conflict
 #[tokio::test]
 async fn test_concurrent_writers_same_key_conflict() -> Result<()> {
     // 1. Create manifest
