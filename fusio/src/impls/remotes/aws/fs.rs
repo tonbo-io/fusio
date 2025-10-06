@@ -443,7 +443,7 @@ impl FsCas for AmazonS3 {
             };
             let result = match condition {
                 CasCondition::IfNotExists => {
-                    self.put_if_none_match(&key, payload.clone(), ct_ref, metadata_ref)
+                    self.put_if_none_match(&key, payload, ct_ref, metadata_ref)
                         .await
                 }
                 CasCondition::IfMatch(tag) => {

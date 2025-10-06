@@ -1,7 +1,4 @@
-use std::{
-    sync::Arc,
-    time::{Duration, SystemTime},
-};
+use std::time::{Duration, SystemTime};
 
 use fusio::{
     executor::Timer,
@@ -15,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     backoff::{BackoffPolicy, ExponentialBackoff},
     head::HeadTag,
-    types::Result,
+    types::{Error, Result},
 };
 
 pub mod keeper;
@@ -48,17 +45,14 @@ pub trait LeaseStore: MaybeSend + MaybeSync + Clone {
         &self,
         lease: &LeaseHandle,
         ttl: Duration,
-    ) -> impl MaybeSendFuture<Output = Result<(), crate::types::Error>> + '_;
+    ) -> impl MaybeSendFuture<Output = Result<(), Error>> + '_;
 
-    fn release(
-        &self,
-        lease: LeaseHandle,
-    ) -> impl MaybeSendFuture<Output = Result<(), crate::types::Error>> + '_;
+    fn release(&self, lease: LeaseHandle) -> impl MaybeSendFuture<Output = Result<(), Error>> + '_;
 
     fn list_active(
         &self,
         now: Duration,
-    ) -> impl MaybeSendFuture<Output = Result<Vec<ActiveLease>, crate::types::Error>> + '_;
+    ) -> impl MaybeSendFuture<Output = Result<Vec<ActiveLease>, Error>> + '_;
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -72,7 +66,7 @@ struct LeaseDoc {
 
 /// Lease store backed by a filesystem implementation.
 #[derive(Clone)]
-pub struct LeaseStoreImpl<FS, T = Arc<dyn Timer + Send + Sync>>
+pub struct LeaseStoreImpl<FS, T>
 where
     T: Timer + Clone,
 {
@@ -124,7 +118,7 @@ where
         snapshot_txn_id: u64,
         head_tag: Option<HeadTag>,
         ttl: Duration,
-    ) -> impl MaybeSendFuture<Output = Result<LeaseHandle, crate::types::Error>> + '_ {
+    ) -> impl MaybeSendFuture<Output = Result<LeaseHandle, Error>> + '_ {
         async move {
             let ttl_ms = ttl.as_millis().min(u128::from(u64::MAX)) as u64;
             let mut attempt: u32 = 0;
@@ -145,8 +139,8 @@ where
                     head_tag: head_tag.as_ref().map(|t| t.0.clone()),
                 };
                 let body = serde_json::to_vec(&doc)
-                    .map_err(|e| crate::types::Error::Corrupt(format!("lease encode: {e}")))?;
-                let path = Path::parse(&key).map_err(|e| crate::types::Error::other(e))?;
+                    .map_err(|e| Error::Corrupt(format!("lease encode: {e}")))?;
+                let path = Path::parse(&key).map_err(Error::other)?;
                 match self
                     .fs
                     .put_conditional(
@@ -167,7 +161,7 @@ where
                     Err(FsError::PreconditionFailed) => {
                         attempt = attempt.saturating_add(1);
                         if backoff.exhausted() {
-                            return Err(crate::types::Error::PreconditionFailed);
+                            return Err(Error::PreconditionFailed);
                         }
                         let delay = backoff.next_delay();
                         self.timer.sleep(delay).await;
@@ -182,21 +176,21 @@ where
         &self,
         lease: &LeaseHandle,
         ttl: Duration,
-    ) -> impl MaybeSendFuture<Output = Result<(), crate::types::Error>> + '_ {
+    ) -> impl MaybeSendFuture<Output = Result<(), Error>> + '_ {
         let key = self.key_for(&lease.id.0);
         async move {
-            let path = Path::parse(&key).map_err(|e| crate::types::Error::other(e))?;
+            let path = Path::parse(&key).map_err(Error::other)?;
             let (bytes, tag) = match self.fs.load_with_tag(&path).await? {
                 Some(v) => v,
-                None => return Err(crate::types::Error::Corrupt("lease missing".into())),
+                None => return Err(Error::Corrupt("lease missing".into())),
             };
             let mut doc: LeaseDoc = serde_json::from_slice(&bytes)
-                .map_err(|e| crate::types::Error::Corrupt(format!("lease decode: {e}")))?;
+                .map_err(|e| Error::Corrupt(format!("lease decode: {e}")))?;
             let now = self.wall_clock_now_ms();
             let ttl_ms = ttl.as_millis().min(u128::from(u64::MAX)) as u64;
             doc.expires_at_ms = now.saturating_add(ttl_ms);
             let body = serde_json::to_vec(&doc)
-                .map_err(|e| crate::types::Error::Corrupt(format!("lease encode: {e}")))?;
+                .map_err(|e| Error::Corrupt(format!("lease encode: {e}")))?;
             self.fs
                 .put_conditional(
                     &path,
@@ -207,17 +201,14 @@ where
                 )
                 .await
                 .map_err(|e| match e {
-                    FsError::PreconditionFailed => crate::types::Error::PreconditionFailed,
+                    FsError::PreconditionFailed => Error::PreconditionFailed,
                     other => other.into(),
                 })?;
             Ok(())
         }
     }
 
-    fn release(
-        &self,
-        lease: LeaseHandle,
-    ) -> impl MaybeSendFuture<Output = Result<(), crate::types::Error>> + '_ {
+    fn release(&self, lease: LeaseHandle) -> impl MaybeSendFuture<Output = Result<(), Error>> + '_ {
         async move {
             if let Ok(path) = Path::parse(self.key_for(&lease.id.0)) {
                 let _ = self.fs.remove(&path).await;
@@ -229,7 +220,7 @@ where
     fn list_active(
         &self,
         now: Duration,
-    ) -> impl MaybeSendFuture<Output = Result<Vec<ActiveLease>, crate::types::Error>> + '_ {
+    ) -> impl MaybeSendFuture<Output = Result<Vec<ActiveLease>, Error>> + '_ {
         async move {
             use futures_util::StreamExt;
             let mut out = Vec::new();

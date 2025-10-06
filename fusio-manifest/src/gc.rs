@@ -1,8 +1,8 @@
 //! GC plan object and CAS operations
 use core::time::Duration;
-use std::sync::Arc;
 
 use fusio::{
+    executor::Timer,
     fs::{CasCondition, FsCas},
     path::Path,
     Error as FsError,
@@ -89,20 +89,18 @@ pub trait GcPlanStore: MaybeSend + MaybeSync {
 }
 
 #[derive(Clone)]
-pub struct FsGcPlanStore<C> {
+pub struct FsGcPlanStore<C, T> {
     cas: C,
     key: String,
     backoff: BackoffPolicy,
-    timer: Arc<dyn fusio::executor::Timer + Send + Sync>,
+    timer: T,
 }
 
-impl<C> FsGcPlanStore<C> {
-    pub fn new(
-        cas: C,
-        prefix: impl Into<String>,
-        backoff: BackoffPolicy,
-        timer: Arc<dyn fusio::executor::Timer + Send + Sync>,
-    ) -> Self {
+impl<C, T> FsGcPlanStore<C, T>
+where
+    T: Timer,
+{
+    pub fn new(cas: C, prefix: impl Into<String>, backoff: BackoffPolicy, timer: T) -> Self {
         let prefix = prefix.into().trim_end_matches('/').to_string();
         let key = if prefix.is_empty() {
             "gc/GARBAGE".to_string()
@@ -118,13 +116,14 @@ impl<C> FsGcPlanStore<C> {
     }
 }
 
-impl<C> GcPlanStore for FsGcPlanStore<C>
+impl<C, T> GcPlanStore for FsGcPlanStore<C, T>
 where
     C: FsCas + Clone + Send + Sync + 'static,
+    T: Timer + Clone + Send + Sync + 'static,
 {
     fn load(&self) -> impl MaybeSendFuture<Output = Result<Option<(GcPlan, GcTag)>, Error>> + '_ {
         async move {
-            let path = Path::parse(&self.key).map_err(|e| Error::other(e))?;
+            let path = Path::parse(&self.key).map_err(Error::other)?;
             let mut bo = ExponentialBackoff::new(self.backoff, self.timer.clone());
             loop {
                 match self.cas.load_with_tag(&path).await.map_err(map_fs_error) {
@@ -156,7 +155,7 @@ where
             serde_json::to_vec(plan).map_err(|e| Error::Corrupt(format!("serialize gc plan: {e}")));
         async move {
             let body = body?;
-            let path = Path::parse(&self.key).map_err(|e| Error::other(e))?;
+            let path = Path::parse(&self.key).map_err(Error::other)?;
             let mut bo = ExponentialBackoff::new(self.backoff, self.timer.clone());
             loop {
                 let condition = match cond {
@@ -193,10 +192,7 @@ fn map_fs_error(err: FsError) -> Error {
 
 #[cfg(test)]
 mod tests {
-    use fusio::{
-        executor::{BlockingExecutor, Timer},
-        impls::mem::fs::InMemoryFs,
-    };
+    use fusio::{executor::BlockingExecutor, impls::mem::fs::InMemoryFs};
 
     use super::*;
 
@@ -211,7 +207,7 @@ mod tests {
     #[test]
     fn mem_gc_plan_store_semantics() {
         use futures_executor::block_on;
-        let timer: Arc<dyn Timer + Send + Sync> = Arc::new(BlockingExecutor::default());
+        let timer = BlockingExecutor::default();
         let store = FsGcPlanStore::new(InMemoryFs::new(), "", BackoffPolicy::default(), timer);
         // load none
         assert!(block_on(store.load()).unwrap().is_none());
