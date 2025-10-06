@@ -138,6 +138,8 @@ where
         let meta_bytes = serde_json::to_vec(meta)
             .map(Bytes::from)
             .map_err(|e| Error::Corrupt(format!("ckpt meta encode: {e}")));
+        // Copy payload to owned Vec for completion-based I/O compatibility
+        let payload_owned = payload.to_vec();
         async move {
             {
                 let mut f = self
@@ -150,7 +152,7 @@ where
                             .write(true),
                     )
                     .await?;
-                let (res, _) = f.write_all(payload).await;
+                let (res, _) = f.write_all(payload_owned).await;
                 res?;
                 f.commit().await?;
             }

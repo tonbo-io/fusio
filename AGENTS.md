@@ -13,7 +13,7 @@
   - `cargo test -p fusio --features tokio,aws,tokio-http`
   - `cargo test -p fusio-parquet --features tokio`
   - `cargo test -p fusio-log --no-default-features --features aws,bytes,monoio,monoio-http`
-- Lint/format before commits: `cargo +nightly fmt --all`; `cargo clippy --workspace --all-features -D warnings`.
+- Lint/format before commits: `cargo +nightly fmt --all`; cargo clippy --workspace --all-features -- -D warnings.
 - Optional WASM checks: `wasm-pack test --chrome --headless fusio[ -parquet ]` with appropriate features.
 
 ## Style Expectations
@@ -24,12 +24,12 @@
 ## Testing Discipline
 - Pair unit tests with code; use crate `tests/` for integration coverage.
 - Exercise new backends across runtimes (`tokio`, `monoio`) and include `aws` feature for S3 logic.
-- Gate browser/WASM behaviour behind `opfs`/`web` features.
+- Gate browser/WASM behavior behind `opfs`/`web` features.
 - `fusio-manifest` supports in-memory + S3.
 
 ## Change Management
 - Conventional commits (`feat:`, `fix:`, etc.) with optional scope and PR references.
-- PRs should explain rationale, touched crates, feature flags tested, and test results. Update docs/examples when behaviour shifts.
+- PRs should explain rationale, touched crates, feature flags tested, and test results. Update docs/examples when behavior shifts.
 - Pre-push checklist: fmt, clippy, relevant `cargo test` invocations.
 
 ## Security & Config
@@ -43,4 +43,4 @@
 - `--globs` helps include/exclude paths; simplify patterns if you see "Pattern contains an ERROR node".
 
 ## Final Note
-- Backward compatibility is flexible—prioritise clean, well-explained implementations.
+- Backward compatibility is flexible—prioritize clean, well-explained implementations.

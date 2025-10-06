@@ -1,9 +1,13 @@
-use std::{error::Error, future::Future};
+use std::error::Error;
+#[cfg(not(feature = "no-send"))]
+use std::future::Future;
 
 use fusio_core::{MaybeSend, MaybeSendFuture, MaybeSync};
 use tokio::runtime::Handle;
 
-use super::{Executor, JoinHandle, RwLock, Timer};
+#[cfg(not(feature = "no-send"))]
+use super::Executor;
+use super::{JoinHandle, RwLock, Timer};
 
 impl<R: MaybeSend> JoinHandle<R> for tokio::task::JoinHandle<R> {
     async fn join(self) -> Result<R, Box<dyn Error>> {
@@ -32,6 +36,7 @@ impl<T: MaybeSend + MaybeSync> RwLock<T> for tokio::sync::RwLock<T> {
 
 #[derive(Clone)]
 pub struct TokioExecutor {
+    #[cfg_attr(feature = "no-send", allow(dead_code))]
     handle: Handle,
 }
 
@@ -43,6 +48,7 @@ impl Default for TokioExecutor {
     }
 }
 
+#[cfg(not(feature = "no-send"))]
 impl Executor for TokioExecutor {
     type JoinHandle<R>
         = tokio::task::JoinHandle<R>

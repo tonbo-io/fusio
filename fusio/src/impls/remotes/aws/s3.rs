@@ -28,6 +28,7 @@ pub struct S3File {
 }
 
 impl S3File {
+    #[cfg_attr(feature = "no-send", allow(clippy::arc_with_non_send_sync))]
     pub(crate) fn new(fs: AmazonS3, path: Path, create: bool) -> Self {
         Self {
             writer: create
