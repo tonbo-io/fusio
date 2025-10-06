@@ -13,9 +13,9 @@ use crate::{
     Fs, OpenOptions,
 };
 
-pub struct NativeFs;
+pub struct AsyncFs;
 
-impl Fs for NativeFs {
+impl Fs for AsyncFs {
     type File = AsyncFile;
 
     fn file_system(&self) -> FileSystemTag {
