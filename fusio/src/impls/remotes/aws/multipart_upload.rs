@@ -126,6 +126,7 @@ impl MultipartUpload {
         let request = Request::builder()
             .uri(url)
             .method(Method::POST)
+            .header(CONTENT_LENGTH, 0)
             .body(Empty::new())
             .map_err(|e| Error::Other(e.into()))?;
         let response = self.send_request(request).await?;

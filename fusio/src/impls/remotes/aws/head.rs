@@ -1,5 +1,8 @@
 use bytes::Bytes;
-use http::{header, Method, Request};
+use http::{
+    header::{self, CONTENT_LENGTH},
+    Method, Request,
+};
 use http_body_util::{BodyExt, Empty, Full};
 use url::Url;
 
@@ -27,6 +30,7 @@ impl AmazonS3 {
         let mut req = Request::builder()
             .method(Method::GET)
             .uri(url.as_str())
+            .header(CONTENT_LENGTH, 0)
             .body(Empty::<Bytes>::new())
             .map_err(|e| Error::Remote(Box::new(HttpError::from(e))))?;
 
@@ -90,10 +94,12 @@ impl AmazonS3 {
             .join(key)
             .map_err(|e| Error::Remote(Box::new(HttpError::from(e))))?;
 
+        let body_len = body.len();
         let mut req = Request::builder()
             .method(Method::PUT)
             .uri(url.as_str())
             .header(header::IF_NONE_MATCH, "*")
+            .header(CONTENT_LENGTH, body_len)
             .body(Full::new(body))
             .map_err(|e| Error::Remote(Box::new(HttpError::from(e))))?;
 
@@ -171,10 +177,12 @@ impl AmazonS3 {
             .join(key)
             .map_err(|e| Error::Remote(Box::new(HttpError::from(e))))?;
 
+        let body_len = body.len();
         let mut req = Request::builder()
             .method(Method::PUT)
             .uri(url.as_str())
             .header(header::IF_MATCH, etag.0.as_str())
+            .header(CONTENT_LENGTH, body_len)
             .body(Full::new(body))
             .map_err(|e| Error::Remote(Box::new(HttpError::from(e))))?;
 
