@@ -17,11 +17,11 @@ async fn use_tokio_file() {
         .await
         .unwrap();
     let write_buf = "hello, world".as_bytes();
-    let mut read_buf = [0; 12];
+    let mut read_buf = vec![0; 12];
     let (result, _, read_buf) =
-        write_without_runtime_awareness(&mut file, write_buf, &mut read_buf[..]).await;
+        write_without_runtime_awareness(&mut file, write_buf, read_buf).await;
     result.unwrap();
-    assert_eq!(&read_buf, b"hello, world");
+    assert_eq!(&read_buf[..], b"hello, world");
 }
 
 #[allow(unused)]

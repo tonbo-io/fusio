@@ -60,6 +60,7 @@ impl AsyncReader {
         prefetch_footer_size: usize,
         file: &mut F,
     ) -> Result<ParquetMetaData, ParquetError> {
+        #[cfg_attr(any(feature = "web", feature = "monoio"), allow(unused_mut))]
         let mut buf = vec![0; prefetch_footer_size];
 
         #[cfg(not(any(feature = "web", feature = "monoio")))]
@@ -124,6 +125,7 @@ impl AsyncReader {
         range: Range<u64>,
     ) -> Result<Bytes, ParquetError> {
         let len = (range.end - range.start) as usize;
+        #[cfg_attr(any(feature = "web", feature = "monoio"), allow(unused_mut))]
         let mut buf = vec![0; len];
 
         #[cfg(not(any(feature = "web", feature = "monoio")))]
@@ -154,7 +156,7 @@ impl AsyncFileReader for AsyncReader {
         let (sender, receiver) = oneshot::channel::<Result<Bytes, ParquetError>>();
         let reader = self.inner.clone();
 
-        #[cfg(feature = "web")]
+        #[cfg(all(feature = "web", target_arch = "wasm32"))]
         let spawner = wasm_bindgen_futures::spawn_local;
         #[cfg(feature = "monoio")]
         let spawner = monoio::spawn;
@@ -214,7 +216,7 @@ impl AsyncFileReader for AsyncReader {
         let (sender, receiver) = oneshot::channel::<Result<ParquetMetaData, ParquetError>>();
         let reader = self.inner.clone();
 
-        #[cfg(feature = "web")]
+        #[cfg(all(feature = "web", target_arch = "wasm32"))]
         let spawner = wasm_bindgen_futures::spawn_local;
         #[cfg(feature = "monoio")]
         let spawner = monoio::spawn;
@@ -225,7 +227,7 @@ impl AsyncFileReader for AsyncReader {
             let mut guard = reader.lock().await;
             let result =
                 Self::load_metadata(content_length, prefetch_footer_size, &mut *guard).await;
-            sender.send(result);
+            let _ = sender.send(result);
         });
 
         let page_index = options.map(|options| options.page_index()).unwrap_or(false);

@@ -1,4 +1,4 @@
-use std::{fs, future::Future, io::ErrorKind};
+use std::{fs, io::ErrorKind};
 
 use async_stream::stream;
 use futures_core::Stream;
@@ -10,7 +10,6 @@ use crate::{
     error::Error,
     fs::{FileMeta, FileSystemTag, Fs, OpenOptions},
     path::{path_to_local, Path},
-    MaybeSend,
 };
 
 pub struct TokioUringFs;
@@ -111,12 +110,11 @@ impl DirSync for TokioUringFs {
             return Ok(());
         };
         // Best-effort: use blocking std sync for directory.
-        let res = std::fs::File::open(parent)
+        std::fs::File::open(parent)
             .and_then(|f| {
                 f.sync_all()?;
                 Ok(())
             })
-            .map_err(Error::from);
-        res
+            .map_err(Error::from)
     }
 }

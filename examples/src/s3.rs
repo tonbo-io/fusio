@@ -7,7 +7,7 @@ use fusio::{
 
 use crate::write_without_runtime_awareness;
 
-#[allow(unused)]
+#[allow(unused, clippy::arc_with_non_send_sync)]
 async fn use_fs() {
     let key_id = env::var("AWS_ACCESS_KEY_ID").unwrap();
     let secret_key = env::var("AWS_SECRET_ACCESS_KEY").unwrap();
@@ -32,6 +32,6 @@ async fn use_fs() {
         )
         .await
         .unwrap();
-    let _ = write_without_runtime_awareness(&mut file, "hello, world".as_bytes(), &mut [0; 12][..])
-        .await;
+    let _ =
+        write_without_runtime_awareness(&mut file, "hello, world".as_bytes(), vec![0; 12]).await;
 }

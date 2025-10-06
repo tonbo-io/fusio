@@ -8,7 +8,7 @@ use std::{
     },
 };
 
-use fusio_core::MaybeSendFuture;
+use fusio_core::{MaybeSend, MaybeSendFuture};
 use futures_core::Stream;
 use futures_util::stream;
 
@@ -255,7 +255,7 @@ impl Fs for InMemoryFs {
     async fn list(
         &self,
         path: &Path,
-    ) -> Result<impl Stream<Item = Result<FileMeta, Error>> + Send, Error> {
+    ) -> Result<impl Stream<Item = Result<FileMeta, Error>> + MaybeSend, Error> {
         let prefix = path.as_ref();
         let entries = self.list_keys_with_prefix(prefix);
         let iter = entries.into_iter().map(|(k, entry)| {
