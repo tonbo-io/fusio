@@ -13,8 +13,23 @@
   - `cargo test -p fusio --features tokio,aws,tokio-http`
   - `cargo test -p fusio-parquet --features tokio`
   - `cargo test -p fusio-log --no-default-features --features aws,bytes,monoio,monoio-http`
-- Lint/format before commits: `cargo +nightly fmt --all`; cargo clippy --workspace --all-features -- -D warnings.
 - Optional WASM checks: `wasm-pack test --chrome --headless fusio[ -parquet ]` with appropriate features.
+
+## Linting & Formatting
+- Format before commits: `cargo +nightly fmt --all`
+- **IMPORTANT:** `--workspace --all-features` does NOT work due to mutually exclusive runtime features (`tokio` vs `monoio`/`tokio-uring`/`opfs` which enable `no-send`).
+- Run clippy per-package with appropriate feature combinations:
+  ```bash
+  cargo clippy -p fusio-core --all-features -- -D warnings
+  cargo clippy -p fusio --features tokio,aws,tokio-http -- -D warnings
+  cargo clippy -p fusio --features monoio,aws,monoio-http -- -D warnings
+  cargo clippy -p fusio-manifest -- -D warnings
+  cargo clippy -p fusio-parquet --features tokio -- -D warnings
+  cargo clippy -p fusio-opendal --all-features -- -D warnings
+  cargo clippy -p fusio-object-store --all-features -- -D warnings
+  cargo clippy -p examples --features tokio -- -D warnings
+  ```
+- For CI or pre-commit, test the runtime you're actively developing against.
 
 ## Style Expectations
 - Rust 2021 with rustfmt (max width 100); grouped imports.
