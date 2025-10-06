@@ -25,7 +25,9 @@ impl Fs for AsyncFs {
     async fn open_options(&self, path: &Path, options: OpenOptions) -> Result<Self::File, Error> {
         let local_path =
             path_to_local(path).map_err(|err| Error::Path(std::boxed::Box::new(err)))?;
-        if !local_path.exists() {
+
+        let exists = async_fs::metadata(&local_path).await.is_ok();
+        if !exists {
             if options.create {
                 if let Some(parent_path) = local_path.parent() {
                     create_dir_all(parent_path).await?;
