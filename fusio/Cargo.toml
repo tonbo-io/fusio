@@ -25,6 +25,7 @@ aws = [
     "serde_json",
     "serde_urlencoded",
 ]
+asyncfs = ["dep:async-fs"]
 bytes = ["dep:bytes", "fusio-core/bytes"]
 completion-based = ["fusio-core/completion-based"]
 default = ["dyn", "fs", "executor"]
@@ -74,6 +75,7 @@ required-features = ["monoio"]
 
 [dependencies]
 async-stream = { version = "0.3", optional = true }
+async-fs = { version = "2.2", optional = true }
 bytes = { workspace = true, optional = true }
 cfg-if = "1.0.0"
 chrono = { version = "0.4", optional = true, default-features = false, features = [
