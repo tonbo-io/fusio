@@ -50,7 +50,8 @@ impl Write for AsyncFile {
 
     async fn close(&mut self) -> Result<(), Error> {
         let file = self.file.as_mut().expect("close file after closed");
-        File::close(file).await?;
+        file.sync_all().await?;
+        file.close().await?;
         Ok(())
     }
 }
