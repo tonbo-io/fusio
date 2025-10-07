@@ -210,10 +210,9 @@ For S3, use role-based credentials; consider SSE-S3/KMS. Configure lifecycle rul
   - Leases and the CAS-protected GC plan are part of the public API.
   - Sharded segment keys are deferred; current focus is flat layout plus CAS durability.
 
-## Known Gaps / Blockers (as of September 20, 2025)
+## Known Gaps / Blockers (as of 2025-10-07)
 
 - **Durability policy is fixed to commit:** manifest layers always request the strongest S3 barrier; offering additional options is deferred until we have meaningful backend distinctions to expose.
-- **S3 lease contention loop:** `S3LeaseStore::create` retries collisions without jitter/backoff or error typing; under S3 throttling the loop will spin and return `PreconditionFailed`, starving readers/writers.
 - **Snapshot/GC scaling gaps:** `Manifest::snapshot` re-downloads whole checkpoint payloads on every call, and GC plans materialise `Vec<u64>` of every segment slated for deletion—both will choke on large manifests during chaos exercises.
 - **Observability & validation gaps:** Tracking checklist items for lease heartbeat docs, GC metrics/batch deletes, and a real-S3 orphan adoption test remain open, leaving no visibility when chaos scenarios fail.
 
