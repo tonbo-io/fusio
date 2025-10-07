@@ -316,7 +316,11 @@ mod tests {
             self.inner.file_system()
         }
 
-        async fn open_options(&self, path: &Path, options: OpenOptions) -> Result<Self::File, FsError> {
+        async fn open_options(
+            &self,
+            path: &Path,
+            options: OpenOptions,
+        ) -> Result<Self::File, FsError> {
             self.inner.open_options(path, options).await
         }
 
@@ -324,7 +328,11 @@ mod tests {
             InMemoryFs::create_dir_all(_path).await
         }
 
-        async fn list(&self, path: &Path) -> Result<impl Stream<Item = Result<FileMeta, FsError>> + fusio_core::MaybeSend, FsError> {
+        async fn list(
+            &self,
+            path: &Path,
+        ) -> Result<impl Stream<Item = Result<FileMeta, FsError>> + fusio_core::MaybeSend, FsError>
+        {
             self.inner.list(path).await
         }
 
@@ -345,7 +353,8 @@ mod tests {
         fn load_with_tag(
             &self,
             path: &Path,
-        ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<Option<(Vec<u8>, String)>, FsError>> + '_>> {
+        ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<Option<(Vec<u8>, String)>, FsError>> + '_>>
+        {
             self.inner.load_with_tag(path)
         }
 
