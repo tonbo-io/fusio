@@ -10,7 +10,7 @@ use fusio_core::{MaybeSend, MaybeSendFuture, MaybeSync};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    backoff::{BackoffPolicy, ExponentialBackoff},
+    backoff::{classify_error, BackoffPolicy, ExponentialBackoff, RetryClass},
     head::HeadTag,
     types::{Error, Result},
 };
@@ -158,15 +158,20 @@ where
                             snapshot_txn_id,
                         });
                     }
-                    Err(FsError::PreconditionFailed) => {
-                        attempt = attempt.saturating_add(1);
-                        if backoff.exhausted() {
-                            return Err(Error::PreconditionFailed);
+                    Err(e) => {
+                        let err: Error = e.into();
+                        match classify_error(&err) {
+                            RetryClass::RetryTransient if !backoff.exhausted() => {
+                                // We are not expected to overflow, max_retries is also u32, so
+                                // we can only get to u32::MAX retries.
+                                attempt += 1;
+                                let delay = backoff.next_delay();
+                                self.timer.sleep(delay).await;
+                                continue;
+                            }
+                            _ => return Err(err),
                         }
-                        let delay = backoff.next_delay();
-                        self.timer.sleep(delay).await;
                     }
-                    Err(other) => return Err(other.into()),
                 }
             }
         }
@@ -258,10 +263,122 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        io::{Error as IoError, ErrorKind},
+        pin::Pin,
+        sync::{
+            atomic::{AtomicU32, Ordering},
+            Arc,
+        },
+    };
+
+    use fusio::{
+        error::Error as FsError,
+        fs::{FileMeta, FileSystemTag, OpenOptions},
+        impls::mem::fs::InMemoryFs,
+    };
+    use fusio_core::MaybeSendFuture;
     use futures_executor::block_on;
+    use futures_util::stream::Stream;
 
     use super::*;
     use crate::testing::new_inmemory_stores;
+
+    #[derive(Clone)]
+    struct FailingFs {
+        inner: InMemoryFs,
+        fail_for: Arc<AtomicU32>,
+    }
+
+    impl FailingFs {
+        fn new(fail_count: u32) -> Self {
+            Self {
+                inner: InMemoryFs::new(),
+                fail_for: Arc::new(AtomicU32::new(fail_count)),
+            }
+        }
+
+        fn should_fail(&self) -> bool {
+            let current = self.fail_for.load(Ordering::SeqCst);
+            if current > 0 {
+                self.fail_for.fetch_sub(1, Ordering::SeqCst);
+                true
+            } else {
+                false
+            }
+        }
+    }
+
+    impl Fs for FailingFs {
+        type File = <InMemoryFs as Fs>::File;
+
+        fn file_system(&self) -> FileSystemTag {
+            self.inner.file_system()
+        }
+
+        async fn open_options(
+            &self,
+            path: &Path,
+            options: OpenOptions,
+        ) -> Result<Self::File, FsError> {
+            self.inner.open_options(path, options).await
+        }
+
+        async fn create_dir_all(_path: &Path) -> Result<(), FsError> {
+            InMemoryFs::create_dir_all(_path).await
+        }
+
+        async fn list(
+            &self,
+            path: &Path,
+        ) -> Result<impl Stream<Item = Result<FileMeta, FsError>> + fusio_core::MaybeSend, FsError>
+        {
+            self.inner.list(path).await
+        }
+
+        async fn remove(&self, path: &Path) -> Result<(), FsError> {
+            self.inner.remove(path).await
+        }
+
+        async fn copy(&self, from: &Path, to: &Path) -> Result<(), FsError> {
+            self.inner.copy(from, to).await
+        }
+
+        async fn link(&self, from: &Path, to: &Path) -> Result<(), FsError> {
+            self.inner.link(from, to).await
+        }
+    }
+
+    impl FsCas for FailingFs {
+        fn load_with_tag(
+            &self,
+            path: &Path,
+        ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<Option<(Vec<u8>, String)>, FsError>> + '_>>
+        {
+            self.inner.load_with_tag(path)
+        }
+
+        fn put_conditional(
+            &self,
+            path: &Path,
+            payload: &[u8],
+            content_type: Option<&str>,
+            metadata: Option<Vec<(String, String)>>,
+            condition: CasCondition,
+        ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<String, FsError>> + '_>> {
+            if self.should_fail() {
+                Box::pin(async move {
+                    Err(FsError::Io(IoError::new(
+                        ErrorKind::TimedOut,
+                        "simulated S3 throttling",
+                    )))
+                })
+            } else {
+                self.inner
+                    .put_conditional(path, payload, content_type, metadata, condition)
+            }
+        }
+    }
 
     #[test]
     fn mem_lease_ttl_and_min_watermark() {
@@ -289,6 +406,98 @@ mod tests {
 
             // Release removes from active set
             store.release(l2).await.unwrap();
+        })
+    }
+
+    #[test]
+    fn lease_first_attempt_success_no_retry_suffix() {
+        block_on(async move {
+            let fs = FailingFs::new(0);
+            let timer = fusio::executor::BlockingExecutor::default();
+            let policy = BackoffPolicy::default();
+            let store = LeaseStoreImpl::new(fs, "", policy, timer);
+            let ttl = Duration::from_secs(60);
+
+            let lease = store.create(100, None, ttl).await.unwrap();
+
+            assert!(
+                lease.id.0.starts_with("lease-"),
+                "lease ID should start with 'lease-', got: {}",
+                lease.id.0
+            );
+            assert!(
+                !lease.id.0.contains("--"),
+                "lease ID should not contain double hyphens, got: {}",
+                lease.id.0
+            );
+            let after_prefix = &lease.id.0["lease-".len()..];
+            assert!(
+                !after_prefix.contains('-'),
+                "lease ID should be 'lease-{{timestamp}}' with no retry suffix, got: {}",
+                lease.id.0
+            );
+            assert!(
+                after_prefix.chars().all(|c| c.is_ascii_digit()),
+                "timestamp should be numeric, got: {}",
+                after_prefix
+            );
+            assert_eq!(lease.snapshot_txn_id, 100);
+        })
+    }
+
+    #[test]
+    fn lease_retry_on_transient_errors() {
+        block_on(async move {
+            let fs = FailingFs::new(2);
+            let timer = fusio::executor::BlockingExecutor::default();
+            let policy = BackoffPolicy {
+                base_ms: 1,
+                max_ms: 10,
+                multiplier_times_100: 200,
+                jitter_frac_times_100: 0,
+                max_retries: 5,
+                max_elapsed_ms: 1000,
+            };
+            let store = LeaseStoreImpl::new(fs, "", policy, timer);
+            let ttl = Duration::from_secs(60);
+
+            let lease = store.create(100, None, ttl).await.unwrap();
+
+            assert!(
+                lease.id.0.starts_with("lease-"),
+                "lease ID should start with 'lease-', got: {}",
+                lease.id.0
+            );
+            assert!(
+                lease.id.0.ends_with("-2"),
+                "lease ID should end with '-2' after 2 retries, got: {}",
+                lease.id.0
+            );
+            assert_eq!(lease.snapshot_txn_id, 100);
+        })
+    }
+
+    #[test]
+    fn lease_retry_exhaustion() {
+        block_on(async move {
+            let fs = FailingFs::new(100);
+            let timer = fusio::executor::BlockingExecutor::default();
+            let policy = BackoffPolicy {
+                base_ms: 1,
+                max_ms: 10,
+                multiplier_times_100: 200,
+                jitter_frac_times_100: 0,
+                max_retries: 2,
+                max_elapsed_ms: 1000,
+            };
+            let store = LeaseStoreImpl::new(fs, "", policy, timer);
+            let ttl = Duration::from_secs(60);
+
+            let result = store.create(100, None, ttl).await;
+
+            assert!(result.is_err());
+            let err = result.unwrap_err();
+            assert!(matches!(err, Error::Io(_)));
         })
     }
 }
