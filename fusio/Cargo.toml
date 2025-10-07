@@ -25,7 +25,7 @@ aws = [
     "serde_json",
     "serde_urlencoded",
 ]
-asyncfs = ["dep:async-fs"]
+asyncfs = ["async-stream", "dep:async-fs", "futures-util/io"]
 bytes = ["dep:bytes", "fusio-core/bytes"]
 completion-based = ["fusio-core/completion-based"]
 default = ["dyn", "fs", "executor"]

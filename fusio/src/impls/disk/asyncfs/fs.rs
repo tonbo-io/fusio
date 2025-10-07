@@ -1,6 +1,6 @@
 use std::io;
 
-use async_fs::{create_dir_all, remove_file};
+use async_fs::{create_dir_all, remove_dir_all, remove_file};
 use async_stream::try_stream;
 use fusio_core::error::Error;
 use futures_core::Stream;
@@ -58,7 +58,6 @@ impl Fs for AsyncFs {
     async fn create_dir_all(path: &Path) -> Result<(), Error> {
         let path = path_to_local(path).map_err(|err| Error::Path(std::boxed::Box::new(err)))?;
         create_dir_all(path).await?;
-
         Ok(())
     }
 
@@ -85,7 +84,14 @@ impl Fs for AsyncFs {
 
     async fn remove(&self, path: &Path) -> Result<(), Error> {
         let path = path_to_local(path).map_err(|err| Error::Path(Box::new(err)))?;
-        remove_file(&path).await?;
+
+        let metadata = async_fs::metadata(&path).await?;
+        if metadata.is_dir() {
+            remove_dir_all(path).await?;
+        } else {
+            remove_file(path).await?;
+        }
+
         Ok(())
     }
 
