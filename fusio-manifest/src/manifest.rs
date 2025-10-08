@@ -10,7 +10,7 @@ use fusio::executor::{Executor, Timer};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 use crate::{
-    backoff::{classify_error, ExponentialBackoff, RetryClass},
+    backoff::{classify_error, RetryClass},
     checkpoint::CheckpointStore,
     compactor::Compactor,
     context::ManifestContext,
@@ -129,7 +129,7 @@ where
     pub async fn recover_orphans(&self) -> Result<usize> {
         let timer = self.store.opts.timer().clone();
         let pol = self.store.opts.backoff;
-        let mut bo = ExponentialBackoff::new(pol, timer.clone());
+        let mut backoff_iter = pol.build_backoff();
 
         loop {
             let now_ms = timer
@@ -142,10 +142,13 @@ where
             let active_txns: HashSet<u64> = match self.store.leases.list_active(now).await {
                 Ok(leases) => leases.into_iter().map(|l| l.snapshot_txn_id).collect(),
                 Err(e) => match classify_error(&e) {
-                    RetryClass::RetryTransient if !bo.exhausted() => {
-                        let delay = bo.next_delay();
-                        timer.sleep(delay).await;
-                        continue;
+                    RetryClass::RetryTransient => {
+                        if let Some(delay) = backoff_iter.next() {
+                            timer.sleep(delay).await;
+                            continue;
+                        } else {
+                            return Err(e);
+                        }
                     }
                     _ => return Err(e),
                 },
@@ -227,12 +230,12 @@ where
             match self.store.head.put(&new_head, cond.clone()).await {
                 Ok(_t) => return Ok(adopted),
                 Err(Error::PreconditionFailed) => {
-                    if bo.exhausted() {
+                    if let Some(delay) = backoff_iter.next() {
+                        timer.sleep(delay).await;
+                        continue;
+                    } else {
                         return Err(Error::PreconditionFailed);
                     }
-                    let delay = bo.next_delay();
-                    timer.sleep(delay).await;
-                    continue;
                 }
                 Err(e) => return Err(e),
             }

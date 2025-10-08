@@ -1,10 +1,6 @@
 use core::time::Duration;
-use std::{
-    sync::atomic::{AtomicU64, Ordering},
-    time::SystemTime,
-};
 
-use fusio::executor::Timer;
+use backon::{BackoffBuilder, ExponentialBuilder};
 
 use crate::types::Error;
 
@@ -33,11 +29,22 @@ pub struct BackoffPolicy {
     pub multiplier_times_100: u64, // store as integer: e.g., 200 for 2.0
     pub jitter_frac_times_100: u64, // e.g., 25 for 0.25
     pub max_retries: u32,
+
+    /// Maximum wall-clock time for an entire operation (in milliseconds).
+    /// Includes both operation execution time and backoff sleep time.
+    /// Used for operation-level timeouts on user-facing calls (e.g., session.commit).
+    /// Set to 0 to disable this limit.
     pub max_elapsed_ms: u64,
+
+    /// Maximum cumulative time to spend sleeping during backoff (in milliseconds).
+    /// Only counts the sleep/wait time between retries, NOT the time spent executing operations.
+    /// Used by the backon backoff iterator to limit retry delay accumulation.
+    /// Set to 0 to disable this limit (only max_retries will apply).
+    pub max_backoff_sleep_ms: u64,
 }
 
-impl BackoffPolicy {
-    pub const fn default() -> Self {
+impl Default for BackoffPolicy {
+    fn default() -> Self {
         Self {
             base_ms: 20,
             max_ms: 1000,
@@ -45,145 +52,28 @@ impl BackoffPolicy {
             jitter_frac_times_100: 25, // 0.25
             max_retries: 6,
             max_elapsed_ms: 3000,
-        }
-    }
-
-    /// Disable retries entirely. Loops that consult `exhausted()` will give up
-    /// immediately and never sleep.
-    pub const fn disabled() -> Self {
-        Self {
-            base_ms: 0,
-            max_ms: 0,
-            multiplier_times_100: 100, // 1.0x — unused but keeps math well-defined
-            jitter_frac_times_100: 0,
-            max_retries: 0,
-            max_elapsed_ms: 0,
+            max_backoff_sleep_ms: 3000,
         }
     }
 }
 
-/// Runtime-agnostic exponential backoff with jitter.
-pub struct ExponentialBackoff<T>
-where
-    T: Timer,
-{
-    pol: BackoffPolicy,
-    attempt: u32,
-    start: SystemTime,
-    rng: u64,
-    timer: T,
-}
+impl BackoffPolicy {
+    pub fn build_backoff(&self) -> impl Iterator<Item = Duration> {
+        let mut strategy = ExponentialBuilder::default()
+            .with_min_delay(Duration::from_millis(self.base_ms))
+            .with_max_delay(Duration::from_millis(self.max_ms))
+            .with_factor(self.multiplier_times_100 as f32 / 100.0)
+            .with_max_times(self.max_retries as usize);
 
-impl<T> ExponentialBackoff<T>
-where
-    T: Timer,
-{
-    pub fn new(pol: BackoffPolicy, timer: T) -> Self {
-        let seed = seed_from_timer(&timer);
-        let start = timer.now();
-        Self {
-            pol,
-            attempt: 0,
-            start,
-            rng: seed ^ 0x9e3779b97f4a7c15,
-            timer,
+        if self.jitter_frac_times_100 > 0 {
+            strategy = strategy.with_jitter();
         }
-    }
 
-    #[inline]
-    pub fn exhausted(&self) -> bool {
-        if self.attempt >= self.pol.max_retries {
-            return true;
+        if self.max_backoff_sleep_ms > 0 {
+            strategy =
+                strategy.with_total_delay(Some(Duration::from_millis(self.max_backoff_sleep_ms)));
         }
-        if self.pol.max_elapsed_ms == 0 {
-            return false;
-        }
-        let elapsed = self
-            .timer
-            .now()
-            .duration_since(self.start)
-            .unwrap_or_default();
-        elapsed >= Duration::from_millis(self.pol.max_elapsed_ms)
-    }
 
-    /// Compute the next delay and advance the attempt counter.
-    pub fn next_delay(&mut self) -> Duration {
-        let a = self.attempt as u64;
-        self.attempt = self.attempt.saturating_add(1);
-        // multiplier^a with integer math in x100 fixed point
-        let mut mult_scaled = 100u64; // 1.00
-        for _ in 0..a {
-            mult_scaled = mult_scaled
-                .saturating_mul(self.pol.multiplier_times_100)
-                .saturating_div(100);
-        }
-        let base = self
-            .pol
-            .base_ms
-            .saturating_mul(mult_scaled)
-            .saturating_div(100);
-        let unclamped = core::cmp::min(base, self.pol.max_ms);
-        // jitter in [1 - j .. 1 + j]
-        let jitter = self.next_unit(); // in [0,1)
-        let jf = self.pol.jitter_frac_times_100 as f64 / 100.0;
-        let low = (1.0 - jf).max(0.0);
-        let high = 1.0 + jf;
-        let factor = low + (high - low) * jitter;
-        let out = (unclamped as f64 * factor) as u64;
-        Duration::from_millis(core::cmp::max(out, 1))
-    }
-
-    fn next_unit(&mut self) -> f64 {
-        // xorshift64*
-        let mut x = self.rng;
-        x ^= x >> 12;
-        x ^= x << 25;
-        x ^= x >> 27;
-        self.rng = x;
-        let y = x.wrapping_mul(0x2545F4914F6CDD1D);
-        // scale to [0,1)
-        (y >> 11) as f64 / ((u64::MAX >> 11) as f64)
-    }
-}
-
-fn seed_from_timer<T>(timer: &T) -> u64
-where
-    T: Timer,
-{
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    let now = timer
-        .now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos() as u64;
-    let counter = COUNTER.fetch_add(0x9e3779b97f4a7c15, Ordering::Relaxed);
-    now ^ counter
-}
-
-#[cfg(test)]
-mod tests {
-    use std::sync::Arc;
-
-    use super::*;
-
-    #[test]
-    fn backoff_progresses_and_exhausts() {
-        let pol = BackoffPolicy::default();
-        let timer: Arc<dyn Timer + Send + Sync> = Arc::new(fusio::executor::BlockingSleeper);
-        let mut bo = ExponentialBackoff::new(pol, timer);
-        let mut delays = Vec::new();
-        for _ in 0..pol.max_retries {
-            delays.push(bo.next_delay());
-        }
-        assert!(delays.iter().all(|d| *d >= Duration::from_millis(1)));
-        assert!(bo.exhausted());
-    }
-
-    #[test]
-    fn disabled_backoff_is_exhausted_immediately() {
-        let pol = BackoffPolicy::disabled();
-        let timer: Arc<dyn Timer + Send + Sync> = Arc::new(fusio::executor::BlockingSleeper);
-        let bo = ExponentialBackoff::new(pol, timer);
-        assert!(bo.exhausted());
+        strategy.build()
     }
 }

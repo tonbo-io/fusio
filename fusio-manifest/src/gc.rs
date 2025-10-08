@@ -11,7 +11,7 @@ use fusio_core::{MaybeSend, MaybeSendFuture, MaybeSync};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    backoff::{classify_error, ExponentialBackoff, RetryClass},
+    backoff::{classify_error, RetryClass},
     head::PutCondition,
     types::Error,
     BackoffPolicy,
@@ -124,7 +124,8 @@ where
     fn load(&self) -> impl MaybeSendFuture<Output = Result<Option<(GcPlan, GcTag)>, Error>> + '_ {
         async move {
             let path = Path::parse(&self.key).map_err(Error::other)?;
-            let mut bo = ExponentialBackoff::new(self.backoff, self.timer.clone());
+            let mut backoff_iter = self.backoff.build_backoff();
+
             loop {
                 match self.cas.load_with_tag(&path).await.map_err(map_fs_error) {
                     Ok(None) => return Ok(None),
@@ -134,10 +135,13 @@ where
                         return Ok(Some((plan, GcTag(etag))));
                     }
                     Err(err) => match classify_error(&err) {
-                        RetryClass::RetryTransient if !bo.exhausted() => {
-                            let delay = bo.next_delay();
-                            self.timer.sleep(delay).await;
-                            continue;
+                        RetryClass::RetryTransient => {
+                            if let Some(delay) = backoff_iter.next() {
+                                self.timer.sleep(delay).await;
+                                continue;
+                            } else {
+                                return Err(err);
+                            }
                         }
                         _ => return Err(err),
                     },
@@ -156,7 +160,8 @@ where
         async move {
             let body = body?;
             let path = Path::parse(&self.key).map_err(Error::other)?;
-            let mut bo = ExponentialBackoff::new(self.backoff, self.timer.clone());
+            let mut backoff_iter = self.backoff.build_backoff();
+
             loop {
                 let condition = match cond {
                     PutCondition::IfNotExists => CasCondition::IfNotExists,
@@ -170,10 +175,13 @@ where
                 {
                     Ok(etag) => return Ok(GcTag(etag)),
                     Err(err) => match classify_error(&err) {
-                        RetryClass::RetryTransient if !bo.exhausted() => {
-                            let delay = bo.next_delay();
-                            self.timer.sleep(delay).await;
-                            continue;
+                        RetryClass::RetryTransient => {
+                            if let Some(delay) = backoff_iter.next() {
+                                self.timer.sleep(delay).await;
+                                continue;
+                            } else {
+                                return Err(err);
+                            }
                         }
                         _ => return Err(err),
                     },
