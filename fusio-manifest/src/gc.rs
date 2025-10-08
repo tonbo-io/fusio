@@ -1,7 +1,6 @@
 //! GC plan object and CAS operations
 use core::time::Duration;
 
-use backon::{BackoffBuilder, ExponentialBuilder};
 use fusio::{
     executor::Timer,
     fs::{CasCondition, FsCas},
@@ -125,24 +124,7 @@ where
     fn load(&self) -> impl MaybeSendFuture<Output = Result<Option<(GcPlan, GcTag)>, Error>> + '_ {
         async move {
             let path = Path::parse(&self.key).map_err(Error::other)?;
-
-            let mut backoff_strategy = ExponentialBuilder::default()
-                .with_min_delay(Duration::from_millis(self.backoff.base_ms))
-                .with_max_delay(Duration::from_millis(self.backoff.max_ms))
-                .with_factor(self.backoff.multiplier_times_100 as f32 / 100.0)
-                .with_max_times(self.backoff.max_retries as usize);
-
-            if self.backoff.jitter_frac_times_100 > 0 {
-                backoff_strategy = backoff_strategy.with_jitter();
-            }
-
-            if self.backoff.max_backoff_sleep_ms > 0 {
-                backoff_strategy = backoff_strategy.with_total_delay(Some(Duration::from_millis(
-                    self.backoff.max_backoff_sleep_ms,
-                )));
-            }
-
-            let mut backoff_iter = backoff_strategy.build();
+            let mut backoff_iter = self.backoff.build_backoff();
 
             loop {
                 match self.cas.load_with_tag(&path).await.map_err(map_fs_error) {
@@ -178,24 +160,7 @@ where
         async move {
             let body = body?;
             let path = Path::parse(&self.key).map_err(Error::other)?;
-
-            let mut backoff_strategy = ExponentialBuilder::default()
-                .with_min_delay(Duration::from_millis(self.backoff.base_ms))
-                .with_max_delay(Duration::from_millis(self.backoff.max_ms))
-                .with_factor(self.backoff.multiplier_times_100 as f32 / 100.0)
-                .with_max_times(self.backoff.max_retries as usize);
-
-            if self.backoff.jitter_frac_times_100 > 0 {
-                backoff_strategy = backoff_strategy.with_jitter();
-            }
-
-            if self.backoff.max_backoff_sleep_ms > 0 {
-                backoff_strategy = backoff_strategy.with_total_delay(Some(Duration::from_millis(
-                    self.backoff.max_backoff_sleep_ms,
-                )));
-            }
-
-            let mut backoff_iter = backoff_strategy.build();
+            let mut backoff_iter = self.backoff.build_backoff();
 
             loop {
                 let condition = match cond {

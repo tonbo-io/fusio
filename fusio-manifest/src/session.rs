@@ -1,6 +1,5 @@
 use std::{collections::HashMap, hash::Hash, marker::PhantomData, sync::Arc, time::Duration};
 
-use backon::{BackoffBuilder, ExponentialBuilder};
 use fusio::executor::{Executor, Timer};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
@@ -498,23 +497,7 @@ where
         let store = self.inner.store().clone();
         let pol = store.opts.backoff;
         let timer = store.opts.timer();
-
-        let mut backoff_strategy = ExponentialBuilder::default()
-            .with_min_delay(Duration::from_millis(pol.base_ms))
-            .with_max_delay(Duration::from_millis(pol.max_ms))
-            .with_factor(pol.multiplier_times_100 as f32 / 100.0)
-            .with_max_times(pol.max_retries as usize);
-
-        if pol.jitter_frac_times_100 > 0 {
-            backoff_strategy = backoff_strategy.with_jitter();
-        }
-
-        if pol.max_backoff_sleep_ms > 0 {
-            backoff_strategy = backoff_strategy
-                .with_total_delay(Some(Duration::from_millis(pol.max_backoff_sleep_ms)));
-        }
-
-        let mut backoff_iter = backoff_strategy.build();
+        let mut backoff_iter = pol.build_backoff();
 
         // Manual timer check for total elapsed time (user-facing operation)
         let start_time = timer.now();

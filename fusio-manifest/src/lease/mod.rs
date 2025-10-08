@@ -1,6 +1,5 @@
 use std::time::{Duration, SystemTime};
 
-use backon::{BackoffBuilder, ExponentialBuilder};
 use fusio::{
     executor::Timer,
     fs::{CasCondition, Fs, FsCas, OpenOptions},
@@ -123,24 +122,7 @@ where
         async move {
             let ttl_ms = ttl.as_millis().min(u128::from(u64::MAX)) as u64;
             let mut attempt: u32 = 0;
-
-            let mut backoff_strategy = ExponentialBuilder::default()
-                .with_min_delay(Duration::from_millis(self.backoff.base_ms))
-                .with_max_delay(Duration::from_millis(self.backoff.max_ms))
-                .with_factor(self.backoff.multiplier_times_100 as f32 / 100.0)
-                .with_max_times(self.backoff.max_retries as usize);
-
-            if self.backoff.jitter_frac_times_100 > 0 {
-                backoff_strategy = backoff_strategy.with_jitter();
-            }
-
-            if self.backoff.max_backoff_sleep_ms > 0 {
-                backoff_strategy = backoff_strategy.with_total_delay(Some(Duration::from_millis(
-                    self.backoff.max_backoff_sleep_ms,
-                )));
-            }
-
-            let mut backoff_iter = backoff_strategy.build();
+            let mut backoff_iter = self.backoff.build_backoff();
 
             loop {
                 let now = self.wall_clock_now_ms();

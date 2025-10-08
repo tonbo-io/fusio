@@ -9,7 +9,6 @@
 use core::{hash::Hash, marker::PhantomData, time::Duration};
 use std::{collections::HashMap, sync::Arc, time::SystemTime};
 
-use backon::{BackoffBuilder, ExponentialBuilder};
 use fusio::executor::{Executor, Timer};
 use futures_util::TryStreamExt;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -212,22 +211,7 @@ where
                 let pol = self.store.opts.backoff;
                 let timer = self.store.opts.timer().clone();
 
-                let mut backoff_strategy = ExponentialBuilder::default()
-                    .with_min_delay(Duration::from_millis(pol.base_ms))
-                    .with_max_delay(Duration::from_millis(pol.max_ms))
-                    .with_factor(pol.multiplier_times_100 as f32 / 100.0)
-                    .with_max_times(pol.max_retries as usize);
-
-                if pol.jitter_frac_times_100 > 0 {
-                    backoff_strategy = backoff_strategy.with_jitter();
-                }
-
-                if pol.max_backoff_sleep_ms > 0 {
-                    backoff_strategy = backoff_strategy
-                        .with_total_delay(Some(Duration::from_millis(pol.max_backoff_sleep_ms)));
-                }
-
-                let mut backoff_iter = backoff_strategy.build();
+                let mut backoff_iter = pol.build_backoff();
 
                 let tag = loop {
                     match self
@@ -263,22 +247,7 @@ where
                 let pol = self.store.opts.backoff;
                 let timer = self.store.opts.timer().clone();
 
-                let mut backoff_strategy = ExponentialBuilder::default()
-                    .with_min_delay(Duration::from_millis(pol.base_ms))
-                    .with_max_delay(Duration::from_millis(pol.max_ms))
-                    .with_factor(pol.multiplier_times_100 as f32 / 100.0)
-                    .with_max_times(pol.max_retries as usize);
-
-                if pol.jitter_frac_times_100 > 0 {
-                    backoff_strategy = backoff_strategy.with_jitter();
-                }
-
-                if pol.max_backoff_sleep_ms > 0 {
-                    backoff_strategy = backoff_strategy
-                        .with_total_delay(Some(Duration::from_millis(pol.max_backoff_sleep_ms)));
-                }
-
-                let mut backoff_iter = backoff_strategy.build();
+                let mut backoff_iter = pol.build_backoff();
 
                 let tag = loop {
                     match self
@@ -388,22 +357,7 @@ where
         let pol = self.store.opts.backoff;
         let timer = self.store.opts.timer().clone();
 
-        let mut backoff_strategy = ExponentialBuilder::default()
-            .with_min_delay(Duration::from_millis(pol.base_ms))
-            .with_max_delay(Duration::from_millis(pol.max_ms))
-            .with_factor(pol.multiplier_times_100 as f32 / 100.0)
-            .with_max_times(pol.max_retries as usize);
-
-        if pol.jitter_frac_times_100 > 0 {
-            backoff_strategy = backoff_strategy.with_jitter();
-        }
-
-        if pol.max_backoff_sleep_ms > 0 {
-            backoff_strategy = backoff_strategy
-                .with_total_delay(Some(Duration::from_millis(pol.max_backoff_sleep_ms)));
-        }
-
-        let mut backoff_iter = backoff_strategy.build();
+        let mut backoff_iter = pol.build_backoff();
 
         loop {
             // Read current HEAD snapshot/tag
@@ -605,22 +559,7 @@ where
         let pol = self.store.opts.backoff;
         let timer = self.store.opts.timer().clone();
 
-        let mut backoff_strategy = ExponentialBuilder::default()
-            .with_min_delay(Duration::from_millis(pol.base_ms))
-            .with_max_delay(Duration::from_millis(pol.max_ms))
-            .with_factor(pol.multiplier_times_100 as f32 / 100.0)
-            .with_max_times(pol.max_retries as usize);
-
-        if pol.jitter_frac_times_100 > 0 {
-            backoff_strategy = backoff_strategy.with_jitter();
-        }
-
-        if pol.max_backoff_sleep_ms > 0 {
-            backoff_strategy = backoff_strategy
-                .with_total_delay(Some(Duration::from_millis(pol.max_backoff_sleep_ms)));
-        }
-
-        let mut backoff_iter = backoff_strategy.build();
+        let mut backoff_iter = pol.build_backoff();
 
         'outer: loop {
             // Load plan; nothing to do if absent/empty
@@ -787,22 +726,7 @@ where
         let pol = self.store.opts.backoff;
         let timer = self.store.opts.timer().clone();
 
-        let mut backoff_strategy = ExponentialBuilder::default()
-            .with_min_delay(Duration::from_millis(pol.base_ms))
-            .with_max_delay(Duration::from_millis(pol.max_ms))
-            .with_factor(pol.multiplier_times_100 as f32 / 100.0)
-            .with_max_times(pol.max_retries as usize);
-
-        if pol.jitter_frac_times_100 > 0 {
-            backoff_strategy = backoff_strategy.with_jitter();
-        }
-
-        if pol.max_backoff_sleep_ms > 0 {
-            backoff_strategy = backoff_strategy
-                .with_total_delay(Some(Duration::from_millis(pol.max_backoff_sleep_ms)));
-        }
-
-        let mut backoff_iter = backoff_strategy.build();
+        let mut backoff_iter = pol.build_backoff();
 
         // Load plan
         let loaded = match store.load().await {

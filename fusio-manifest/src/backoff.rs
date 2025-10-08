@@ -1,3 +1,7 @@
+use core::time::Duration;
+
+use backon::{BackoffBuilder, ExponentialBuilder};
+
 use crate::types::Error;
 
 /// Classification used to guide retry logic.
@@ -50,5 +54,26 @@ impl Default for BackoffPolicy {
             max_elapsed_ms: 3000,
             max_backoff_sleep_ms: 3000,
         }
+    }
+}
+
+impl BackoffPolicy {
+    pub fn build_backoff(&self) -> impl Iterator<Item = Duration> {
+        let mut strategy = ExponentialBuilder::default()
+            .with_min_delay(Duration::from_millis(self.base_ms))
+            .with_max_delay(Duration::from_millis(self.max_ms))
+            .with_factor(self.multiplier_times_100 as f32 / 100.0)
+            .with_max_times(self.max_retries as usize);
+
+        if self.jitter_frac_times_100 > 0 {
+            strategy = strategy.with_jitter();
+        }
+
+        if self.max_backoff_sleep_ms > 0 {
+            strategy = strategy
+                .with_total_delay(Some(Duration::from_millis(self.max_backoff_sleep_ms)));
+        }
+
+        strategy.build()
     }
 }
