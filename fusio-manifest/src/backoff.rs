@@ -70,8 +70,8 @@ impl BackoffPolicy {
         }
 
         if self.max_backoff_sleep_ms > 0 {
-            strategy = strategy
-                .with_total_delay(Some(Duration::from_millis(self.max_backoff_sleep_ms)));
+            strategy =
+                strategy.with_total_delay(Some(Duration::from_millis(self.max_backoff_sleep_ms)));
         }
 
         strategy.build()
