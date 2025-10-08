@@ -1,10 +1,11 @@
 use std::{collections::HashMap, hash::Hash, marker::PhantomData, sync::Arc, time::Duration};
 
+use backon::{BackoffBuilder, ExponentialBuilder};
 use fusio::executor::{Executor, Timer};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 use crate::{
-    backoff::{classify_error, ExponentialBackoff, RetryClass},
+    backoff::{classify_error, RetryClass},
     checkpoint::CheckpointStore,
     head::{HeadJson, HeadStore, PutCondition},
     lease::{keeper::LeaseKeeper, LeaseHandle, LeaseStore},
@@ -497,7 +498,27 @@ where
         let store = self.inner.store().clone();
         let pol = store.opts.backoff;
         let timer = store.opts.timer();
-        let mut bo = ExponentialBackoff::new(pol, timer.clone());
+
+        let mut backoff_strategy = ExponentialBuilder::default()
+            .with_min_delay(Duration::from_millis(pol.base_ms))
+            .with_max_delay(Duration::from_millis(pol.max_ms))
+            .with_factor(pol.multiplier_times_100 as f32 / 100.0)
+            .with_max_times(pol.max_retries as usize);
+
+        if pol.jitter_frac_times_100 > 0 {
+            backoff_strategy = backoff_strategy.with_jitter();
+        }
+
+        if pol.max_backoff_sleep_ms > 0 {
+            backoff_strategy = backoff_strategy
+                .with_total_delay(Some(Duration::from_millis(pol.max_backoff_sleep_ms)));
+        }
+
+        let mut backoff_iter = backoff_strategy.build();
+
+        // Manual timer check for total elapsed time (user-facing operation)
+        let start_time = timer.now();
+        let max_elapsed = Duration::from_millis(pol.max_elapsed_ms);
 
         let base_txn = snapshot.txn_id.0;
         let next_txn = base_txn.saturating_add(1);
@@ -544,14 +565,25 @@ where
                         seg_written = true;
                     }
                     Err(e) => match classify_error(&e) {
-                        RetryClass::RetryTransient if !bo.exhausted() => {
-                            let delay = bo.next_delay();
-                            timer.sleep(delay).await;
-                            continue;
-                        }
                         RetryClass::RetryTransient => {
-                            self.inner.release_lease_silent().await;
-                            return Err(e);
+                            // Check total elapsed time (user-facing operation)
+                            if pol.max_elapsed_ms > 0 {
+                                let elapsed =
+                                    timer.now().duration_since(start_time).unwrap_or_default();
+                                if elapsed >= max_elapsed {
+                                    self.inner.release_lease_silent().await;
+                                    return Err(e);
+                                }
+                            }
+
+                            // Check retry count + backoff sleep limit
+                            if let Some(delay) = backoff_iter.next() {
+                                timer.sleep(delay).await;
+                                continue;
+                            } else {
+                                self.inner.release_lease_silent().await;
+                                return Err(e);
+                            }
                         }
                         _ => {
                             self.inner.release_lease_silent().await;
@@ -590,14 +622,25 @@ where
                     return Ok(());
                 }
                 Err(e) => match classify_error(&e) {
-                    RetryClass::RetryTransient if !bo.exhausted() => {
-                        let delay = bo.next_delay();
-                        timer.sleep(delay).await;
-                        continue;
-                    }
                     RetryClass::RetryTransient => {
-                        self.inner.release_lease_silent().await;
-                        return Err(e);
+                        // Check total elapsed time (user-facing operation)
+                        if pol.max_elapsed_ms > 0 {
+                            let elapsed =
+                                timer.now().duration_since(start_time).unwrap_or_default();
+                            if elapsed >= max_elapsed {
+                                self.inner.release_lease_silent().await;
+                                return Err(e);
+                            }
+                        }
+
+                        // Check retry count + backoff sleep limit
+                        if let Some(delay) = backoff_iter.next() {
+                            timer.sleep(delay).await;
+                            continue;
+                        } else {
+                            self.inner.release_lease_silent().await;
+                            return Err(e);
+                        }
                     }
                     RetryClass::DurableConflict => {
                         self.inner.release_lease_silent().await;

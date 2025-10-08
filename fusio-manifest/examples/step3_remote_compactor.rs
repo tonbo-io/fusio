@@ -23,6 +23,7 @@ async fn main() -> Result<()> {
             jitter_frac_times_100: 20,
             max_retries: 8,
             max_elapsed_ms: 5_000,
+            max_backoff_sleep_ms: 5_000,
         },
     ));
 

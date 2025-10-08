@@ -1,6 +1,7 @@
 //! GC plan object and CAS operations
 use core::time::Duration;
 
+use backon::{BackoffBuilder, ExponentialBuilder};
 use fusio::{
     executor::Timer,
     fs::{CasCondition, FsCas},
@@ -11,7 +12,7 @@ use fusio_core::{MaybeSend, MaybeSendFuture, MaybeSync};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    backoff::{classify_error, ExponentialBackoff, RetryClass},
+    backoff::{classify_error, RetryClass},
     head::PutCondition,
     types::Error,
     BackoffPolicy,
@@ -124,7 +125,25 @@ where
     fn load(&self) -> impl MaybeSendFuture<Output = Result<Option<(GcPlan, GcTag)>, Error>> + '_ {
         async move {
             let path = Path::parse(&self.key).map_err(Error::other)?;
-            let mut bo = ExponentialBackoff::new(self.backoff, self.timer.clone());
+
+            let mut backoff_strategy = ExponentialBuilder::default()
+                .with_min_delay(Duration::from_millis(self.backoff.base_ms))
+                .with_max_delay(Duration::from_millis(self.backoff.max_ms))
+                .with_factor(self.backoff.multiplier_times_100 as f32 / 100.0)
+                .with_max_times(self.backoff.max_retries as usize);
+
+            if self.backoff.jitter_frac_times_100 > 0 {
+                backoff_strategy = backoff_strategy.with_jitter();
+            }
+
+            if self.backoff.max_backoff_sleep_ms > 0 {
+                backoff_strategy = backoff_strategy.with_total_delay(Some(Duration::from_millis(
+                    self.backoff.max_backoff_sleep_ms,
+                )));
+            }
+
+            let mut backoff_iter = backoff_strategy.build();
+
             loop {
                 match self.cas.load_with_tag(&path).await.map_err(map_fs_error) {
                     Ok(None) => return Ok(None),
@@ -134,10 +153,13 @@ where
                         return Ok(Some((plan, GcTag(etag))));
                     }
                     Err(err) => match classify_error(&err) {
-                        RetryClass::RetryTransient if !bo.exhausted() => {
-                            let delay = bo.next_delay();
-                            self.timer.sleep(delay).await;
-                            continue;
+                        RetryClass::RetryTransient => {
+                            if let Some(delay) = backoff_iter.next() {
+                                self.timer.sleep(delay).await;
+                                continue;
+                            } else {
+                                return Err(err);
+                            }
                         }
                         _ => return Err(err),
                     },
@@ -156,7 +178,25 @@ where
         async move {
             let body = body?;
             let path = Path::parse(&self.key).map_err(Error::other)?;
-            let mut bo = ExponentialBackoff::new(self.backoff, self.timer.clone());
+
+            let mut backoff_strategy = ExponentialBuilder::default()
+                .with_min_delay(Duration::from_millis(self.backoff.base_ms))
+                .with_max_delay(Duration::from_millis(self.backoff.max_ms))
+                .with_factor(self.backoff.multiplier_times_100 as f32 / 100.0)
+                .with_max_times(self.backoff.max_retries as usize);
+
+            if self.backoff.jitter_frac_times_100 > 0 {
+                backoff_strategy = backoff_strategy.with_jitter();
+            }
+
+            if self.backoff.max_backoff_sleep_ms > 0 {
+                backoff_strategy = backoff_strategy.with_total_delay(Some(Duration::from_millis(
+                    self.backoff.max_backoff_sleep_ms,
+                )));
+            }
+
+            let mut backoff_iter = backoff_strategy.build();
+
             loop {
                 let condition = match cond {
                     PutCondition::IfNotExists => CasCondition::IfNotExists,
@@ -170,10 +210,13 @@ where
                 {
                     Ok(etag) => return Ok(GcTag(etag)),
                     Err(err) => match classify_error(&err) {
-                        RetryClass::RetryTransient if !bo.exhausted() => {
-                            let delay = bo.next_delay();
-                            self.timer.sleep(delay).await;
-                            continue;
+                        RetryClass::RetryTransient => {
+                            if let Some(delay) = backoff_iter.next() {
+                                self.timer.sleep(delay).await;
+                                continue;
+                            } else {
+                                return Err(err);
+                            }
                         }
                         _ => return Err(err),
                     },

@@ -9,12 +9,13 @@
 use core::{hash::Hash, marker::PhantomData, time::Duration};
 use std::{collections::HashMap, sync::Arc, time::SystemTime};
 
+use backon::{BackoffBuilder, ExponentialBuilder};
 use fusio::executor::{Executor, Timer};
 use futures_util::TryStreamExt;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 use crate::{
-    backoff::{classify_error, ExponentialBackoff, RetryClass},
+    backoff::{classify_error, RetryClass},
     checkpoint::{CheckpointId, CheckpointMeta, CheckpointStore},
     context::ManifestContext,
     gc::{GcPlan, GcPlanStore, GcTag, SegmentRange},
@@ -210,7 +211,24 @@ where
                 };
                 let pol = self.store.opts.backoff;
                 let timer = self.store.opts.timer().clone();
-                let mut bo = ExponentialBackoff::new(pol, timer.clone());
+
+                let mut backoff_strategy = ExponentialBuilder::default()
+                    .with_min_delay(Duration::from_millis(pol.base_ms))
+                    .with_max_delay(Duration::from_millis(pol.max_ms))
+                    .with_factor(pol.multiplier_times_100 as f32 / 100.0)
+                    .with_max_times(pol.max_retries as usize);
+
+                if pol.jitter_frac_times_100 > 0 {
+                    backoff_strategy = backoff_strategy.with_jitter();
+                }
+
+                if pol.max_backoff_sleep_ms > 0 {
+                    backoff_strategy = backoff_strategy
+                        .with_total_delay(Some(Duration::from_millis(pol.max_backoff_sleep_ms)));
+                }
+
+                let mut backoff_iter = backoff_strategy.build();
+
                 let tag = loop {
                     match self
                         .store
@@ -221,10 +239,13 @@ where
                         Ok(t) => break t,
                         Err(Error::PreconditionFailed) => return Err(Error::PreconditionFailed),
                         Err(e) => match crate::backoff::classify_error(&e) {
-                            RetryClass::RetryTransient if !bo.exhausted() => {
-                                let delay = bo.next_delay();
-                                timer.sleep(delay).await;
-                                continue;
+                            RetryClass::RetryTransient => {
+                                if let Some(delay) = backoff_iter.next() {
+                                    timer.sleep(delay).await;
+                                    continue;
+                                } else {
+                                    return Err(e);
+                                }
                             }
                             _ => return Err(e),
                         },
@@ -241,7 +262,24 @@ where
                 };
                 let pol = self.store.opts.backoff;
                 let timer = self.store.opts.timer().clone();
-                let mut bo = ExponentialBackoff::new(pol, timer.clone());
+
+                let mut backoff_strategy = ExponentialBuilder::default()
+                    .with_min_delay(Duration::from_millis(pol.base_ms))
+                    .with_max_delay(Duration::from_millis(pol.max_ms))
+                    .with_factor(pol.multiplier_times_100 as f32 / 100.0)
+                    .with_max_times(pol.max_retries as usize);
+
+                if pol.jitter_frac_times_100 > 0 {
+                    backoff_strategy = backoff_strategy.with_jitter();
+                }
+
+                if pol.max_backoff_sleep_ms > 0 {
+                    backoff_strategy = backoff_strategy
+                        .with_total_delay(Some(Duration::from_millis(pol.max_backoff_sleep_ms)));
+                }
+
+                let mut backoff_iter = backoff_strategy.build();
+
                 let tag = loop {
                     match self
                         .store
@@ -252,10 +290,13 @@ where
                         Ok(t) => break t,
                         Err(Error::PreconditionFailed) => return Err(Error::PreconditionFailed),
                         Err(e) => match crate::backoff::classify_error(&e) {
-                            RetryClass::RetryTransient if !bo.exhausted() => {
-                                let delay = bo.next_delay();
-                                timer.sleep(delay).await;
-                                continue;
+                            RetryClass::RetryTransient => {
+                                if let Some(delay) = backoff_iter.next() {
+                                    timer.sleep(delay).await;
+                                    continue;
+                                } else {
+                                    return Err(e);
+                                }
                             }
                             _ => return Err(e),
                         },
@@ -346,16 +387,36 @@ where
     ) -> Result<Option<GcTag>> {
         let pol = self.store.opts.backoff;
         let timer = self.store.opts.timer().clone();
-        let mut bo = ExponentialBackoff::new(pol, timer.clone());
+
+        let mut backoff_strategy = ExponentialBuilder::default()
+            .with_min_delay(Duration::from_millis(pol.base_ms))
+            .with_max_delay(Duration::from_millis(pol.max_ms))
+            .with_factor(pol.multiplier_times_100 as f32 / 100.0)
+            .with_max_times(pol.max_retries as usize);
+
+        if pol.jitter_frac_times_100 > 0 {
+            backoff_strategy = backoff_strategy.with_jitter();
+        }
+
+        if pol.max_backoff_sleep_ms > 0 {
+            backoff_strategy = backoff_strategy
+                .with_total_delay(Some(Duration::from_millis(pol.max_backoff_sleep_ms)));
+        }
+
+        let mut backoff_iter = backoff_strategy.build();
+
         loop {
             // Read current HEAD snapshot/tag
             let head = match self.store.head.load().await {
                 Ok(h) => h,
                 Err(e) => match classify_error(&e) {
-                    RetryClass::RetryTransient if !bo.exhausted() => {
-                        let delay = bo.next_delay();
-                        timer.sleep(delay).await;
-                        continue;
+                    RetryClass::RetryTransient => {
+                        if let Some(delay) = backoff_iter.next() {
+                            timer.sleep(delay).await;
+                            continue;
+                        } else {
+                            return Err(e);
+                        }
                     }
                     _ => return Err(e),
                 },
@@ -370,10 +431,13 @@ where
             let leases = match self.store.leases.list_active(now).await {
                 Ok(ls) => ls,
                 Err(e) => match classify_error(&e) {
-                    RetryClass::RetryTransient if !bo.exhausted() => {
-                        let delay = bo.next_delay();
-                        timer.sleep(delay).await;
-                        continue;
+                    RetryClass::RetryTransient => {
+                        if let Some(delay) = backoff_iter.next() {
+                            timer.sleep(delay).await;
+                            continue;
+                        } else {
+                            return Err(e);
+                        }
                     }
                     _ => return Err(e),
                 },
@@ -422,10 +486,13 @@ where
                 Ok(tag) => return Ok(Some(tag)),
                 Err(crate::types::Error::PreconditionFailed) => return Ok(None),
                 Err(e) => match classify_error(&e) {
-                    RetryClass::RetryTransient if !bo.exhausted() => {
-                        let delay = bo.next_delay();
-                        timer.sleep(delay).await;
-                        continue;
+                    RetryClass::RetryTransient => {
+                        if let Some(delay) = backoff_iter.next() {
+                            timer.sleep(delay).await;
+                            continue;
+                        } else {
+                            return Err(e);
+                        }
                     }
                     _ => return Err(e),
                 },
@@ -537,16 +604,36 @@ where
     pub async fn gc_apply<S: GcPlanStore + Clone + 'static>(&self, store: &S) -> Result<()> {
         let pol = self.store.opts.backoff;
         let timer = self.store.opts.timer().clone();
-        let mut bo = ExponentialBackoff::new(pol, timer.clone());
+
+        let mut backoff_strategy = ExponentialBuilder::default()
+            .with_min_delay(Duration::from_millis(pol.base_ms))
+            .with_max_delay(Duration::from_millis(pol.max_ms))
+            .with_factor(pol.multiplier_times_100 as f32 / 100.0)
+            .with_max_times(pol.max_retries as usize);
+
+        if pol.jitter_frac_times_100 > 0 {
+            backoff_strategy = backoff_strategy.with_jitter();
+        }
+
+        if pol.max_backoff_sleep_ms > 0 {
+            backoff_strategy = backoff_strategy
+                .with_total_delay(Some(Duration::from_millis(pol.max_backoff_sleep_ms)));
+        }
+
+        let mut backoff_iter = backoff_strategy.build();
+
         'outer: loop {
             // Load plan; nothing to do if absent/empty
             let loaded = match store.load().await {
                 Ok(v) => v,
                 Err(e) => match classify_error(&e) {
-                    RetryClass::RetryTransient if !bo.exhausted() => {
-                        let delay = bo.next_delay();
-                        timer.sleep(delay).await;
-                        continue 'outer;
+                    RetryClass::RetryTransient => {
+                        if let Some(delay) = backoff_iter.next() {
+                            timer.sleep(delay).await;
+                            continue 'outer;
+                        } else {
+                            return Err(e);
+                        }
                     }
                     _ => return Err(e),
                 },
@@ -574,10 +661,13 @@ where
             let head_loaded = match self.store.head.load().await {
                 Ok(v) => v,
                 Err(e) => match classify_error(&e) {
-                    RetryClass::RetryTransient if !bo.exhausted() => {
-                        let delay = bo.next_delay();
-                        timer.sleep(delay).await;
-                        continue 'outer;
+                    RetryClass::RetryTransient => {
+                        if let Some(delay) = backoff_iter.next() {
+                            timer.sleep(delay).await;
+                            continue 'outer;
+                        } else {
+                            return Err(e);
+                        }
                     }
                     _ => return Err(e),
                 },
@@ -675,10 +765,13 @@ where
                             .await;
                         return Ok(());
                     }
-                    RetryClass::RetryTransient if !bo.exhausted() => {
-                        let delay = bo.next_delay();
-                        timer.sleep(delay).await;
-                        continue 'outer;
+                    RetryClass::RetryTransient => {
+                        if let Some(delay) = backoff_iter.next() {
+                            timer.sleep(delay).await;
+                            continue 'outer;
+                        } else {
+                            return Err(e);
+                        }
                     }
                     _ => return Err(e),
                 },
@@ -693,15 +786,35 @@ where
     pub async fn gc_delete_and_reset<S: GcPlanStore + 'static>(&self, store: &S) -> Result<()> {
         let pol = self.store.opts.backoff;
         let timer = self.store.opts.timer().clone();
-        let mut bo = ExponentialBackoff::new(pol, timer.clone());
+
+        let mut backoff_strategy = ExponentialBuilder::default()
+            .with_min_delay(Duration::from_millis(pol.base_ms))
+            .with_max_delay(Duration::from_millis(pol.max_ms))
+            .with_factor(pol.multiplier_times_100 as f32 / 100.0)
+            .with_max_times(pol.max_retries as usize);
+
+        if pol.jitter_frac_times_100 > 0 {
+            backoff_strategy = backoff_strategy.with_jitter();
+        }
+
+        if pol.max_backoff_sleep_ms > 0 {
+            backoff_strategy = backoff_strategy
+                .with_total_delay(Some(Duration::from_millis(pol.max_backoff_sleep_ms)));
+        }
+
+        let mut backoff_iter = backoff_strategy.build();
+
         // Load plan
         let loaded = match store.load().await {
             Ok(v) => v,
             Err(e) => match classify_error(&e) {
-                RetryClass::RetryTransient if !bo.exhausted() => {
-                    let delay = bo.next_delay();
-                    timer.sleep(delay).await;
-                    return Ok(()); // next pass will try again
+                RetryClass::RetryTransient => {
+                    if let Some(delay) = backoff_iter.next() {
+                        timer.sleep(delay).await;
+                        return Ok(()); // next pass will try again
+                    } else {
+                        return Err(e);
+                    }
                 }
                 _ => return Err(e),
             },
@@ -749,10 +862,13 @@ where
                 Ok(_) => return Ok(()),
                 Err(crate::types::Error::PreconditionFailed) => return Ok(()),
                 Err(e) => match classify_error(&e) {
-                    RetryClass::RetryTransient if !bo.exhausted() => {
-                        let delay = bo.next_delay();
-                        timer.sleep(delay).await;
-                        continue;
+                    RetryClass::RetryTransient => {
+                        if let Some(delay) = backoff_iter.next() {
+                            timer.sleep(delay).await;
+                            continue;
+                        } else {
+                            return Err(e);
+                        }
                     }
                     _ => return Err(e),
                 },
