@@ -1,10 +1,10 @@
-<p align="center">
+<p style="text-align: center;">
   <a href="https://crates.io/crates/fusio">
-    <image alt="fusio" src="https://github.com/user-attachments/assets/52e680dc-9c03-4dca-ae07-5d57ba452af8">
+    <img alt="fusio" src="https://github.com/user-attachments/assets/52e680dc-9c03-4dca-ae07-5d57ba452af8">
   </a>
 </p>
 
-<p align="center">
+<p style="text-align: center;">
   <a href="https://crates.io/crates/fusio">
     <img alt="crates.io" src="https://img.shields.io/crates/v/fusio">
   </a>
@@ -14,23 +14,23 @@
   </a>
 </p>
 
-`fusio` provides [random read](https://docs.rs/fusio/latest/fusio/trait.Read.html) and [sequential write](https://docs.rs/fusio/latest/fusio/trait.Write.html) traits to operate on multiple storage backends (e.g., local disk, Amazon S3) across various asynchronous runtimes—both poll-based ([tokio](https://github.com/tokio-rs/tokio)) and completion-based ([tokio-uring](https://github.com/tokio-rs/tokio-uring), [monoio](https://github.com/bytedance/monoio))—with:
-- lean: binary size is at least 14× smaller than others.
+`fusio` is a library that provides [random read](https://docs.rs/fusio/latest/fusio/trait.Read.html) and [sequential write](https://docs.rs/fusio/latest/fusio/trait.Write.html) traits to operate on multiple storage backends (e.g., local disk, Amazon S3) across various asynchronous runtimes—both poll-based ([tokio](https://github.com/tokio-rs/tokio)) and completion-based ([tokio-uring](https://github.com/tokio-rs/tokio-uring), [monoio](https://github.com/bytedance/monoio)). The main goals are:
+- lean: binary size is at least 14× smaller than other alternatives.
 - minimal-cost abstraction: compared to bare storage backends, trait definitions allow dispatching file operations without extra overhead.
-- extensible: exposes traits to support implementing storage backends as third-party crates.
+- extensibility: exposes traits to support implementing storage backends as third-party crates.
 
 > **`fusio` is now at preview version, please join our [community](https://discord.gg/j27XVFVmJM) to attend its development and semantics / behaviors discussion.**
 
 ## Why do we need `fusio`?
-In developing [Tonbo](https://github.com/tonbo-io/tonbo), we needed a flexible and efficient way to handle file and file system operations across multiple storage backends—such as memory, local disk, and remote object storage. We also required compatibility with various asynchronous runtimes, including both completion-based runtimes and event loops in languages like Python and JavaScript.
+While developing [Tonbo](https://github.com/tonbo-io/tonbo) (an embedded database ideal for data-intensive application), we needed a flexible and efficient way to handle file and file system operations across multiple storage backends—such as memory, local disk, and remote object storage. We also required compatibility with various asynchronous runtimes, including both completion-based runtimes and event loops in languages like Python and JavaScript.
 
 `fusio` addresses these needs by providing:
-- offers traits that allow dispatch of file and file system operations to multiple storage backends.
-- usable in diverse async runtimes, not only disk but also network I/O.
-- ideal for embedded libs like Tonbo.
-- can be extended via third-party crates, enabling custom asynchronous file and file system implementations.
+- traits that allow dispatch of file and file system operations to multiple storage backends.
+- different async runtimes, not only disk but also network I/O.
+- compact form: ideal for embedded libs like Tonbo.
+- extensibility via third-party crates, enabling custom asynchronous file and file system implementations.
 
-For more context, please check [apache/arrow-rs#6051](https://github.com/apache/arrow-rs/issues/6051).
+For more context, please check this request to `arrow-rs` [apache/arrow-rs#6051](https://github.com/apache/arrow-rs/issues/6051) that presents the motivation behind `fusio`.
 
 ## How to use it?
 
@@ -63,7 +63,7 @@ You can freely transmute between them.
 
 ## When to choose `fusio`?
 
- Overall, `fusio` carefully selects a subset of semantics and behaviors from multiple storage backends and async runtimes to ensure native performance in most scenarios. For example, `fusio` adopts a completion-based API (inspired by [monoio](https://docs.rs/monoio/latest/monoio/io/trait.AsyncReadRent.html)) so that file operations on `tokio` and `tokio-uring`  have the same performance as they would without `fusio`.
+When you need a combination of: flexibility, abstraction on different storage backends without a performance penalty and a small binary. Overall, `fusio` carefully selects a subset of semantics and behaviors from multiple storage backends and async runtimes to ensure native performance in most scenarios. For example, `fusio` adopts a completion-based API (inspired by [monoio](https://docs.rs/monoio/latest/monoio/io/trait.AsyncReadRent.html)) so that file operations on `tokio` and `tokio-uring`  have the same performance as they would without `fusio`.
 
 ### compare with `object_store`
 
@@ -80,20 +80,20 @@ Also, compared with `opendal::Operator`, fusio exposes core traits and allows th
   - [x] file operations
   - [x] (partial) file system operations
 - storage backend implementations
-  - disk
+  - [x] disk
     - [x] tokio
     - [x] tokio-uring
     - [x] monoio
-  - [x] network
+  - [ ] network
     - [x] HTTP client trait
     - [x] network storage runtime support
       - [x] tokio (over reqwest)
-      - [ ] monoio (over hyper-tls)
+      - [x] monoio (over monoio-http-client)
       - [ ] tokio-uring (over hyper-tls)
     - [x] Amazon S3
     - [ ] Azure Blob Storage
     - [ ] Cloudflare R2
-  - [ ] in-memory
+  - [x] in-memory
 - [ ] [conditional operations](https://aws.amazon.com/cn/about-aws/whats-new/2024/08/amazon-s3-conditional-writes/)
 - extensions
   - [x] parquet support
