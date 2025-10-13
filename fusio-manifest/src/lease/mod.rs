@@ -10,7 +10,7 @@ use fusio_core::{MaybeSend, MaybeSendFuture, MaybeSync};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    backoff::{classify_error, BackoffPolicy, ExponentialBackoff, RetryClass},
+    backoff::{classify_error, BackoffPolicy, RetryClass},
     head::HeadTag,
     types::{Error, Result},
 };
@@ -122,7 +122,8 @@ where
         async move {
             let ttl_ms = ttl.as_millis().min(u128::from(u64::MAX)) as u64;
             let mut attempt: u32 = 0;
-            let mut backoff = ExponentialBackoff::new(self.backoff, self.timer.clone());
+            let mut backoff_iter = self.backoff.build_backoff();
+
             loop {
                 let now = self.wall_clock_now_ms();
                 let expires_at_ms = now.saturating_add(ttl_ms);
@@ -161,13 +162,14 @@ where
                     Err(e) => {
                         let err: Error = e.into();
                         match classify_error(&err) {
-                            RetryClass::RetryTransient if !backoff.exhausted() => {
-                                // We are not expected to overflow, max_retries is also u32, so
-                                // we can only get to u32::MAX retries.
-                                attempt += 1;
-                                let delay = backoff.next_delay();
-                                self.timer.sleep(delay).await;
-                                continue;
+                            RetryClass::RetryTransient => {
+                                if let Some(delay) = backoff_iter.next() {
+                                    attempt += 1;
+                                    self.timer.sleep(delay).await;
+                                    continue;
+                                } else {
+                                    return Err(err);
+                                }
                             }
                             _ => return Err(err),
                         }
@@ -457,6 +459,7 @@ mod tests {
                 jitter_frac_times_100: 0,
                 max_retries: 5,
                 max_elapsed_ms: 1000,
+                max_backoff_sleep_ms: 1000,
             };
             let store = LeaseStoreImpl::new(fs, "", policy, timer);
             let ttl = Duration::from_secs(60);
@@ -489,6 +492,7 @@ mod tests {
                 jitter_frac_times_100: 0,
                 max_retries: 2,
                 max_elapsed_ms: 1000,
+                max_backoff_sleep_ms: 1000,
             };
             let store = LeaseStoreImpl::new(fs, "", policy, timer);
             let ttl = Duration::from_secs(60);
