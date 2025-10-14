@@ -762,16 +762,15 @@ where
         if let Some(upto) = plan.delete_segments.iter().map(|r| r.end).max() {
             // Best-effort; stores may return Unimplemented
             // TODO: use batch deletes where available and bound per-iteration work.
-            let _ = self.store.segment.delete_upto(upto).await;
+            self.store.segment.delete_upto(upto).await?;
         }
 
         // Checkpoints
         for id in plan.delete_checkpoints.iter() {
-            let _ = self
-                .store
+            self.store
                 .checkpoint
                 .delete(&CheckpointId(id.clone()))
-                .await;
+                .await?;
         }
 
         // Reset plan to empty using CAS on the plan tag we observed
@@ -803,10 +802,28 @@ where
 
 #[cfg(test)]
 mod tests {
+    use core::time::Duration;
+    use std::sync::{
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+        Arc,
+    };
+
+    use fusio::impls::mem::fs::InMemoryFs;
+    use fusio_core::MaybeSendFuture;
     use futures_executor::block_on;
+    use futures_util::Stream;
 
     use super::*;
-    use crate::{context::ManifestContext, manifest::Manifest, testing::new_inmemory_stores};
+    use crate::{
+        backoff::BackoffPolicy,
+        context::ManifestContext,
+        gc::{FsGcPlanStore, GcPlan, SegmentRange},
+        head::PutCondition,
+        manifest::Manifest,
+        segment::SegmentMeta,
+        testing::new_inmemory_stores,
+        types::{Error, SegmentId},
+    };
 
     #[test]
     fn headless_compactor_invokes_manifest_logic() {
@@ -837,6 +854,260 @@ mod tests {
             // Running on empty stores does nothing harmful.
             comp.run_once().await.unwrap();
         })
+    }
+
+    #[test]
+    fn gc_delete_and_reset_segment_failure_preserves_plan() {
+        block_on(async move {
+            let opts = Arc::new(ManifestContext::default());
+            let (head, segment, checkpoint, lease) = new_inmemory_stores();
+            let failing_segment = FailingSegmentStore::new(segment);
+            let comp = Compactor::<String, String, _, _, _, _>::new(
+                head,
+                failing_segment.clone(),
+                checkpoint,
+                lease,
+                Arc::clone(&opts),
+            );
+
+            let plan_store = FsGcPlanStore::new(
+                InMemoryFs::new(),
+                "",
+                BackoffPolicy::default(),
+                BlockingExecutor::default(),
+            );
+            let plan = GcPlan {
+                against_head_tag: Some("etag".into()),
+                not_before: Duration::from_secs(0),
+                delete_segments: vec![SegmentRange::new(1, 4)],
+                delete_checkpoints: Vec::new(),
+                make_checkpoints: Vec::new(),
+            };
+            let initial_tag = plan_store
+                .put(&plan, PutCondition::IfNotExists)
+                .await
+                .expect("plan install");
+
+            let result = comp.gc_delete_and_reset(&plan_store).await;
+            assert!(
+                result.is_err(),
+                "delete failure should surface from GC phase"
+            );
+
+            let loaded = plan_store
+                .load()
+                .await
+                .expect("plan load should succeed")
+                .expect("plan should remain persisted");
+            assert_eq!(loaded.0, plan, "gc plan must remain unchanged on failure");
+            assert_eq!(loaded.1, initial_tag, "plan tag must stay the same");
+            assert_eq!(
+                failing_segment.attempts(),
+                1,
+                "segment delete should have been attempted exactly once"
+            );
+        })
+    }
+
+    #[test]
+    fn gc_delete_and_reset_checkpoint_failure_preserves_plan() {
+        block_on(async move {
+            let opts = Arc::new(ManifestContext::default());
+            let (head, segment, checkpoint, lease) = new_inmemory_stores();
+            let failing_checkpoint = FailingCheckpointStore::new(checkpoint);
+            let comp = Compactor::<String, String, _, _, _, _>::new(
+                head,
+                segment,
+                failing_checkpoint.clone(),
+                lease,
+                Arc::clone(&opts),
+            );
+
+            let plan_store = FsGcPlanStore::new(
+                InMemoryFs::new(),
+                "",
+                BackoffPolicy::default(),
+                BlockingExecutor::default(),
+            );
+            let checkpoint_id = CheckpointId::new(42);
+            let plan = GcPlan {
+                against_head_tag: Some("etag".into()),
+                not_before: Duration::from_secs(0),
+                delete_segments: Vec::new(),
+                delete_checkpoints: vec![checkpoint_id.as_str().to_string()],
+                make_checkpoints: Vec::new(),
+            };
+            let initial_tag = plan_store
+                .put(&plan, PutCondition::IfNotExists)
+                .await
+                .expect("plan install");
+
+            let result = comp.gc_delete_and_reset(&plan_store).await;
+            assert!(
+                result.is_err(),
+                "checkpoint delete failure should surface from GC phase"
+            );
+
+            let loaded = plan_store
+                .load()
+                .await
+                .expect("plan load should succeed")
+                .expect("plan should remain persisted");
+            assert_eq!(loaded.0, plan, "gc plan must remain unchanged on failure");
+            assert_eq!(loaded.1, initial_tag, "plan tag must stay the same");
+            assert_eq!(
+                failing_checkpoint.attempts(),
+                1,
+                "checkpoint delete should have been attempted exactly once"
+            );
+        })
+    }
+
+    #[derive(Clone)]
+    struct FailingSegmentStore<S> {
+        inner: S,
+        fail_next: Arc<AtomicBool>,
+        attempts: Arc<AtomicUsize>,
+    }
+
+    impl<S> FailingSegmentStore<S>
+    where
+        S: SegmentIo + Clone,
+    {
+        fn new(inner: S) -> Self {
+            Self {
+                inner,
+                fail_next: Arc::new(AtomicBool::new(true)),
+                attempts: Arc::new(AtomicUsize::new(0)),
+            }
+        }
+
+        fn attempts(&self) -> usize {
+            self.attempts.load(Ordering::SeqCst)
+        }
+    }
+
+    impl<S> SegmentIo for FailingSegmentStore<S>
+    where
+        S: SegmentIo + Clone,
+    {
+        fn put_next<'s>(
+            &'s self,
+            seq: u64,
+            txn_id: u64,
+            payload: &'s [u8],
+            content_type: &str,
+        ) -> impl MaybeSendFuture<Output = Result<SegmentId>> + 's {
+            self.inner.put_next(seq, txn_id, payload, content_type)
+        }
+
+        fn get(&self, id: &SegmentId) -> impl MaybeSendFuture<Output = Result<Vec<u8>>> + '_ {
+            self.inner.get(id)
+        }
+
+        fn load_meta(
+            &self,
+            id: &SegmentId,
+        ) -> impl MaybeSendFuture<Output = Result<SegmentMeta>> + '_ {
+            self.inner.load_meta(id)
+        }
+
+        fn list_from(
+            &self,
+            from_seq: u64,
+            limit: usize,
+        ) -> impl MaybeSendFuture<Output = Result<Vec<SegmentId>>> + '_ {
+            self.inner.list_from(from_seq, limit)
+        }
+
+        fn delete_upto(&self, upto_seq: u64) -> impl MaybeSendFuture<Output = Result<()>> + '_ {
+            let inner = self.inner.clone();
+            let fail_next = self.fail_next.clone();
+            let attempts = self.attempts.clone();
+            async move {
+                attempts.fetch_add(1, Ordering::SeqCst);
+                if fail_next.swap(false, Ordering::SeqCst) {
+                    Err(Error::Unimplemented("forced segment delete failure"))
+                } else {
+                    inner.delete_upto(upto_seq).await
+                }
+            }
+        }
+    }
+
+    #[derive(Clone)]
+    struct FailingCheckpointStore<C> {
+        inner: C,
+        fail_next: Arc<AtomicBool>,
+        attempts: Arc<AtomicUsize>,
+    }
+
+    impl<C> FailingCheckpointStore<C>
+    where
+        C: CheckpointStore,
+    {
+        fn new(inner: C) -> Self {
+            Self {
+                inner,
+                fail_next: Arc::new(AtomicBool::new(true)),
+                attempts: Arc::new(AtomicUsize::new(0)),
+            }
+        }
+
+        fn attempts(&self) -> usize {
+            self.attempts.load(Ordering::SeqCst)
+        }
+    }
+
+    impl<C> CheckpointStore for FailingCheckpointStore<C>
+    where
+        C: CheckpointStore,
+    {
+        fn put_checkpoint<'s>(
+            &'s self,
+            meta: &CheckpointMeta,
+            payload: &'s [u8],
+            content_type: &str,
+        ) -> impl MaybeSendFuture<Output = Result<CheckpointId>> + 's {
+            self.inner.put_checkpoint(meta, payload, content_type)
+        }
+
+        fn get_checkpoint(
+            &self,
+            id: &CheckpointId,
+        ) -> impl MaybeSendFuture<Output = Result<(CheckpointMeta, Vec<u8>)>> + '_ {
+            self.inner.get_checkpoint(id)
+        }
+
+        fn get_checkpoint_meta(
+            &self,
+            id: &CheckpointId,
+        ) -> impl MaybeSendFuture<Output = Result<CheckpointMeta>> + '_ {
+            self.inner.get_checkpoint_meta(id)
+        }
+
+        fn list(
+            &self,
+        ) -> impl MaybeSendFuture<
+            Output = Result<impl Stream<Item = Result<(CheckpointId, CheckpointMeta)>> + '_>,
+        > + '_ {
+            self.inner.list()
+        }
+
+        fn delete(&self, id: &CheckpointId) -> impl MaybeSendFuture<Output = Result<()>> + '_ {
+            let inner = self.inner.clone();
+            let fail_next = self.fail_next.clone();
+            let attempts = self.attempts.clone();
+            let to_delete = id.clone();
+            async move {
+                attempts.fetch_add(1, Ordering::SeqCst);
+                if fail_next.swap(false, Ordering::SeqCst) {
+                    Err(Error::Unimplemented("forced checkpoint delete failure"))
+                } else {
+                    inner.delete(&to_delete).await
+                }
+            }
+        }
     }
 }
 
