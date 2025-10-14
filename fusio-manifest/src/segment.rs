@@ -1,4 +1,4 @@
-use std::{collections::HashMap, pin::Pin};
+use std::{collections::HashMap, io::ErrorKind, pin::Pin};
 
 use fusio::{
     fs::{CasCondition, Fs, FsCas, OpenOptions},
@@ -220,7 +220,11 @@ where
                 if let Some(filename) = meta.path.filename() {
                     if let Some(seq) = SegmentStoreImpl::<FS>::parse_seq(filename) {
                         if seq <= upto_seq {
-                            let _ = self.fs.remove(&meta.path).await;
+                            match self.fs.remove(&meta.path).await {
+                                Ok(()) => {}
+                                Err(FsError::Io(err)) if err.kind() == ErrorKind::NotFound => {}
+                                Err(err) => return Err(map_fs_error(err)),
+                            }
                         }
                     }
                 }
