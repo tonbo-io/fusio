@@ -35,8 +35,9 @@ where
         opts: Arc<ManifestContext<R, E>>,
     ) -> Self {
         let cache = opts.cache.clone();
-        let segment = CachedSegmentStore::new(segment, cache.clone());
-        let checkpoint = CachedCheckpointStore::new(checkpoint, cache);
+        let namespace = opts.cache_namespace.clone();
+        let segment = CachedSegmentStore::new(segment, cache.clone(), namespace.clone());
+        let checkpoint = CachedCheckpointStore::new(checkpoint, cache, namespace);
         Self {
             head,
             segment,

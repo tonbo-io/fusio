@@ -25,6 +25,8 @@ where
     executor: E,
     /// Optional blob cache shared across segment/checkpoint readers.
     pub cache: Option<Arc<dyn BlobCache>>,
+    /// Optional namespace used to scope shared blob caches.
+    pub cache_namespace: Option<Arc<str>>,
 }
 
 impl<E> ManifestContext<DefaultRetention, E>
@@ -38,6 +40,7 @@ where
             backoff: BackoffPolicy::default(),
             executor,
             cache: None,
+            cache_namespace: None,
         }
     }
 }
@@ -99,6 +102,7 @@ where
             backoff: self.backoff,
             executor: self.executor,
             cache: self.cache,
+            cache_namespace: self.cache_namespace,
         }
     }
 
@@ -116,6 +120,28 @@ where
     /// Mutably replace or clear the blob cache in-place.
     pub fn set_cache(&mut self, cache: Option<Arc<dyn BlobCache>>) {
         self.cache = cache;
+    }
+
+    /// Replace the cache namespace, consuming `self`.
+    pub fn with_cache_namespace<S>(mut self, namespace: Option<S>) -> Self
+    where
+        S: Into<String>,
+    {
+        self.cache_namespace = namespace.map(|ns| Arc::<str>::from(ns.into()));
+        self
+    }
+
+    /// Mutably replace or clear the cache namespace in-place.
+    pub fn set_cache_namespace<S>(&mut self, namespace: Option<S>)
+    where
+        S: Into<String>,
+    {
+        self.cache_namespace = namespace.map(|ns| Arc::<str>::from(ns.into()));
+    }
+
+    /// Inspect the configured cache namespace.
+    pub fn cache_namespace(&self) -> Option<&str> {
+        self.cache_namespace.as_deref()
     }
 }
 

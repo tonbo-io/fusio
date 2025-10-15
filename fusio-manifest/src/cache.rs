@@ -189,20 +189,35 @@ pub struct MemoryBlobCache {
 pub struct CachedSegmentStore<S> {
     inner: Arc<S>,
     cache: Option<Arc<dyn BlobCache>>,
+    namespace: Arc<str>,
     etags: Arc<Mutex<HashMap<String, Option<String>>>>,
 }
 
 impl<S> CachedSegmentStore<S> {
-    pub fn new(inner: S, cache: Option<Arc<dyn BlobCache>>) -> Self {
+    pub fn new(inner: S, cache: Option<Arc<dyn BlobCache>>, namespace: Option<Arc<str>>) -> Self {
+        let inner = Arc::new(inner);
+        let namespace = namespace.unwrap_or_else(|| {
+            let ptr = Arc::as_ptr(&inner);
+            Arc::<str>::from(format!("segments:{ptr:p}"))
+        });
         Self {
-            inner: Arc::new(inner),
+            inner,
             cache,
+            namespace,
             etags: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
     fn identifier(id: &SegmentId) -> String {
         format!("seg-{:020}", id.seq)
+    }
+
+    fn cache_key(namespace: &Arc<str>, identifier: &str, etag: Option<&str>) -> CacheKey {
+        let mut scoped = String::with_capacity(namespace.len() + 1 + identifier.len());
+        scoped.push_str(namespace);
+        scoped.push(':');
+        scoped.push_str(identifier);
+        CacheKey::new(CacheKind::Segment, scoped, etag.map(|e| e.to_owned()))
     }
 }
 
@@ -235,6 +250,7 @@ where
         let cache_store = self.cache.clone();
         let inner = self.inner.clone();
         let etags = self.etags.clone();
+        let namespace = self.namespace.clone();
         let seg_id = *id;
         let identifier = CachedSegmentStore::<S>::identifier(id);
         let known_etag = {
@@ -246,14 +262,18 @@ where
         };
         async move {
             if let Some(cache) = cache_lookup.as_ref() {
-                let primary =
-                    CacheKey::new(CacheKind::Segment, identifier.clone(), known_etag.clone());
+                let primary = CachedSegmentStore::<S>::cache_key(
+                    &namespace,
+                    &identifier,
+                    known_etag.as_deref(),
+                );
                 if let Some(CacheValue::Segment(bytes)) = cache.get(&primary) {
                     return Ok((bytes.as_slice().to_vec(), known_etag));
                 }
 
                 if known_etag.is_some() {
-                    let fallback = CacheKey::new(CacheKind::Segment, identifier.clone(), None);
+                    let fallback =
+                        CachedSegmentStore::<S>::cache_key(&namespace, &identifier, None);
                     if let Some(CacheValue::Segment(bytes)) = cache.get(&fallback) {
                         return Ok((bytes.as_slice().to_vec(), None));
                     }
@@ -265,23 +285,23 @@ where
             if let Some(cache) = cache_store {
                 match &etag {
                     Some(tag) => {
-                        cache.invalidate(&CacheKey::new(
-                            CacheKind::Segment,
-                            identifier.clone(),
+                        cache.invalidate(&CachedSegmentStore::<S>::cache_key(
+                            &namespace,
+                            &identifier,
                             None,
                         ));
                         cache.insert(
-                            CacheKey::new(
-                                CacheKind::Segment,
-                                identifier.clone(),
-                                Some(tag.clone()),
+                            CachedSegmentStore::<S>::cache_key(
+                                &namespace,
+                                &identifier,
+                                Some(tag.as_str()),
                             ),
                             CacheValue::Segment(CachedPayload::new(bytes.clone())),
                         );
                     }
                     None => {
                         cache.insert(
-                            CacheKey::new(CacheKind::Segment, identifier.clone(), None),
+                            CachedSegmentStore::<S>::cache_key(&namespace, &identifier, None),
                             CacheValue::Segment(CachedPayload::new(bytes.clone())),
                         );
                     }
@@ -315,6 +335,7 @@ where
         let cache = self.cache.clone();
         let inner = self.inner.clone();
         let etags = self.etags.clone();
+        let namespace = self.namespace.clone();
         async move {
             inner.delete_upto(upto_seq).await?;
 
@@ -324,19 +345,19 @@ where
                     let identifier = CachedSegmentStore::<S>::identifier(&id);
 
                     if let Some(cache) = cache.as_ref() {
-                        cache.invalidate(&CacheKey::new(
-                            CacheKind::Segment,
-                            identifier.clone(),
+                        cache.invalidate(&CachedSegmentStore::<S>::cache_key(
+                            &namespace,
+                            &identifier,
                             None,
                         ));
                     }
 
                     if let Some(tag) = map.remove(&identifier) {
                         if let (Some(cache), Some(tag)) = (cache.as_ref(), tag) {
-                            cache.invalidate(&CacheKey::new(
-                                CacheKind::Segment,
-                                identifier.clone(),
-                                Some(tag),
+                            cache.invalidate(&CachedSegmentStore::<S>::cache_key(
+                                &namespace,
+                                &identifier,
+                                Some(tag.as_str()),
                             ));
                         }
                     }
@@ -352,26 +373,42 @@ where
 pub struct CachedCheckpointStore<S> {
     inner: Arc<S>,
     cache: Option<Arc<dyn BlobCache>>,
+    namespace: Arc<str>,
     etags: Arc<Mutex<HashMap<String, Option<String>>>>,
 }
 
 impl<S> CachedCheckpointStore<S> {
-    pub fn new(inner: S, cache: Option<Arc<dyn BlobCache>>) -> Self {
+    pub fn new(inner: S, cache: Option<Arc<dyn BlobCache>>, namespace: Option<Arc<str>>) -> Self {
+        let inner = Arc::new(inner);
+        let namespace = namespace.unwrap_or_else(|| {
+            let ptr = Arc::as_ptr(&inner);
+            Arc::<str>::from(format!("checkpoints:{ptr:p}"))
+        });
         Self {
-            inner: Arc::new(inner),
+            inner,
             cache,
+            namespace,
             etags: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
-    fn cache_key(id: &CheckpointId) -> CacheKey {
+    fn cache_key(namespace: &Arc<str>, id: &CheckpointId, etag: Option<&str>) -> CacheKey {
+        let mut scoped = String::with_capacity(namespace.len() + 1 + id.as_str().len());
+        scoped.push_str(namespace);
+        scoped.push(':');
+        scoped.push_str(id.as_str());
         // Checkpoints are logically immutable per LSN. Cache invalidation on delete
         // ensures coherency. ETags would add overhead (extra HEAD requests) for negligible benefit.
-        CacheKey::new(CacheKind::Checkpoint, id.as_str(), None)
+        CacheKey::new(CacheKind::Checkpoint, scoped, etag.map(|e| e.to_owned()))
     }
 
     fn identifier(id: &CheckpointId) -> String {
         id.as_str().to_owned()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn cache_key_for(&self, id: &CheckpointId, etag: Option<&str>) -> CacheKey {
+        Self::cache_key(&self.namespace, id, etag)
     }
 }
 
@@ -391,11 +428,12 @@ where
         let inner = self.inner.clone();
         let content_type_owned = content_type.to_owned();
         let etags = self.etags.clone();
+        let namespace = self.namespace.clone();
         async move {
             let id = inner
                 .put_checkpoint(&meta_clone, &payload_owned, &content_type_owned)
                 .await?;
-            let key = CachedCheckpointStore::<S>::cache_key(&id);
+            let key = CachedCheckpointStore::<S>::cache_key(&namespace, &id, None);
             if let Some(cache) = cache {
                 cache.insert(
                     key,
@@ -434,6 +472,7 @@ where
         let etags = self.etags.clone();
         let ckpt_id = id.clone();
         let identifier = CachedCheckpointStore::<S>::identifier(id);
+        let namespace = self.namespace.clone();
         let known_etag = {
             self.etags
                 .lock()
@@ -443,10 +482,10 @@ where
         };
         async move {
             if let Some(cache) = cache_lookup.as_ref() {
-                let primary = CacheKey::new(
-                    CacheKind::Checkpoint,
-                    identifier.clone(),
-                    known_etag.clone(),
+                let primary = CachedCheckpointStore::<S>::cache_key(
+                    &namespace,
+                    &ckpt_id,
+                    known_etag.as_deref(),
                 );
                 if let Some(CacheValue::Checkpoint(entry)) = cache.get(&primary) {
                     return Ok((
@@ -457,7 +496,8 @@ where
                 }
 
                 if known_etag.is_some() {
-                    let fallback = CacheKey::new(CacheKind::Checkpoint, identifier.clone(), None);
+                    let fallback =
+                        CachedCheckpointStore::<S>::cache_key(&namespace, &ckpt_id, None);
                     if let Some(CacheValue::Checkpoint(entry)) = cache.get(&fallback) {
                         return Ok((
                             (*entry.meta).clone(),
@@ -473,16 +513,14 @@ where
             if let Some(cache) = cache_store {
                 match &etag {
                     Some(tag) => {
-                        cache.invalidate(&CacheKey::new(
-                            CacheKind::Checkpoint,
-                            identifier.clone(),
-                            None,
+                        cache.invalidate(&CachedCheckpointStore::<S>::cache_key(
+                            &namespace, &ckpt_id, None,
                         ));
                         cache.insert(
-                            CacheKey::new(
-                                CacheKind::Checkpoint,
-                                identifier.clone(),
-                                Some(tag.clone()),
+                            CachedCheckpointStore::<S>::cache_key(
+                                &namespace,
+                                &ckpt_id,
+                                Some(tag.as_str()),
                             ),
                             CacheValue::Checkpoint(CheckpointCacheEntry::new(
                                 meta.clone(),
@@ -493,7 +531,7 @@ where
                     }
                     None => {
                         cache.insert(
-                            CacheKey::new(CacheKind::Checkpoint, identifier.clone(), None),
+                            CachedCheckpointStore::<S>::cache_key(&namespace, &ckpt_id, None),
                             CacheValue::Checkpoint(CheckpointCacheEntry::new(
                                 meta.clone(),
                                 payload.clone(),
@@ -519,6 +557,7 @@ where
         let cache = self.cache.clone();
         let inner = self.inner.clone();
         let identifier = CachedCheckpointStore::<S>::identifier(id);
+        let namespace = self.namespace.clone();
         let known_etag = {
             self.etags
                 .lock()
@@ -528,17 +567,14 @@ where
         };
         async move {
             if let Some(cache) = cache.as_ref() {
-                let primary = CacheKey::new(
-                    CacheKind::Checkpoint,
-                    identifier.clone(),
-                    known_etag.clone(),
-                );
+                let primary =
+                    CachedCheckpointStore::<S>::cache_key(&namespace, id, known_etag.as_deref());
                 if let Some(CacheValue::Checkpoint(entry)) = cache.get(&primary) {
                     return Ok((*entry.meta).clone());
                 }
 
                 if known_etag.is_some() {
-                    let fallback = CacheKey::new(CacheKind::Checkpoint, identifier.clone(), None);
+                    let fallback = CachedCheckpointStore::<S>::cache_key(&namespace, id, None);
                     if let Some(CacheValue::Checkpoint(entry)) = cache.get(&fallback) {
                         return Ok((*entry.meta).clone());
                     }
@@ -564,25 +600,24 @@ where
         let inner = self.inner.clone();
         let ckpt_id = id.clone();
         let etags = self.etags.clone();
+        let namespace = self.namespace.clone();
         async move {
             inner.delete(&ckpt_id).await?;
             let identifier = CachedCheckpointStore::<S>::identifier(&ckpt_id);
 
             if let Some(cache) = cache.as_ref() {
-                cache.invalidate(&CacheKey::new(
-                    CacheKind::Checkpoint,
-                    identifier.clone(),
-                    None,
+                cache.invalidate(&CachedCheckpointStore::<S>::cache_key(
+                    &namespace, &ckpt_id, None,
                 ));
             }
 
             if let Ok(mut map) = etags.lock() {
                 if let Some(tag) = map.remove(&identifier) {
                     if let (Some(cache), Some(tag)) = (cache.as_ref(), tag) {
-                        cache.invalidate(&CacheKey::new(
-                            CacheKind::Checkpoint,
-                            identifier,
-                            Some(tag),
+                        cache.invalidate(&CachedCheckpointStore::<S>::cache_key(
+                            &namespace,
+                            &ckpt_id,
+                            Some(tag.as_str()),
                         ));
                     }
                 }
@@ -668,7 +703,7 @@ mod tests {
     fn segment_cache_hits_after_warm() {
         let cache = Arc::new(MemoryBlobCache::new(1024));
         let (_head, segment, _checkpoint, _leases) = new_inmemory_stores();
-        let cached = CachedSegmentStore::new(segment.clone(), Some(cache.clone()));
+        let cached = CachedSegmentStore::new(segment.clone(), Some(cache.clone()), None);
 
         block_on(async {
             let id = segment
@@ -690,7 +725,7 @@ mod tests {
     fn checkpoint_cache_serves_from_memory() {
         let cache = Arc::new(MemoryBlobCache::new(1024));
         let (_head, _segment, checkpoint, _leases) = new_inmemory_stores();
-        let cached = CachedCheckpointStore::new(checkpoint.clone(), Some(cache.clone()));
+        let cached = CachedCheckpointStore::new(checkpoint.clone(), Some(cache.clone()), None);
 
         block_on(async {
             let payload = br#"{"entries":[]}"#;
@@ -719,7 +754,7 @@ mod tests {
     fn checkpoint_cache_invalidate_by_etag() {
         let cache = Arc::new(MemoryBlobCache::new(1024));
         let (_head, _segment, checkpoint, _leases) = new_inmemory_stores();
-        let cached = CachedCheckpointStore::new(checkpoint.clone(), Some(cache.clone()));
+        let cached = CachedCheckpointStore::new(checkpoint.clone(), Some(cache.clone()), None);
 
         block_on(async {
             let payload = br#"{"entries":[]}"#;
@@ -741,17 +776,14 @@ mod tests {
             assert_eq!(bytes, payload);
 
             let identifier = id.as_str().to_owned();
-            let key_none = CacheKey::new(CacheKind::Checkpoint, identifier.clone(), None);
+            let key_none = cached.cache_key_for(&id, None);
             assert!(cache.get(&key_none).is_some());
 
             // Simulate an entry cached under a strong revision tag.
             let fake_tag = "etag-simulated".to_string();
+            let key_etag = cached.cache_key_for(&id, Some(fake_tag.as_str()));
             cache.insert(
-                CacheKey::new(
-                    CacheKind::Checkpoint,
-                    identifier.clone(),
-                    Some(fake_tag.clone()),
-                ),
+                key_etag.clone(),
                 CacheValue::Checkpoint(CheckpointCacheEntry::new(
                     meta.clone(),
                     payload.to_vec(),
@@ -762,17 +794,50 @@ mod tests {
                 map.insert(identifier.clone(), Some(fake_tag.clone()));
             }
 
-            let key_etag = CacheKey::new(
-                CacheKind::Checkpoint,
-                identifier.clone(),
-                Some(fake_tag.clone()),
-            );
             assert!(cache.get(&key_etag).is_some());
 
             cached.delete(&id).await.unwrap();
 
             assert!(cache.get(&key_etag).is_none());
             assert!(cache.get(&key_none).is_none());
+        });
+    }
+
+    #[test]
+    fn shared_cache_scoped_by_namespace() {
+        use crate::segment::SegmentStoreImpl;
+        use fusio::impls::mem::fs::InMemoryFs;
+
+        let cache = Arc::new(MemoryBlobCache::new(1024));
+        let fs = InMemoryFs::new();
+        let seg_a = SegmentStoreImpl::new(fs.clone(), "ns-a");
+        let seg_b = SegmentStoreImpl::new(fs, "ns-b");
+        let ns_a: Arc<str> = Arc::from("s3://bucket/ns-a");
+        let ns_b: Arc<str> = Arc::from("s3://bucket/ns-b");
+        let cached_a = CachedSegmentStore::new(seg_a.clone(), Some(cache.clone()), Some(ns_a));
+        let cached_b = CachedSegmentStore::new(seg_b.clone(), Some(cache.clone()), Some(ns_b));
+
+        block_on(async {
+            let id_a = cached_a
+                .put_next(1, 10, b"payload-a", "application/json")
+                .await
+                .unwrap();
+            let id_b = cached_b
+                .put_next(1, 11, b"payload-b", "application/json")
+                .await
+                .unwrap();
+
+            // Warm cache for namespace A.
+            let got_a = cached_a.get(&id_a).await.unwrap();
+            assert_eq!(got_a, b"payload-a");
+
+            // Fetch namespace B with the same logical seq; should not see payload from A.
+            let got_b_first = cached_b.get(&id_b).await.unwrap();
+            assert_eq!(got_b_first, b"payload-b");
+
+            // Second read should hit the cache and return the same payload.
+            let got_b_second = cached_b.get(&id_b).await.unwrap();
+            assert_eq!(got_b_second, b"payload-b");
         });
     }
 }
