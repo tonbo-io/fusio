@@ -3,7 +3,7 @@ use std::io::ErrorKind;
 use async_stream::try_stream;
 use bytes::Bytes;
 use fusio::{
-    fs::{Fs, OpenOptions},
+    fs::{Fs, FsCas, OpenOptions},
     path::Path,
     Error as FsError, FileCommit, Read, Write,
 };
@@ -67,15 +67,26 @@ pub trait CheckpointStore: MaybeSend + MaybeSync + Clone {
         content_type: &str,
     ) -> impl MaybeSendFuture<Output = Result<CheckpointId>> + 's;
 
-    fn get_checkpoint(
-        &self,
-        id: &CheckpointId,
-    ) -> impl MaybeSendFuture<Output = Result<(CheckpointMeta, Vec<u8>)>> + '_;
+    fn get_checkpoint<'a>(
+        &'a self,
+        id: &'a CheckpointId,
+    ) -> impl MaybeSendFuture<Output = Result<(CheckpointMeta, Vec<u8>)>> + 'a;
 
-    fn get_checkpoint_meta(
-        &self,
-        id: &CheckpointId,
-    ) -> impl MaybeSendFuture<Output = Result<CheckpointMeta>> + '_;
+    fn get_checkpoint_with_etag<'a>(
+        &'a self,
+        id: &'a CheckpointId,
+    ) -> impl MaybeSendFuture<Output = Result<(CheckpointMeta, Vec<u8>, Option<String>)>> + 'a {
+        let fut = self.get_checkpoint(id);
+        async move {
+            let (meta, payload) = fut.await?;
+            Ok((meta, payload, None))
+        }
+    }
+
+    fn get_checkpoint_meta<'a>(
+        &'a self,
+        id: &'a CheckpointId,
+    ) -> impl MaybeSendFuture<Output = Result<CheckpointMeta>> + 'a;
 
     /// List all checkpoints (meta only).
     fn list(
@@ -124,7 +135,7 @@ impl<FS> CheckpointStoreImpl<FS> {
 
 impl<FS> CheckpointStore for CheckpointStoreImpl<FS>
 where
-    FS: Fs + Clone + Send + Sync + 'static,
+    FS: Fs + FsCas + Clone + Send + Sync + 'static,
     <FS as Fs>::File: FileCommit,
 {
     fn put_checkpoint<'s>(
@@ -176,27 +187,41 @@ where
         }
     }
 
-    fn get_checkpoint(
-        &self,
-        id: &CheckpointId,
-    ) -> impl MaybeSendFuture<Output = Result<(CheckpointMeta, Vec<u8>)>> + '_ {
+    fn get_checkpoint<'a>(
+        &'a self,
+        id: &'a CheckpointId,
+    ) -> impl MaybeSendFuture<Output = Result<(CheckpointMeta, Vec<u8>)>> + 'a {
+        async move {
+            let (meta, payload, _etag) =
+                <Self as CheckpointStore>::get_checkpoint_with_etag(self, id).await?;
+            Ok((meta, payload))
+        }
+    }
+
+    fn get_checkpoint_with_etag<'a>(
+        &'a self,
+        id: &'a CheckpointId,
+    ) -> impl MaybeSendFuture<Output = Result<(CheckpointMeta, Vec<u8>, Option<String>)>> + 'a {
         let (meta_key, data_key_json) = self.keys_for(id, ".json");
         let (_mk2, data_key_bin) = self.keys_for(id, ".bin");
         async move {
             let meta = CheckpointStoreImpl::load_meta(&self.fs, meta_key).await?;
-            let fs = &self.fs;
-            let read_payload = |k: String| async move {
-                let mut f = fs.open(&Path::from(k)).await?;
-                let (res, bytes) = f.read_to_end_at(Vec::new(), 0).await;
-                res?;
-                Ok::<_, Error>(bytes)
+            let try_key = |key: String, fs: FS| async move {
+                let path = Path::from(key.clone());
+                match fs.load_with_tag(&path).await.map_err(Error::from)? {
+                    Some((bytes, etag)) => Ok((bytes, Some(etag))),
+                    None => Err(Error::Corrupt(format!(
+                        "checkpoint payload missing object for key {key}"
+                    ))),
+                }
             };
 
-            let payload = match read_payload(data_key_json).await {
-                Ok(v) => v,
-                Err(_) => read_payload(data_key_bin).await?,
+            let (payload, etag) = match try_key(data_key_json, self.fs.clone()).await {
+                Ok(res) => res,
+                Err(Error::Corrupt(_)) => try_key(data_key_bin, self.fs.clone()).await?,
+                Err(e) => return Err(e),
             };
-            Ok((meta, payload))
+            Ok((meta, payload, etag))
         }
     }
 

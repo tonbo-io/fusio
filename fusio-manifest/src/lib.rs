@@ -15,9 +15,11 @@ pub use backoff::BackoffPolicy;
 pub mod context;
 pub use context::ManifestContext;
 pub use fusio::executor::BlockingExecutor;
+pub(crate) mod cache;
 pub mod retention;
 pub(crate) mod segment;
 pub(crate) mod store;
+pub use cache::{CacheLayer, MemoryBlobCache};
 pub mod types;
 
 // Ergonomic S3 entrypoint (single config wires all stores).

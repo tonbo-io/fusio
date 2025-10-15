@@ -24,6 +24,7 @@ tokio = { version = "1", features = ["sync"] }
 async-stream = { version = "0.3" }
 backon = "1.4"
 thiserror = "2.0.17"
+moka = { version = "0.10", features = ["sync"] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }

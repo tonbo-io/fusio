@@ -11,6 +11,7 @@ use fusio::{
 
 use crate::{
     backoff::BackoffPolicy,
+    cache::{BlobCache, MemoryBlobCache},
     checkpoint::CheckpointStoreImpl,
     compactor::Compactor,
     context::ManifestContext,
@@ -29,6 +30,9 @@ use crate::{
 /// Default file name for the manifest head object.
 pub const DEFAULT_HEAD_FILE: &str = "HEAD.json";
 
+/// Default maximum cache size for S3 manifests (in bytes).
+const DEFAULT_CACHE_MAX_BYTES: u64 = 256 * 1024 * 1024;
+
 /// Minimal S3 configuration for a manifest collection under a single prefix.
 pub struct Config<R = DefaultRetention, E = BlockingExecutor>
 where
@@ -42,10 +46,13 @@ where
 
 impl Config<DefaultRetention, BlockingExecutor> {
     pub fn new(s3: AmazonS3, prefix: impl Into<String>) -> Self {
+        let mut opts = ManifestContext::default();
+        let cache: Arc<dyn BlobCache> = Arc::new(MemoryBlobCache::new(DEFAULT_CACHE_MAX_BYTES));
+        opts.cache = Some(cache);
         Self {
             s3,
             prefix: prefix.into().trim_end_matches('/').to_string(),
-            opts: Arc::new(ManifestContext::default()),
+            opts: Arc::new(opts),
         }
     }
 }
@@ -100,6 +107,9 @@ impl Builder<DefaultRetention, BlockingExecutor> {
     /// Create a new builder for a given S3 `bucket` and manifest `prefix`.
     /// `prefix` is trimmed of any trailing slash.
     pub fn new(bucket: impl Into<String>) -> Self {
+        let mut opts = ManifestContext::default();
+        let cache: Arc<dyn BlobCache> = Arc::new(MemoryBlobCache::new(DEFAULT_CACHE_MAX_BYTES));
+        opts.cache = Some(cache);
         Self {
             bucket: bucket.into(),
             prefix: None,
@@ -108,7 +118,7 @@ impl Builder<DefaultRetention, BlockingExecutor> {
             credential: None,
             sign_payload: false,
             checksum: false,
-            opts: Arc::new(ManifestContext::default()),
+            opts: Arc::new(opts),
         }
     }
 }

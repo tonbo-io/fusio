@@ -1,10 +1,11 @@
-use std::future::Future;
+use std::{future::Future, sync::Arc};
 
 use fusio::executor::{BlockingExecutor, Executor, Timer};
 use fusio_core::MaybeSend;
 
 use crate::{
     backoff::BackoffPolicy,
+    cache::BlobCache,
     retention::{DefaultRetention, RetentionPolicy},
     types::Error,
 };
@@ -22,6 +23,8 @@ where
     /// Backoff policy for CAS/storage contention.
     pub backoff: BackoffPolicy,
     executor: E,
+    /// Optional blob cache shared across segment/checkpoint readers.
+    pub cache: Option<Arc<dyn BlobCache>>,
 }
 
 impl<E> ManifestContext<DefaultRetention, E>
@@ -34,6 +37,7 @@ where
             retention: DefaultRetention::default(),
             backoff: BackoffPolicy::default(),
             executor,
+            cache: None,
         }
     }
 }
@@ -94,12 +98,24 @@ where
             retention,
             backoff: self.backoff,
             executor: self.executor,
+            cache: self.cache,
         }
     }
 
     /// Mutably replace the retention policy in-place when keeping the same type.
     pub fn set_retention(&mut self, retention: R) {
         self.retention = retention;
+    }
+
+    /// Replace or clear the blob cache, consuming `self`.
+    pub fn with_cache(mut self, cache: Option<Arc<dyn BlobCache>>) -> Self {
+        self.cache = cache;
+        self
+    }
+
+    /// Mutably replace or clear the blob cache in-place.
+    pub fn set_cache(&mut self, cache: Option<Arc<dyn BlobCache>>) {
+        self.cache = cache;
     }
 }
 
