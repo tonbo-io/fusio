@@ -8,9 +8,8 @@ use std::{
     },
 };
 
-use moka::sync::Cache;
-
 use fusio_core::MaybeSendFuture;
+use moka::sync::Cache;
 
 use crate::{
     checkpoint::{CheckpointId, CheckpointMeta, CheckpointStore},
@@ -84,9 +83,9 @@ impl Hash for CacheKey {
 
 /// Cache entry payload shared among readers.
 #[derive(Clone, Default)]
-pub struct ArcBytes(pub Arc<[u8]>);
+pub struct CachedPayload(pub Arc<[u8]>);
 
-impl ArcBytes {
+impl CachedPayload {
     pub fn new(bytes: Vec<u8>) -> Self {
         Self(bytes.into_boxed_slice().into())
     }
@@ -100,7 +99,7 @@ impl ArcBytes {
     }
 }
 
-impl From<Vec<u8>> for ArcBytes {
+impl From<Vec<u8>> for CachedPayload {
     fn from(value: Vec<u8>) -> Self {
         Self::new(value)
     }
@@ -109,7 +108,7 @@ impl From<Vec<u8>> for ArcBytes {
 #[derive(Clone)]
 pub struct CheckpointCacheEntry {
     pub meta: Arc<CheckpointMeta>,
-    pub payload: ArcBytes,
+    pub payload: CachedPayload,
     pub etag: Option<String>,
 }
 
@@ -117,7 +116,7 @@ impl CheckpointCacheEntry {
     pub fn new(meta: CheckpointMeta, payload: Vec<u8>, etag: Option<String>) -> Self {
         Self {
             meta: Arc::new(meta),
-            payload: ArcBytes::new(payload),
+            payload: CachedPayload::new(payload),
             etag,
         }
     }
@@ -126,7 +125,7 @@ impl CheckpointCacheEntry {
 /// Unified cache value enum so we can share the underlying LRU for segments and checkpoints.
 #[derive(Clone)]
 pub enum CacheValue {
-    Segment(ArcBytes),
+    Segment(CachedPayload),
     Checkpoint(CheckpointCacheEntry),
 }
 
@@ -283,13 +282,13 @@ where
                                 identifier.clone(),
                                 Some(tag.clone()),
                             ),
-                            CacheValue::Segment(ArcBytes::new(bytes.clone())),
+                            CacheValue::Segment(CachedPayload::new(bytes.clone())),
                         );
                     }
                     None => {
                         cache.insert(
                             CacheKey::new(CacheKind::Segment, identifier.clone(), None),
-                            CacheValue::Segment(ArcBytes::new(bytes.clone())),
+                            CacheValue::Segment(CachedPayload::new(bytes.clone())),
                         );
                     }
                 }
@@ -641,9 +640,10 @@ impl BlobCache for MemoryBlobCache {
 
 #[cfg(test)]
 mod tests {
+    use futures_executor::block_on;
+
     use super::*;
     use crate::{checkpoint::CheckpointMeta, testing::new_inmemory_stores};
-    use futures_executor::block_on;
 
     #[test]
     fn segment_cache_hits_after_warm() {
