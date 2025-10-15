@@ -31,6 +31,11 @@
   ```
 - For CI or pre-commit, test the runtime you're actively developing against.
 
+## Pre-commit Hook
+- Enable tracked hooks once per clone: `git config core.hooksPath .githooks`.
+- Hook runs the full local suite and requires the nightly toolchain (`rustup toolchain install nightly`): `cargo +nightly fmt --all -- --check`, `cargo check --workspace --all-targets`, the clippy matrix (`fusio-core`, `fusio` with tokio + monoio features, `fusio-manifest`, `fusio-parquet`, `fusio-opendal`, `fusio-object-store`), and `cargo test -p fusio --features tokio,aws,tokio-http` plus `cargo test -p fusio-parquet --features tokio`.
+- If rustfmt rewrites files, re-stage and re-commit after running `cargo fmt`; clippy is lint-only.
+
 ## Style Expectations
 - Rust 2021 with rustfmt (max width 100); grouped imports.
 - Idiomatic naming: modules/functions snake_case, types CamelCase, constants SCREAMING_SNAKE_CASE.

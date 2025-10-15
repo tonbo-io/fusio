@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+ROOT_DIR="$(git rev-parse --show-toplevel)"
+cd "${ROOT_DIR}"
+
+if ! command -v cargo >/dev/null 2>&1; then
+  echo "[fusio pre-commit] skipping: cargo not found" >&2
+  exit 0
+fi
+
+run_step() {
+  local cmd="$1"
+  echo "[fusio pre-commit] $cmd"
+  if ! eval "$cmd"; then
+    echo "[fusio pre-commit] command failed: $cmd" >&2
+    exit 1
+  fi
+}
+
+FMT_BIN="cargo +nightly"
+if ! command -v rustup >/dev/null 2>&1; then
+  echo "[fusio pre-commit] rustup not detected; install rustup and the nightly toolchain" >&2
+  exit 1
+fi
+if ! rustup toolchain list | grep -q "nightly"; then
+  echo "[fusio pre-commit] nightly toolchain required (rustup toolchain install nightly)" >&2
+  exit 1
+fi
+FMT_CHECK_CMD="${FMT_BIN} fmt --all -- --check"
+
+run_step "${FMT_CHECK_CMD}"
+run_step "cargo check --workspace --all-targets"
+run_step "cargo clippy -p fusio-core --all-features -- -D warnings"
+run_step "cargo clippy -p fusio --features tokio,aws,tokio-http -- -D warnings"
+run_step "cargo clippy -p fusio --features monoio,aws,monoio-http -- -D warnings"
+run_step "cargo clippy -p fusio-manifest -- -D warnings"
+run_step "cargo clippy -p fusio-parquet --features tokio -- -D warnings"
+run_step "cargo clippy -p fusio-opendal --all-features -- -D warnings"
+run_step "cargo clippy -p fusio-object-store --all-features -- -D warnings"
+run_step "cargo test -p fusio --features tokio,aws,tokio-http"
+run_step "cargo test -p fusio-parquet --features tokio"
+
+exit 0
