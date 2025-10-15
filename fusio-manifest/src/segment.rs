@@ -36,6 +36,8 @@ pub trait SegmentIo: MaybeSend + MaybeSync {
         &'a self,
         id: &'a SegmentId,
     ) -> impl MaybeSendFuture<Output = Result<(Vec<u8>, Option<String>)>> + 'a {
+        // Default impl keeps existing backends unchanged: return the payload and surface
+        // `None` for the coherence tag. Stores with real ETag support should override.
         let fut = self.get(id);
         async move {
             let bytes = fut.await?;

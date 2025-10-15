@@ -76,6 +76,9 @@ pub trait CheckpointStore: MaybeSend + MaybeSync + Clone {
         &'a self,
         id: &'a CheckpointId,
     ) -> impl MaybeSendFuture<Output = Result<(CheckpointMeta, Vec<u8>, Option<String>)>> + 'a {
+        // Default fallback keeps existing backends working: we reuse `get_checkpoint`
+        // and surface `None` for the revision token. Implementations that can return a
+        // real ETag should override this method.
         let fut = self.get_checkpoint(id);
         async move {
             let (meta, payload) = fut.await?;
