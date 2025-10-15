@@ -204,12 +204,6 @@ impl<S> CachedSegmentStore<S> {
     fn identifier(id: &SegmentId) -> String {
         format!("seg-{:020}", id.seq)
     }
-
-    fn cache_key(id: &SegmentId) -> CacheKey {
-        // Segments are write-once immutable (enforced by IfNotExists CAS).
-        // Once seg-N exists, its content never changes, so ETag is unnecessary.
-        CacheKey::new(CacheKind::Segment, Self::identifier(id), None)
-    }
 }
 
 impl<S> SegmentIo for CachedSegmentStore<S>
@@ -323,21 +317,32 @@ where
         let etags = self.etags.clone();
         async move {
             inner.delete_upto(upto_seq).await?;
-            if let Some(cache) = cache {
+
+            if let Ok(mut map) = etags.lock() {
                 for seq in 0..=upto_seq {
                     let id = SegmentId { seq };
-                    let key = CachedSegmentStore::<S>::cache_key(&id);
-                    cache.invalidate(&key);
+                    let identifier = CachedSegmentStore::<S>::identifier(&id);
+
+                    if let Some(cache) = cache.as_ref() {
+                        cache.invalidate(&CacheKey::new(
+                            CacheKind::Segment,
+                            identifier.clone(),
+                            None,
+                        ));
+                    }
+
+                    if let Some(tag) = map.remove(&identifier) {
+                        if let (Some(cache), Some(tag)) = (cache.as_ref(), tag) {
+                            cache.invalidate(&CacheKey::new(
+                                CacheKind::Segment,
+                                identifier.clone(),
+                                Some(tag),
+                            ));
+                        }
+                    }
                 }
             }
-            if let Ok(mut map) = etags.lock() {
-                map.retain(|key, _| {
-                    key.strip_prefix("seg-")
-                        .and_then(|rest| rest.parse::<u64>().ok())
-                        .map(|seq| seq > upto_seq)
-                        .unwrap_or(true)
-                });
-            }
+
             Ok(())
         }
     }
@@ -561,12 +566,26 @@ where
         let etags = self.etags.clone();
         async move {
             inner.delete(&ckpt_id).await?;
-            let key = CachedCheckpointStore::<S>::cache_key(&ckpt_id);
-            if let Some(cache) = cache {
-                cache.invalidate(&key);
+            let identifier = CachedCheckpointStore::<S>::identifier(&ckpt_id);
+
+            if let Some(cache) = cache.as_ref() {
+                cache.invalidate(&CacheKey::new(
+                    CacheKind::Checkpoint,
+                    identifier.clone(),
+                    None,
+                ));
             }
+
             if let Ok(mut map) = etags.lock() {
-                map.remove(&CachedCheckpointStore::<S>::identifier(&ckpt_id));
+                if let Some(tag) = map.remove(&identifier) {
+                    if let (Some(cache), Some(tag)) = (cache.as_ref(), tag) {
+                        cache.invalidate(&CacheKey::new(
+                            CacheKind::Checkpoint,
+                            identifier,
+                            Some(tag),
+                        ));
+                    }
+                }
             }
             Ok(())
         }
@@ -693,6 +712,67 @@ mod tests {
             let metrics = cache.metrics();
             assert_eq!(metrics.hits, 1);
             assert_eq!(metrics.misses, 0);
+        });
+    }
+
+    #[test]
+    fn checkpoint_cache_invalidate_by_etag() {
+        let cache = Arc::new(MemoryBlobCache::new(1024));
+        let (_head, _segment, checkpoint, _leases) = new_inmemory_stores();
+        let cached = CachedCheckpointStore::new(checkpoint.clone(), Some(cache.clone()));
+
+        block_on(async {
+            let payload = br#"{"entries":[]}"#;
+            let meta = CheckpointMeta {
+                lsn: 9,
+                key_count: 0,
+                byte_size: payload.len(),
+                created_at_ms: 0,
+                format: "application/json".into(),
+                last_segment_seq_at_ckpt: 0,
+            };
+
+            let id = cached
+                .put_checkpoint(&meta, payload, "application/json")
+                .await
+                .unwrap();
+
+            let (_meta, bytes, _etag) = cached.get_checkpoint_with_etag(&id).await.unwrap();
+            assert_eq!(bytes, payload);
+
+            let identifier = id.as_str().to_owned();
+            let key_none = CacheKey::new(CacheKind::Checkpoint, identifier.clone(), None);
+            assert!(cache.get(&key_none).is_some());
+
+            // Simulate an entry cached under a strong revision tag.
+            let fake_tag = "etag-simulated".to_string();
+            cache.insert(
+                CacheKey::new(
+                    CacheKind::Checkpoint,
+                    identifier.clone(),
+                    Some(fake_tag.clone()),
+                ),
+                CacheValue::Checkpoint(CheckpointCacheEntry::new(
+                    meta.clone(),
+                    payload.to_vec(),
+                    Some(fake_tag.clone()),
+                )),
+            );
+            if let Ok(mut map) = cached.etags.lock() {
+                map.insert(identifier.clone(), Some(fake_tag.clone()));
+            }
+
+            let key_etag = CacheKey::new(
+                CacheKind::Checkpoint,
+                identifier.clone(),
+                Some(fake_tag.clone()),
+            );
+            assert!(cache.get(&key_etag).is_some());
+
+            cached.delete(&id).await.unwrap();
+
+            assert!(cache.get(&key_etag).is_none());
+            assert!(cache.get(&key_none).is_none());
         });
     }
 }
