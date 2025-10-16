@@ -2,13 +2,14 @@ use std::{
     collections::HashMap,
     fmt,
     hash::{Hash, Hasher},
-    sync::{
-        atomic::{AtomicU64, Ordering},
-        Arc, Mutex,
-    },
+    sync::{Arc, Mutex},
 };
 
+#[cfg(feature = "cache-moka")]
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use fusio_core::MaybeSendFuture;
+#[cfg(feature = "cache-moka")]
 use moka::sync::Cache;
 
 use crate::{
@@ -109,7 +110,7 @@ impl From<Vec<u8>> for CachedPayload {
 pub struct CheckpointCacheEntry {
     pub meta: Arc<CheckpointMeta>,
     pub payload: CachedPayload,
-    pub etag: Option<String>,
+    pub etag: Option<Box<str>>,
 }
 
 impl CheckpointCacheEntry {
@@ -117,15 +118,38 @@ impl CheckpointCacheEntry {
         Self {
             meta: Arc::new(meta),
             payload: CachedPayload::new(payload),
-            etag,
+            etag: etag.map(|e| e.into_boxed_str()),
         }
+    }
+}
+
+#[derive(Clone)]
+pub struct SegmentCacheEntry {
+    payload: CachedPayload,
+    etag: Option<Box<str>>,
+}
+
+impl SegmentCacheEntry {
+    pub fn new(payload: Vec<u8>, etag: Option<String>) -> Self {
+        Self {
+            payload: CachedPayload::new(payload),
+            etag: etag.map(|e| e.into_boxed_str()),
+        }
+    }
+
+    pub fn payload(&self) -> &CachedPayload {
+        &self.payload
+    }
+
+    pub fn etag(&self) -> Option<&str> {
+        self.etag.as_deref()
     }
 }
 
 /// Unified cache value enum so we can share the underlying LRU for segments and checkpoints.
 #[derive(Clone)]
 pub enum CacheValue {
-    Segment(CachedPayload),
+    Segment(SegmentCacheEntry),
     Checkpoint(CheckpointCacheEntry),
 }
 
@@ -148,21 +172,28 @@ pub trait BlobCache: Send + Sync {
 /// Cache configuration passed into manifest builders.
 #[derive(Clone)]
 pub enum CacheLayer {
+    #[cfg(feature = "cache-moka")]
     Memory { max_bytes: u64 },
     Shared(Arc<dyn BlobCache>),
 }
 
 impl fmt::Debug for CacheLayer {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            CacheLayer::Memory { max_bytes } => f
+        #[cfg(feature = "cache-moka")]
+        if let CacheLayer::Memory { max_bytes } = self {
+            return f
                 .debug_struct("CacheLayer::Memory")
                 .field("max_bytes", max_bytes)
-                .finish(),
+                .finish();
+        }
+
+        match self {
             CacheLayer::Shared(_) => f
                 .debug_struct("CacheLayer::Shared")
                 .field("cache", &"Arc<dyn BlobCache>")
                 .finish(),
+            #[cfg(feature = "cache-moka")]
+            CacheLayer::Memory { .. } => unreachable!(),
         }
     }
 }
@@ -170,6 +201,7 @@ impl fmt::Debug for CacheLayer {
 impl CacheLayer {
     pub fn into_cache(self) -> Arc<dyn BlobCache> {
         match self {
+            #[cfg(feature = "cache-moka")]
             CacheLayer::Memory { max_bytes } => Arc::new(MemoryBlobCache::new(max_bytes)),
             CacheLayer::Shared(cache) => cache,
         }
@@ -177,6 +209,7 @@ impl CacheLayer {
 }
 
 /// In-memory weighted LRU cache backed by moka with per-entry byte accounting.
+#[cfg(feature = "cache-moka")]
 pub struct MemoryBlobCache {
     cache: Cache<CacheKey, CacheValue>,
     hits: AtomicU64,
@@ -267,15 +300,21 @@ where
                     &identifier,
                     known_etag.as_deref(),
                 );
-                if let Some(CacheValue::Segment(bytes)) = cache.get(&primary) {
-                    return Ok((bytes.as_slice().to_vec(), known_etag));
+                if let Some(CacheValue::Segment(entry)) = cache.get(&primary) {
+                    return Ok((
+                        entry.payload().as_slice().to_vec(),
+                        entry.etag().map(str::to_owned),
+                    ));
                 }
 
                 if known_etag.is_some() {
                     let fallback =
                         CachedSegmentStore::<S>::cache_key(&namespace, &identifier, None);
-                    if let Some(CacheValue::Segment(bytes)) = cache.get(&fallback) {
-                        return Ok((bytes.as_slice().to_vec(), None));
+                    if let Some(CacheValue::Segment(entry)) = cache.get(&fallback) {
+                        return Ok((
+                            entry.payload().as_slice().to_vec(),
+                            entry.etag().map(str::to_owned),
+                        ));
                     }
                 }
             }
@@ -296,13 +335,16 @@ where
                                 &identifier,
                                 Some(tag.as_str()),
                             ),
-                            CacheValue::Segment(CachedPayload::new(bytes.clone())),
+                            CacheValue::Segment(SegmentCacheEntry::new(
+                                bytes.clone(),
+                                Some(tag.clone()),
+                            )),
                         );
                     }
                     None => {
                         cache.insert(
                             CachedSegmentStore::<S>::cache_key(&namespace, &identifier, None),
-                            CacheValue::Segment(CachedPayload::new(bytes.clone())),
+                            CacheValue::Segment(SegmentCacheEntry::new(bytes.clone(), None)),
                         );
                     }
                 }
@@ -502,7 +544,7 @@ where
                         return Ok((
                             (*entry.meta).clone(),
                             entry.payload.as_slice().to_vec(),
-                            entry.etag.clone(),
+                            entry.etag.as_ref().map(|etag| etag.to_string()),
                         ));
                     }
                 }
@@ -627,6 +669,7 @@ where
     }
 }
 
+#[cfg(feature = "cache-moka")]
 impl MemoryBlobCache {
     pub fn new(max_bytes: u64) -> Self {
         let hits = AtomicU64::new(0);
@@ -638,7 +681,7 @@ impl MemoryBlobCache {
         let cache = Cache::builder()
             .max_capacity(max_bytes)
             .weigher(|_, value: &CacheValue| match value {
-                CacheValue::Segment(bytes) => bytes.len() as u32,
+                CacheValue::Segment(entry) => entry.payload().len() as u32,
                 CacheValue::Checkpoint(entry) => {
                     // Count payload bytes only; meta size is negligible.
                     entry.payload.len() as u32
@@ -659,6 +702,7 @@ impl MemoryBlobCache {
     }
 }
 
+#[cfg(feature = "cache-moka")]
 impl BlobCache for MemoryBlobCache {
     fn get(&self, key: &CacheKey) -> Option<CacheValue> {
         match self.cache.get(key) {
@@ -692,7 +736,7 @@ impl BlobCache for MemoryBlobCache {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "cache-moka"))]
 mod tests {
     use futures_executor::block_on;
 
@@ -801,6 +845,43 @@ mod tests {
             assert!(cache.get(&key_etag).is_none());
             assert!(cache.get(&key_none).is_none());
         });
+    }
+
+    #[test]
+    fn memory_cache_handles_concurrent_reads() {
+        const THREADS: usize = 8;
+        const ITERATIONS: usize = 500;
+        let cache = Arc::new(MemoryBlobCache::new(1024));
+        let key = CacheKey::new(CacheKind::Segment, "test:segment-1", None);
+        let payload = b"payload".to_vec();
+
+        cache.insert(
+            key.clone(),
+            CacheValue::Segment(SegmentCacheEntry::new(payload.clone(), None)),
+        );
+
+        let expected = payload.clone();
+        std::thread::scope(|scope| {
+            for _ in 0..THREADS {
+                let cache = cache.clone();
+                let key = key.clone();
+                let expected = expected.clone();
+                scope.spawn(move || {
+                    for _ in 0..ITERATIONS {
+                        match cache.get(&key) {
+                            Some(CacheValue::Segment(entry)) => {
+                                assert_eq!(entry.payload().as_slice(), expected.as_slice());
+                            }
+                            _ => panic!("expected cached segment entry"),
+                        }
+                    }
+                });
+            }
+        });
+
+        let metrics = cache.metrics();
+        assert_eq!(metrics.hits, (THREADS * ITERATIONS) as u64);
+        assert_eq!(metrics.misses, 0);
     }
 
     #[test]

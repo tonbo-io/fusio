@@ -19,7 +19,9 @@ pub(crate) mod cache;
 pub mod retention;
 pub(crate) mod segment;
 pub(crate) mod store;
-pub use cache::{CacheLayer, MemoryBlobCache};
+pub use cache::CacheLayer;
+#[cfg(feature = "cache-moka")]
+pub use cache::MemoryBlobCache;
 pub mod types;
 
 // Ergonomic S3 entrypoint (single config wires all stores).

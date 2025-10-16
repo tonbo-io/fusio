@@ -11,7 +11,6 @@ use fusio::{
 
 use crate::{
     backoff::BackoffPolicy,
-    cache::{BlobCache, MemoryBlobCache},
     checkpoint::CheckpointStoreImpl,
     compactor::Compactor,
     context::ManifestContext,
@@ -27,10 +26,14 @@ use crate::{
     BlockingExecutor,
 };
 
+#[cfg(feature = "cache-moka")]
+use crate::cache::{BlobCache, MemoryBlobCache};
+
 /// Default file name for the manifest head object.
 pub const DEFAULT_HEAD_FILE: &str = "HEAD.json";
 
 /// Default maximum cache size for S3 manifests (in bytes).
+#[cfg(feature = "cache-moka")]
 const DEFAULT_CACHE_MAX_BYTES: u64 = 256 * 1024 * 1024;
 
 /// Minimal S3 configuration for a manifest collection under a single prefix.
@@ -46,9 +49,14 @@ where
 
 impl Config<DefaultRetention, BlockingExecutor> {
     pub fn new(s3: AmazonS3, prefix: impl Into<String>) -> Self {
+        #[cfg_attr(not(feature = "cache-moka"), allow(unused_mut))]
         let mut opts = ManifestContext::default();
-        let cache: Arc<dyn BlobCache> = Arc::new(MemoryBlobCache::new(DEFAULT_CACHE_MAX_BYTES));
-        opts.cache = Some(cache);
+        #[cfg(feature = "cache-moka")]
+        {
+            let cache: Arc<dyn BlobCache> =
+                Arc::new(MemoryBlobCache::new(DEFAULT_CACHE_MAX_BYTES));
+            opts.cache = Some(cache);
+        }
         Self {
             s3,
             prefix: prefix.into().trim_end_matches('/').to_string(),
@@ -107,9 +115,14 @@ impl Builder<DefaultRetention, BlockingExecutor> {
     /// Create a new builder for a given S3 `bucket` and manifest `prefix`.
     /// `prefix` is trimmed of any trailing slash.
     pub fn new(bucket: impl Into<String>) -> Self {
+        #[cfg_attr(not(feature = "cache-moka"), allow(unused_mut))]
         let mut opts = ManifestContext::default();
-        let cache: Arc<dyn BlobCache> = Arc::new(MemoryBlobCache::new(DEFAULT_CACHE_MAX_BYTES));
-        opts.cache = Some(cache);
+        #[cfg(feature = "cache-moka")]
+        {
+            let cache: Arc<dyn BlobCache> =
+                Arc::new(MemoryBlobCache::new(DEFAULT_CACHE_MAX_BYTES));
+            opts.cache = Some(cache);
+        }
         Self {
             bucket: bucket.into(),
             prefix: None,
