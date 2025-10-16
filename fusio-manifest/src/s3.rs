@@ -9,6 +9,8 @@ use fusio::{
     },
 };
 
+#[cfg(feature = "cache-moka")]
+use crate::cache::{BlobCache, MemoryBlobCache};
 use crate::{
     backoff::BackoffPolicy,
     checkpoint::CheckpointStoreImpl,
@@ -25,9 +27,6 @@ use crate::{
     types::Result,
     BlockingExecutor,
 };
-
-#[cfg(feature = "cache-moka")]
-use crate::cache::{BlobCache, MemoryBlobCache};
 
 /// Default file name for the manifest head object.
 pub const DEFAULT_HEAD_FILE: &str = "HEAD.json";
@@ -53,8 +52,7 @@ impl Config<DefaultRetention, BlockingExecutor> {
         let mut opts = ManifestContext::default();
         #[cfg(feature = "cache-moka")]
         {
-            let cache: Arc<dyn BlobCache> =
-                Arc::new(MemoryBlobCache::new(DEFAULT_CACHE_MAX_BYTES));
+            let cache: Arc<dyn BlobCache> = Arc::new(MemoryBlobCache::new(DEFAULT_CACHE_MAX_BYTES));
             opts.cache = Some(cache);
         }
         Self {
@@ -119,8 +117,7 @@ impl Builder<DefaultRetention, BlockingExecutor> {
         let mut opts = ManifestContext::default();
         #[cfg(feature = "cache-moka")]
         {
-            let cache: Arc<dyn BlobCache> =
-                Arc::new(MemoryBlobCache::new(DEFAULT_CACHE_MAX_BYTES));
+            let cache: Arc<dyn BlobCache> = Arc::new(MemoryBlobCache::new(DEFAULT_CACHE_MAX_BYTES));
             opts.cache = Some(cache);
         }
         Self {

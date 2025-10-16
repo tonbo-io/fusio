@@ -1,12 +1,11 @@
+#[cfg(feature = "cache-moka")]
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::{
     collections::HashMap,
     fmt,
     hash::{Hash, Hasher},
     sync::{Arc, Mutex},
 };
-
-#[cfg(feature = "cache-moka")]
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use fusio_core::MaybeSendFuture;
 #[cfg(feature = "cache-moka")]
@@ -173,7 +172,9 @@ pub trait BlobCache: Send + Sync {
 #[derive(Clone)]
 pub enum CacheLayer {
     #[cfg(feature = "cache-moka")]
-    Memory { max_bytes: u64 },
+    Memory {
+        max_bytes: u64,
+    },
     Shared(Arc<dyn BlobCache>),
 }
 
@@ -886,8 +887,9 @@ mod tests {
 
     #[test]
     fn shared_cache_scoped_by_namespace() {
-        use crate::segment::SegmentStoreImpl;
         use fusio::impls::mem::fs::InMemoryFs;
+
+        use crate::segment::SegmentStoreImpl;
 
         let cache = Arc::new(MemoryBlobCache::new(1024));
         let fs = InMemoryFs::new();
