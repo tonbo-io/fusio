@@ -449,7 +449,7 @@ impl<S> CachedCheckpointStore<S> {
         id.as_str().to_owned()
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "cache-moka"))]
     pub(crate) fn cache_key_for(&self, id: &CheckpointId, etag: Option<&str>) -> CacheKey {
         Self::cache_key(&self.namespace, id, etag)
     }
