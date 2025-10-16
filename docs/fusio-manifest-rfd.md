@@ -132,6 +132,14 @@ let mut ctx = ManifestContext::default();
 ctx.set_cache(None);
 ```
 
+### Feature flags
+
+- `cache-moka` *(default)* &mdash; enables the bundled in-memory `MemoryBlobCache` backed by
+  [`moka`](https://docs.rs/moka/). Disabling this feature (for example,
+  `cargo build -p fusio-manifest --no-default-features --features std`) removes the
+  moka dependency, skips the default cache wiring in `s3::Builder`, and lets you provide
+  an alternate `BlobCache` implementation such as [`foyer`](https://github.com/foyer-rs/foyer).
+
 ## Crate: fusio-manifest (API Surface)
 
 Top-level type:

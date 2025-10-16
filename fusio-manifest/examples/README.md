@@ -51,3 +51,7 @@ Example:
 ```bash
 cargo run -p fusio-manifest --example step1_basic
 ```
+
+> **Feature flag:** `MemoryBlobCache` ships behind the `cache-moka` feature, which is
+> enabled by default. Disable it (e.g. `cargo run -p fusio-manifest --no-default-features --features std,examples`)
+> if you want to supply a different `BlobCache` implementation.
