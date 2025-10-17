@@ -18,6 +18,7 @@ Key properties:
 - Orphan recovery: adopt contiguous durable-but-unpublished segments on reopen, advancing HEAD via CAS.
 - Portable backends: in-memory for tests, S3 for production; no local FS backend in core.
 - Runtime integration: bounded retries use a `fusio::executor::Timer`; callers can provide runtime-specific executors (implementing both `Executor` and `Timer`) via `ManifestContext::with_executor`.
+- Optional blob cache: callers can attach an `Arc<dyn BlobCache>` to `ManifestContext` so checkpoint/segment payloads are memoised when backends expose revision tags (ETags).
 
 ## Goals
 
@@ -109,6 +110,35 @@ GC plan (multi-actor):
 
 - `fusio-manifest` remains runtime-agnostic; callers own scheduling and can run on block-on executors or native async runtimes.
 - `ManifestContext` stores the executor/timer by value (`E: Executor + Timer + Clone`); applications can call `ctx.timer().clone()` when they need a concrete timer handle (e.g., backoff loops) and swap in runtime-specific executors via `with_executor`.
+- The same `ManifestContext` holds an optional blob cache (`ctx.cache`). When unset the manifest reaches through to the underlying stores on every read; when set (e.g., `Some(Arc::new(MemoryBlobCache::new(...)))`) manifests reuse checkpoint/segment blobs keyed by `(object key, ETag)`. `s3::Builder::new` seeds a 256&nbsp;MiB in-memory cache, but applications can override it before constructing a manifest.
+
+### Customising the blob cache
+
+```rust
+use fusio_manifest::{s3, ManifestContext, MemoryBlobCache};
+use std::sync::Arc;
+
+let mut ctx = ManifestContext::default();
+ctx.set_cache(Some(Arc::new(MemoryBlobCache::new(64 * 1024 * 1024))));
+
+let manifest: s3::S3Manifest<_, _> = s3::Builder::new("my-bucket")
+    .with_context(ctx) // overrides the default 256 MiB cache
+    .prefix("manifests")
+    .build()
+    .into();
+
+// disable caching completely
+let mut ctx = ManifestContext::default();
+ctx.set_cache(None);
+```
+
+### Feature flags
+
+- `cache-moka` *(default)* &mdash; enables the bundled in-memory `MemoryBlobCache` backed by
+  [`moka`](https://docs.rs/moka/). Disabling this feature (for example,
+  `cargo build -p fusio-manifest --no-default-features --features std`) removes the
+  moka dependency, skips the default cache wiring in `s3::Builder`, and lets you provide
+  an alternate `BlobCache` implementation such as [`foyer`](https://github.com/foyer-rs/foyer).
 
 ## Crate: fusio-manifest (API Surface)
 

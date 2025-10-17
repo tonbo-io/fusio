@@ -3,6 +3,7 @@ use std::sync::Arc;
 use fusio::executor::{Executor, Timer};
 
 use crate::{
+    cache::{CachedCheckpointStore, CachedSegmentStore},
     context::ManifestContext,
     retention::{DefaultRetention, RetentionPolicy},
     BlockingExecutor,
@@ -15,8 +16,8 @@ where
     R: RetentionPolicy + Clone,
 {
     pub(crate) head: HS,
-    pub(crate) segment: SS,
-    pub(crate) checkpoint: CS,
+    pub(crate) segment: CachedSegmentStore<SS>,
+    pub(crate) checkpoint: CachedCheckpointStore<CS>,
     pub(crate) leases: LS,
     pub(crate) opts: Arc<ManifestContext<R, E>>,
 }
@@ -33,6 +34,10 @@ where
         leases: LS,
         opts: Arc<ManifestContext<R, E>>,
     ) -> Self {
+        let cache = opts.cache.clone();
+        let namespace = opts.cache_namespace.clone();
+        let segment = CachedSegmentStore::new(segment, cache.clone(), namespace.clone());
+        let checkpoint = CachedCheckpointStore::new(checkpoint, cache, namespace);
         Self {
             head,
             segment,

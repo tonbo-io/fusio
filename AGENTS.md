@@ -13,6 +13,7 @@
   - `cargo test -p fusio --features tokio,aws,tokio-http`
   - `cargo test -p fusio-parquet --features tokio`
   - `cargo test -p fusio-log --no-default-features --features aws,bytes,monoio,monoio-http`
+- Cache variants: `cargo check -p fusio-manifest --no-default-features --features std` and `cargo test -p fusio-manifest --lib --no-default-features --features std`
 - Optional WASM checks: `wasm-pack test --chrome --headless fusio[ -parquet ]` with appropriate features.
 
 ## Linting & Formatting
@@ -33,7 +34,7 @@
 
 ## Pre-commit Hook
 - Enable tracked hooks once per clone: `git config core.hooksPath .githooks`.
-- Hook runs the full local suite and requires the nightly toolchain (`rustup toolchain install nightly`): `cargo +nightly fmt --all -- --check`, `cargo check --workspace --all-targets`, the clippy matrix (`fusio-core`, `fusio` with tokio + monoio features, `fusio-manifest`, `fusio-parquet`, `fusio-opendal`, `fusio-object-store`), and `cargo test -p fusio --features tokio,aws,tokio-http` plus `cargo test -p fusio-parquet --features tokio`.
+- Hook runs the full local suite and requires the nightly toolchain (`rustup toolchain install nightly`): `cargo +nightly fmt --all -- --check`, `cargo check --workspace --all-targets`, `cargo check -p fusio-manifest --no-default-features --features std`, the clippy matrix (`fusio-core`, `fusio` with tokio + monoio features, `fusio-manifest` with default features *and* `--no-default-features --features std`, `fusio-parquet`, `fusio-opendal`, `fusio-object-store`), and `cargo test -p fusio --features tokio,aws,tokio-http`, `cargo test -p fusio-parquet --features tokio`, plus `cargo test -p fusio-manifest --lib --no-default-features --features std`.
 - If rustfmt rewrites files, re-stage and re-commit after running `cargo fmt`; clippy is lint-only.
 
 ## Style Expectations

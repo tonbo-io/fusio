@@ -7,8 +7,9 @@ repository.workspace = true
 version.workspace = true
 
 [features]
-default = ["std"]
+default = ["std", "cache-moka"]
 std = []
+cache-moka = ["dep:moka"]
 
 [dependencies]
 fusio-core = { path = "../fusio-core", version = "0.4.1", features = ["std"] }
@@ -24,6 +25,7 @@ tokio = { version = "1", features = ["sync"] }
 async-stream = { version = "0.3" }
 backon = "1.4"
 thiserror = "2.0.17"
+moka = { version = "0.10", features = ["sync"], optional = true }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }

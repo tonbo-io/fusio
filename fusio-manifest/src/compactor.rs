@@ -1001,7 +1001,10 @@ mod tests {
             self.inner.put_next(seq, txn_id, payload, content_type)
         }
 
-        fn get(&self, id: &SegmentId) -> impl MaybeSendFuture<Output = Result<Vec<u8>>> + '_ {
+        fn get<'a>(
+            &'a self,
+            id: &'a SegmentId,
+        ) -> impl MaybeSendFuture<Output = Result<Vec<u8>>> + 'a {
             self.inner.get(id)
         }
 
@@ -1072,17 +1075,17 @@ mod tests {
             self.inner.put_checkpoint(meta, payload, content_type)
         }
 
-        fn get_checkpoint(
-            &self,
-            id: &CheckpointId,
-        ) -> impl MaybeSendFuture<Output = Result<(CheckpointMeta, Vec<u8>)>> + '_ {
+        fn get_checkpoint<'a>(
+            &'a self,
+            id: &'a CheckpointId,
+        ) -> impl MaybeSendFuture<Output = Result<(CheckpointMeta, Vec<u8>)>> + 'a {
             self.inner.get_checkpoint(id)
         }
 
-        fn get_checkpoint_meta(
-            &self,
-            id: &CheckpointId,
-        ) -> impl MaybeSendFuture<Output = Result<CheckpointMeta>> + '_ {
+        fn get_checkpoint_meta<'a>(
+            &'a self,
+            id: &'a CheckpointId,
+        ) -> impl MaybeSendFuture<Output = Result<CheckpointMeta>> + 'a {
             self.inner.get_checkpoint_meta(id)
         }
 
