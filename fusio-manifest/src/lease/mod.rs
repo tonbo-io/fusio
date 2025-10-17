@@ -282,10 +282,10 @@ mod tests {
     use fusio_core::MaybeSendFuture;
     use futures_executor::block_on;
     use futures_util::stream::Stream;
+    use rstest::rstest;
 
     use super::*;
     use crate::test_utils::{in_memory_stores, InMemoryStores};
-    use rstest::rstest;
 
     #[derive(Clone)]
     struct FailingFs {

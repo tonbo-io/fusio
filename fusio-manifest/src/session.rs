@@ -850,7 +850,8 @@ mod tests {
             assert!(
                 (res1.is_ok() && matches!(res2, Err(Error::PreconditionFailed)))
                     || (res2.is_ok() && matches!(res1, Err(Error::PreconditionFailed))),
-                "expected losing commit to fail with PreconditionFailed in iteration {attempt}: res1={res1:?}, res2={res2:?}"
+                "expected losing commit to fail with PreconditionFailed in iteration {attempt}: \
+                 res1={res1:?}, res2={res2:?}"
             );
         }
     }
@@ -878,7 +879,8 @@ mod tests {
             let all_keys = session.scan().await.unwrap();
             let keys_equal_to_v1 = all_keys.into_iter().filter(|(_, v)| &(*v) == "v1").count();
 
-            // Both transactions will see count > 1 and proceed. Barrier ensures they both read before either tries to write.
+            // Both transactions will see count > 1 and proceed. Barrier ensures they both read
+            // before either tries to write.
             barrier.wait().await;
             assert_eq!(keys_equal_to_v1, 2);
 
