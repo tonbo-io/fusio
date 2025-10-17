@@ -45,7 +45,7 @@ pub trait SegmentIo: MaybeSend + MaybeSync {
     fn delete_upto(&self, upto_seq: u64) -> impl MaybeSendFuture<Output = Result<()>> + '_;
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct SegmentStoreImpl<FS> {
     fs: FS,
     pub(crate) prefix: String,

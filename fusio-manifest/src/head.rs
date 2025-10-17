@@ -50,7 +50,7 @@ fn map_fs_error(err: FsError) -> Error {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct HeadStoreImpl<C> {
     cas: C,
     key: String,

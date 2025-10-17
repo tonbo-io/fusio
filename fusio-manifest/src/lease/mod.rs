@@ -65,7 +65,7 @@ struct LeaseDoc {
 }
 
 /// Lease store backed by a filesystem implementation.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct LeaseStoreImpl<FS, T>
 where
     T: Timer + Clone,
@@ -284,7 +284,8 @@ mod tests {
     use futures_util::stream::Stream;
 
     use super::*;
-    use crate::testing::new_inmemory_stores;
+    use crate::test_utils::{in_memory_stores, InMemoryStores};
+    use rstest::rstest;
 
     #[derive(Clone)]
     struct FailingFs {
@@ -382,10 +383,10 @@ mod tests {
         }
     }
 
-    #[test]
-    fn mem_lease_ttl_and_min_watermark() {
+    #[rstest]
+    fn mem_lease_ttl_and_min_watermark(in_memory_stores: InMemoryStores) {
         block_on(async move {
-            let (_, _, _, store) = new_inmemory_stores();
+            let store = in_memory_stores.lease;
             // Create two leases at different snapshot txn_ids
             let ttl = Duration::from_secs(60);
             let l1 = store.create(100, None, ttl).await.unwrap();

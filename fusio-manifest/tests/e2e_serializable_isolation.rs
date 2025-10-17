@@ -47,7 +47,11 @@
 use std::{env, sync::Arc};
 
 use fusio::executor::tokio::TokioExecutor;
-use fusio_manifest::{context::ManifestContext, s3, s3::S3Manifest, types::Result};
+use fusio_manifest::{
+    context::ManifestContext,
+    s3::{self, S3Manifest},
+    types::{Error, Result},
+};
 
 /// Helper to create an S3 manifest configured with the environmental variables.
 /// If AWS_ENDPOINT_URL is present, we use it (LocalStack/MinIO). Otherwise, use real AWS S3.
@@ -349,5 +353,175 @@ async fn test_high_contention_writers() -> Result<()> {
     reader.end().await?;
 
     println!("✅ High contention test passed: 1 winner, 9 conflicts!");
+    Ok(())
+}
+
+// Scenario 1.6 - Tombstone write skew test
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_tombstone_write_skew() -> Result<()> {
+    let manifest = create_test_manifest("tombstone_write_skew")?;
+
+    // Seed two reserved seats.
+    write_and_commit_data(&manifest, "seat:A".into(), "reserved".into()).await;
+    write_and_commit_data(&manifest, "seat:B".into(), "reserved".into()).await;
+
+    // Two writers read the same snapshot and free different seats.
+    let mut writer_a = manifest.session_write().await?;
+    writer_a.delete("seat:A".into());
+    writer_a.put("notes:A".into(), "freed".into());
+
+    let mut writer_b = manifest.session_write().await?;
+    writer_b.delete("seat:B".into());
+    writer_b.put("notes:B".into(), "freed".into());
+
+    // Writer B wins; writer A must observe the conflict and abort.
+    writer_b.commit().await?;
+    let result_a = writer_a.commit().await;
+    assert!(
+        matches!(result_a, Err(Error::PreconditionFailed)),
+        "writer A should fail due to serializable write skew prevention (got {:?})",
+        result_a
+    );
+
+    // Verify only one seat was freed and only one note recorded.
+    let reader = manifest.session_read().await?;
+    assert_eq!(
+        reader.get(&"seat:A".to_string()).await?,
+        Some("reserved".to_string()),
+        "seat A should remain reserved"
+    );
+    assert!(
+        reader.get(&"seat:B".to_string()).await?.is_none(),
+        "seat B should be freed by the winning writer"
+    );
+    let notes: Vec<_> = reader
+        .scan()
+        .await?
+        .into_iter()
+        .filter(|(k, _)| k.starts_with("notes:"))
+        .collect();
+    assert_eq!(
+        notes,
+        vec![("notes:B".to_string(), "freed".to_string())],
+        "only the winner's note should be present"
+    );
+    reader.end().await?;
+
+    println!("✅ Tombostone write skew test passed!");
+    Ok(())
+}
+
+// Scenario 1.7 - retry succeed with new session write
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_writer_retry_eventually_serializes() -> Result<()> {
+    let manifest = create_test_manifest("writer_retry_eventually_serializes")?;
+    let key = "counter".to_string();
+
+    // Seed initial value.
+    write_and_commit_data(&manifest, key.clone(), "0".into()).await;
+
+    // Two writers operate on the same snapshot.
+    let mut writer1 = manifest.session_write().await?;
+    writer1.put(key.clone(), "1".into());
+
+    let mut writer2 = manifest.session_write().await?;
+    writer2.put(key.clone(), "2".into());
+
+    // First writer wins the CAS race.
+    writer1.commit().await?;
+
+    // Second writer must see the conflict.
+    let result = writer2.commit().await;
+    assert!(
+        matches!(result, Err(Error::PreconditionFailed)),
+        "second writer should fail with precondition error (got {:?})",
+        result
+    );
+
+    // Retrying from a fresh snapshot succeeds.
+    let mut retry_writer = manifest.session_write().await?;
+    retry_writer.put(key.clone(), "2".into());
+    retry_writer.commit().await?;
+
+    // Final state reflects the retry.
+    let reader = manifest.session_read().await?;
+    assert_eq!(
+        reader.get(&key).await?,
+        Some("2".to_string()),
+        "retry commit should publish the expected value"
+    );
+    reader.end().await?;
+
+    println!("✅ Write retry will eventually serialize passed!");
+    Ok(())
+}
+
+// Scenario 1.8 - range scan isolation
+#[tokio::test]
+async fn test_range_scan_isolation() -> Result<()> {
+    let manifest = create_test_manifest("range_scan_isolation")?;
+
+    // Setup some initial data
+    write_and_commit_data(&manifest, "user:001:active".into(), "true".into()).await;
+    write_and_commit_data(&manifest, "user:002:active".into(), "true".into()).await;
+
+    // Transaction A: Count active users and add a summary
+    let mut writer_a = manifest.session_write().await?;
+    let entries = writer_a.scan().await?;
+    let active_count = entries
+        .iter()
+        .filter(|(k, v)| k.contains(":active") && v == "true")
+        .count();
+    writer_a.put("summary:active_users".into(), active_count.to_string());
+
+    // Transaction B: Add a new active user
+    let mut writer_b = manifest.session_write().await?;
+    writer_b.put("user:003:active".into(), "true".into());
+    writer_b.commit().await?;
+
+    // Transaction A should fail (phantom prevention)
+    let result = writer_a.commit().await;
+    assert!(matches!(result, Err(Error::PreconditionFailed)));
+
+    println!("✅ Range scan isolation test passed!");
+    Ok(())
+}
+
+// Scenario 1.9 - read modify write
+#[tokio::test]
+async fn test_read_modify_write_isolation() -> Result<()> {
+    let manifest = create_test_manifest("read_modify_write")?;
+
+    write_and_commit_data(&manifest, "balance".into(), "100".into()).await;
+
+    // Both transactions read the same value
+    let mut writer_a = manifest.session_write().await?;
+    let balance_a = writer_a.get(&"balance".to_string()).await?.unwrap();
+    let new_balance_a = balance_a.parse::<i32>().unwrap() + 10;
+
+    let mut writer_b = manifest.session_write().await?;
+    let balance_b = writer_b.get(&"balance".to_string()).await?.unwrap();
+    let new_balance_b = balance_b.parse::<i32>().unwrap() + 20;
+
+    // Both try to write back
+    writer_a.put("balance".into(), new_balance_a.to_string());
+    writer_b.put("balance".into(), new_balance_b.to_string());
+
+    // One succeeds, one fails
+    writer_a.commit().await?;
+    assert!(matches!(
+        writer_b.commit().await,
+        Err(Error::PreconditionFailed)
+    ));
+
+    // Verify no lost update
+    let reader = manifest.session_read().await?;
+    assert_eq!(
+        reader.get(&"balance".to_string()).await?,
+        Some("110".to_string())
+    );
+    reader.end().await?;
+
+    println!("✅ Read-modify-write test passed!");
     Ok(())
 }

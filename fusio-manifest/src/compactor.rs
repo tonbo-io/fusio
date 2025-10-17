@@ -812,6 +812,7 @@ mod tests {
     use fusio_core::MaybeSendFuture;
     use futures_executor::block_on;
     use futures_util::Stream;
+    use rstest::rstest;
 
     use super::*;
     use crate::{
@@ -821,21 +822,20 @@ mod tests {
         head::PutCondition,
         manifest::Manifest,
         segment::SegmentMeta,
-        testing::new_inmemory_stores,
+        test_utils::{self, in_memory_stores, InMemoryStores},
         types::{Error, SegmentId},
     };
 
-    #[test]
-    fn headless_compactor_invokes_manifest_logic() {
+    #[rstest]
+    fn headless_compactor_invokes_manifest_logic(in_memory_stores: InMemoryStores) {
         block_on(async move {
             let opts = Arc::new(ManifestContext::default());
             // Construct a simple Manifest to seed data, then run headless compactor.
-            let (head, segment, checkpoint, lease) = new_inmemory_stores();
             let m = Manifest::<String, String, _, _, _, _>::new_with_context(
-                head,
-                segment,
-                checkpoint,
-                lease,
+                in_memory_stores.head,
+                in_memory_stores.segment,
+                in_memory_stores.checkpoint,
+                in_memory_stores.lease,
                 Arc::clone(&opts),
             );
             let mut s = m.session_write().await.unwrap();
@@ -843,12 +843,12 @@ mod tests {
             s.put("b".into(), "2".into());
             let _ = s.commit().await.unwrap();
 
-            let (head, segment, checkpoint, lease) = new_inmemory_stores();
+            let new_in_memory_stores = test_utils::in_memory_stores();
             let comp = Compactor::<String, String, _, _, _, _>::new(
-                head,
-                segment,
-                checkpoint,
-                lease,
+                new_in_memory_stores.head,
+                new_in_memory_stores.segment,
+                new_in_memory_stores.checkpoint,
+                new_in_memory_stores.lease,
                 Arc::clone(&opts),
             );
             // Running on empty stores does nothing harmful.
@@ -856,17 +856,16 @@ mod tests {
         })
     }
 
-    #[test]
-    fn gc_delete_and_reset_segment_failure_preserves_plan() {
+    #[rstest]
+    fn gc_delete_and_reset_segment_failure_preserves_plan(in_memory_stores: InMemoryStores) {
         block_on(async move {
             let opts = Arc::new(ManifestContext::default());
-            let (head, segment, checkpoint, lease) = new_inmemory_stores();
-            let failing_segment = FailingSegmentStore::new(segment);
+            let failing_segment = FailingSegmentStore::new(in_memory_stores.segment);
             let comp = Compactor::<String, String, _, _, _, _>::new(
-                head,
+                in_memory_stores.head,
                 failing_segment.clone(),
-                checkpoint,
-                lease,
+                in_memory_stores.checkpoint,
+                in_memory_stores.lease,
                 Arc::clone(&opts),
             );
 
@@ -909,17 +908,16 @@ mod tests {
         })
     }
 
-    #[test]
-    fn gc_delete_and_reset_checkpoint_failure_preserves_plan() {
+    #[rstest]
+    fn gc_delete_and_reset_checkpoint_failure_preserves_plan(in_memory_stores: InMemoryStores) {
         block_on(async move {
             let opts = Arc::new(ManifestContext::default());
-            let (head, segment, checkpoint, lease) = new_inmemory_stores();
-            let failing_checkpoint = FailingCheckpointStore::new(checkpoint);
+            let failing_checkpoint = FailingCheckpointStore::new(in_memory_stores.checkpoint);
             let comp = Compactor::<String, String, _, _, _, _>::new(
-                head,
-                segment,
+                in_memory_stores.head,
+                in_memory_stores.segment,
                 failing_checkpoint.clone(),
-                lease,
+                in_memory_stores.lease,
                 Arc::clone(&opts),
             );
 
@@ -1115,17 +1113,25 @@ mod tests {
 mod gc_compute_tests {
     use fusio::{executor::BlockingExecutor, impls::mem::fs::InMemoryFs};
     use futures_executor::block_on;
+    use rstest::rstest;
 
     use super::*;
-    use crate::{backoff::BackoffPolicy, gc::FsGcPlanStore, testing::new_inmemory_stores};
+    use crate::{
+        backoff::BackoffPolicy,
+        gc::FsGcPlanStore,
+        test_utils::{in_memory_stores, InMemoryStores},
+    };
 
-    #[test]
-    fn compute_plan_no_head_or_no_leases_yields_none() {
+    #[rstest]
+    fn compute_plan_no_head_or_no_leases_yields_none(in_memory_stores: InMemoryStores) {
         block_on(async move {
             let opts = Arc::new(ManifestContext::default());
-            let (head, segment, checkpoint, lease) = new_inmemory_stores();
             let comp = Compactor::<String, String, _, _, _, _>::new(
-                head, segment, checkpoint, lease, opts,
+                in_memory_stores.head,
+                in_memory_stores.segment,
+                in_memory_stores.checkpoint,
+                in_memory_stores.lease,
+                opts,
             );
             let timer = BlockingExecutor::default();
             let store = FsGcPlanStore::new(InMemoryFs::new(), "", BackoffPolicy::default(), timer);

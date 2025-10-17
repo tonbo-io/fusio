@@ -26,7 +26,9 @@ backon = "1.4"
 thiserror = "2.0.17"
 
 [dev-dependencies]
-tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
+rand = "0.8"
+rstest = "0.21"
 
 [package.metadata.docs.rs]
 all-features = true
