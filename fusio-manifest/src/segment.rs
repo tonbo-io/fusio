@@ -1,10 +1,10 @@
 use std::{collections::HashMap, io::ErrorKind, pin::Pin};
 
 use fusio::{
-    fs::{CasCondition, Fs, FsCas, OpenOptions},
+    fs::{CasCondition, Fs, FsCas},
     impls::{mem::fs::InMemoryFs, remotes::aws::fs::AmazonS3},
     path::Path,
-    Error as FsError, Read,
+    Error as FsError,
 };
 use fusio_core::{MaybeSend, MaybeSendFuture, MaybeSync};
 use futures_util::StreamExt;
@@ -29,7 +29,21 @@ pub trait SegmentIo: MaybeSend + MaybeSync {
     ) -> impl MaybeSendFuture<Output = Result<SegmentId>> + 's;
 
     /// Fetch a previously written segment payload by id.
-    fn get(&self, id: &SegmentId) -> impl MaybeSendFuture<Output = Result<Vec<u8>>> + '_;
+    fn get<'a>(&'a self, id: &'a SegmentId) -> impl MaybeSendFuture<Output = Result<Vec<u8>>> + 'a;
+
+    /// Fetch a segment payload together with an optional strong revision identifier (e.g., ETag).
+    fn get_with_etag<'a>(
+        &'a self,
+        id: &'a SegmentId,
+    ) -> impl MaybeSendFuture<Output = Result<(Vec<u8>, Option<String>)>> + 'a {
+        // Default impl keeps existing backends unchanged: return the payload and surface
+        // `None` for the coherence tag. Stores with real ETag support should override.
+        let fut = self.get(id);
+        async move {
+            let bytes = fut.await?;
+            Ok((bytes, None))
+        }
+    }
 
     /// Fetch segment metadata if available without reading the payload.
     fn load_meta(&self, id: &SegmentId) -> impl MaybeSendFuture<Output = Result<SegmentMeta>> + '_;
@@ -125,25 +139,35 @@ where
         }
     }
 
-    fn get(&self, id: &SegmentId) -> impl MaybeSendFuture<Output = Result<Vec<u8>>> + '_ {
+    fn get<'a>(&'a self, id: &'a SegmentId) -> impl MaybeSendFuture<Output = Result<Vec<u8>>> + 'a {
+        async move {
+            let (bytes, _) = <Self as SegmentIo>::get_with_etag(self, id).await?;
+            Ok(bytes)
+        }
+    }
+
+    fn get_with_etag<'a>(
+        &'a self,
+        id: &'a SegmentId,
+    ) -> impl MaybeSendFuture<Output = Result<(Vec<u8>, Option<String>)>> + 'a {
         let fs = self.fs.clone();
         let key_json = self.key_for(id.seq, ".json");
         let key_bin = self.key_for(id.seq, ".bin");
         async move {
-            async fn read_all<FS>(fs: &FS, key: &str) -> Result<Vec<u8>, Error>
-            where
-                FS: Fs + Send + Sync,
-            {
-                let path = Path::parse(key).map_err(Error::other)?;
-                let mut f = fs.open_options(&path, OpenOptions::default()).await?;
-                let (res, buf) = f.read_to_end_at(Vec::new(), 0).await;
-                res?;
-                Ok(buf)
-            }
+            let try_key = |key: String, fs: FS| async move {
+                let path = Path::parse(&key).map_err(Error::other)?;
+                match fs.load_with_tag(&path).await.map_err(Error::from)? {
+                    Some((bytes, etag)) => Ok((bytes, Some(etag))),
+                    None => Err(Error::Corrupt(format!(
+                        "segment payload missing object for key {key}"
+                    ))),
+                }
+            };
 
-            match read_all(&fs, &key_json).await {
-                Ok(v) => Ok(v),
-                Err(_) => read_all(&fs, &key_bin).await,
+            match try_key(key_json, fs.clone()).await {
+                Ok(res) => Ok(res),
+                Err(Error::Corrupt(_)) => try_key(key_bin, fs).await,
+                Err(e) => Err(e),
             }
         }
     }

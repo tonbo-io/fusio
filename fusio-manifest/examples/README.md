@@ -24,8 +24,34 @@ Every run writes to a unique prefix to avoid collisions. Execute them with
 4. `step4_lease_keeper`: starts a background lease keeper task that maintains
    a pinned read lease via the configured executor.
 
+## Sharing the blob cache across manifests
+
+`s3::Builder` seeds each manifest with an in-memory cache that is local to the
+instance. If you intentionally share an `Arc<dyn BlobCache>` between multiple
+manifests (for example, when constructing contexts manually), set a namespace on
+the `ManifestContext` so cached entries stay scoped to a single bucket/prefix:
+
+```rust
+use std::sync::Arc;
+use fusio_manifest::{cache::{BlobCache, MemoryBlobCache}, ManifestContext};
+
+let shared_cache: Arc<dyn BlobCache> = Arc::new(MemoryBlobCache::new(256 * 1024 * 1024));
+
+let mut ctx = ManifestContext::default();
+ctx.set_cache(Some(shared_cache.clone()));
+ctx.set_cache_namespace(Some("s3://my-bucket/prefix-a"));
+```
+
+Manifests that should see the same cached blobs must reuse the exact namespace
+string; manifests on other prefixes should pick a different namespace (or leave
+it unset, which keeps the default per-manifest isolation).
+
 Example:
 
 ```bash
 cargo run -p fusio-manifest --example step1_basic
 ```
+
+> **Feature flag:** `MemoryBlobCache` ships behind the `cache-moka` feature, which is
+> enabled by default. Disable it (e.g. `cargo run -p fusio-manifest --no-default-features --features std,examples`)
+> if you want to supply a different `BlobCache` implementation.
