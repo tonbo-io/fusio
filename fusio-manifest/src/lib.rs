@@ -28,22 +28,24 @@ pub mod types;
 pub mod s3;
 
 #[cfg(test)]
-pub(crate) mod testing;
+pub(crate) mod test_utils;
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
+
     use crate::{
         head::{HeadJson, HeadStore},
-        testing::new_inmemory_stores,
+        test_utils::{in_memory_stores, InMemoryStores},
         types::Error,
     };
 
-    #[test]
-    fn head_store_put_if_semantics() {
+    #[rstest]
+    fn head_store_put_if_semantics(in_memory_stores: InMemoryStores) {
         use futures_executor::block_on;
 
         use crate::head::PutCondition;
-        let (store, _, _, _) = new_inmemory_stores();
+        let store = in_memory_stores.head;
         let head = HeadJson {
             version: 1,
             checkpoint_id: None,
@@ -72,12 +74,16 @@ mod tests {
 #[cfg(test)]
 mod segment_tests {
     use futures_executor::block_on;
+    use rstest::rstest;
 
-    use crate::{segment::SegmentIo, testing::new_inmemory_stores};
+    use crate::{
+        segment::SegmentIo,
+        test_utils::{in_memory_stores, InMemoryStores},
+    };
 
-    #[test]
-    fn mem_segment_put_get_list() {
-        let (_, store, _, _) = new_inmemory_stores();
+    #[rstest]
+    fn mem_segment_put_get_list(in_memory_stores: InMemoryStores) {
+        let store = in_memory_stores.segment;
         block_on(async {
             let id1 = store
                 .put_next(1, 10, b"hello", "application/json")

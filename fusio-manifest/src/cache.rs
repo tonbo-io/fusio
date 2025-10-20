@@ -740,14 +740,18 @@ impl BlobCache for MemoryBlobCache {
 #[cfg(all(test, feature = "cache-moka"))]
 mod tests {
     use futures_executor::block_on;
+    use rstest::rstest;
 
     use super::*;
-    use crate::{checkpoint::CheckpointMeta, testing::new_inmemory_stores};
+    use crate::{
+        checkpoint::CheckpointMeta,
+        test_utils::{in_memory_stores, InMemoryStores},
+    };
 
-    #[test]
-    fn segment_cache_hits_after_warm() {
+    #[rstest]
+    fn segment_cache_hits_after_warm(in_memory_stores: InMemoryStores) {
         let cache = Arc::new(MemoryBlobCache::new(1024));
-        let (_head, segment, _checkpoint, _leases) = new_inmemory_stores();
+        let segment = in_memory_stores.segment;
         let cached = CachedSegmentStore::new(segment.clone(), Some(cache.clone()), None);
 
         block_on(async {
@@ -766,11 +770,11 @@ mod tests {
         });
     }
 
-    #[test]
-    fn checkpoint_cache_serves_from_memory() {
+    #[rstest]
+    fn checkpoint_cache_serves_from_memory(in_memory_stores: InMemoryStores) {
         let cache = Arc::new(MemoryBlobCache::new(1024));
-        let (_head, _segment, checkpoint, _leases) = new_inmemory_stores();
-        let cached = CachedCheckpointStore::new(checkpoint.clone(), Some(cache.clone()), None);
+        let cached =
+            CachedCheckpointStore::new(in_memory_stores.checkpoint, Some(cache.clone()), None);
 
         block_on(async {
             let payload = br#"{"entries":[]}"#;
@@ -795,11 +799,11 @@ mod tests {
         });
     }
 
-    #[test]
-    fn checkpoint_cache_invalidate_by_etag() {
+    #[rstest]
+    fn checkpoint_cache_invalidate_by_etag(in_memory_stores: InMemoryStores) {
         let cache = Arc::new(MemoryBlobCache::new(1024));
-        let (_head, _segment, checkpoint, _leases) = new_inmemory_stores();
-        let cached = CachedCheckpointStore::new(checkpoint.clone(), Some(cache.clone()), None);
+        let cached =
+            CachedCheckpointStore::new(in_memory_stores.checkpoint, Some(cache.clone()), None);
 
         block_on(async {
             let payload = br#"{"entries":[]}"#;

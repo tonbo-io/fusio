@@ -102,7 +102,7 @@ pub trait CheckpointStore: MaybeSend + MaybeSync + Clone {
     fn delete(&self, id: &CheckpointId) -> impl MaybeSendFuture<Output = Result<()>> + '_;
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct CheckpointStoreImpl<FS> {
     fs: FS,
     prefix: String,

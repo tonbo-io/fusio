@@ -495,13 +495,13 @@ where
     pub async fn commit(mut self) -> Result<()> {
         let snapshot = self.inner.snapshot().clone();
         let store = self.inner.store().clone();
-        let pol = store.opts.backoff;
+        let backoff_policy = store.opts.backoff;
         let timer = store.opts.timer();
-        let mut backoff_iter = pol.build_backoff();
+        let mut backoff_iter = backoff_policy.build_backoff();
 
         // Manual timer check for total elapsed time (user-facing operation)
         let start_time = timer.now();
-        let max_elapsed = Duration::from_millis(pol.max_elapsed_ms);
+        let max_elapsed = Duration::from_millis(backoff_policy.max_elapsed_ms);
 
         let base_txn = snapshot.txn_id.0;
         let next_txn = base_txn.saturating_add(1);
@@ -550,7 +550,7 @@ where
                     Err(e) => match classify_error(&e) {
                         RetryClass::RetryTransient => {
                             // Check total elapsed time (user-facing operation)
-                            if pol.max_elapsed_ms > 0 {
+                            if backoff_policy.max_elapsed_ms > 0 {
                                 let elapsed =
                                     timer.now().duration_since(start_time).unwrap_or_default();
                                 if elapsed >= max_elapsed {
@@ -607,7 +607,7 @@ where
                 Err(e) => match classify_error(&e) {
                     RetryClass::RetryTransient => {
                         // Check total elapsed time (user-facing operation)
-                        if pol.max_elapsed_ms > 0 {
+                        if backoff_policy.max_elapsed_ms > 0 {
                             let elapsed =
                                 timer.now().duration_since(start_time).unwrap_or_default();
                             if elapsed >= max_elapsed {
@@ -649,78 +649,277 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::{sync::Arc, time::Duration};
+    use std::{thread, time::Duration};
 
-    use fusio::executor::NoopExecutor;
+    use fusio::{executor::NoopExecutor, mem::fs::InMemoryFs};
     use futures_executor::block_on;
+    use rstest::rstest;
+    use tokio::sync::Barrier;
 
     use super::*;
-    use crate::{context::ManifestContext, testing::new_inmemory_stores};
+    use crate::{
+        checkpoint::CheckpointStoreImpl,
+        head::HeadStoreImpl,
+        lease::LeaseStoreImpl,
+        manifest::Manifest,
+        segment::SegmentStoreImpl,
+        test_utils::{self, in_memory_stores, InMemoryStores},
+    };
 
-    #[test]
-    fn read_session_end_releases_lease() {
+    type StringManifest = Manifest<
+        String,
+        String,
+        HeadStoreImpl<InMemoryFs>,
+        SegmentStoreImpl<InMemoryFs>,
+        CheckpointStoreImpl<InMemoryFs>,
+        LeaseStoreImpl<InMemoryFs, BlockingExecutor>,
+        NoopExecutor,
+    >;
+
+    #[rstest]
+    fn read_session_end_releases_lease(in_memory_stores: InMemoryStores) {
         block_on(async move {
-            let (head, seg, ck, ls) = new_inmemory_stores();
-            let opts: ManifestContext<DefaultRetention, NoopExecutor> =
-                ManifestContext::new(NoopExecutor::default());
-            let manifest: crate::manifest::Manifest<String, String, _, _, _, _, NoopExecutor> =
-                crate::manifest::Manifest::new_with_context(
-                    head,
-                    seg,
-                    ck,
-                    ls.clone(),
-                    Arc::new(opts),
-                );
+            let manifest = test_utils::string_in_memory_manifest(in_memory_stores.clone());
 
             let session = manifest.session_read().await.unwrap();
             session.end().await.unwrap();
 
-            let active = ls.list_active(Duration::from_secs(0)).await.unwrap();
+            let active = in_memory_stores
+                .lease
+                .list_active(Duration::from_secs(0))
+                .await
+                .unwrap();
             assert!(active.is_empty());
         })
     }
 
-    #[test]
-    fn write_session_commit_conflict() {
+    #[rstest]
+    fn write_session_commits_fail_with_stale_head(in_memory_stores: InMemoryStores) {
         block_on(async move {
-            let (head, seg, ck, ls) = new_inmemory_stores();
-            let opts: ManifestContext<DefaultRetention, NoopExecutor> =
-                ManifestContext::new(NoopExecutor::default());
-            let shared = Arc::new(opts);
-            let manifest: crate::manifest::Manifest<String, String, _, _, _, _, NoopExecutor> =
-                crate::manifest::Manifest::new_with_context(
-                    head.clone(),
-                    seg.clone(),
-                    ck.clone(),
-                    ls.clone(),
-                    Arc::clone(&shared),
-                );
-
-            let mut writer = manifest.session_write().await.unwrap();
-            writer.put("k".into(), "v".into());
-            writer.commit().await.unwrap();
+            let manifest = test_utils::string_in_memory_manifest(in_memory_stores.clone());
 
             let mut writer2 = manifest.session_write().await.unwrap();
             writer2.put("k".into(), "v2".into());
 
-            // Simulate conflicting head advance
-            let (_, tag) = head.load().await.unwrap().unwrap();
-            head.put(
-                &HeadJson {
-                    version: 1,
-                    checkpoint_id: None,
-                    last_segment_seq: Some(10),
-                    last_txn_id: 10,
-                },
-                PutCondition::IfMatch(tag),
-            )
-            .await
-            .unwrap();
+            in_memory_stores
+                .head
+                .put(
+                    &HeadJson {
+                        version: 1,
+                        checkpoint_id: None,
+                        last_segment_seq: Some(10),
+                        last_txn_id: 10,
+                    },
+                    PutCondition::IfNotExists,
+                )
+                .await
+                .unwrap();
 
             assert!(matches!(
                 writer2.commit().await,
                 Err(Error::PreconditionFailed)
             ));
         })
+    }
+
+    #[rstest]
+    fn write_session_commits_fail_with_conflict_last_segment(in_memory_stores: InMemoryStores) {
+        block_on(async move {
+            let manifest = test_utils::string_in_memory_manifest(in_memory_stores.clone());
+
+            let mut writer2 = manifest.session_write().await.unwrap();
+            writer2.put("k2".into(), "v2".into());
+
+            // Simulate writer1 session crashed after putting segments but haven't commited to HEAD
+            let segment: Segment<String, &str> = Segment {
+                txn_id: 1,
+                records: vec![Record {
+                    key: "k1".into(),
+                    op: Op::Put,
+                    value: "v1".into(),
+                }],
+            };
+            let payload = serde_json::to_vec(&segment)
+                .map_err(|e| Error::Corrupt(format!("segment encode: {e}")))
+                .unwrap();
+            let _segment_id = in_memory_stores
+                .segment
+                .put_next(1, 1, payload.as_slice(), "application/json")
+                .await
+                .unwrap();
+            assert!(manifest
+                .get_latest(&"k1".to_owned())
+                .await
+                .unwrap()
+                .is_none());
+
+            // segment put failed as CasCondition::IfNotExists is false
+            assert!(matches!(
+                writer2.commit().await,
+                Err(Error::PreconditionFailed)
+            ));
+
+            // Retry succeeds and will also fix the orphan record
+            writer2 = manifest.session_write().await.unwrap();
+            writer2.put("k2".into(), "v2".into());
+            assert!(writer2.commit().await.is_ok());
+            assert_eq!(
+                manifest.get_latest(&"k1".to_owned()).await.unwrap(),
+                Some("v1".to_owned())
+            );
+            assert_eq!(
+                manifest.get_latest(&"k2".to_owned()).await.unwrap(),
+                Some("v2".to_owned())
+            );
+        })
+    }
+
+    #[rstest]
+    fn read_session_prevents_dirty_and_phantom_read(in_memory_stores: InMemoryStores) {
+        block_on(async move {
+            let manifest = test_utils::string_in_memory_manifest(in_memory_stores.clone());
+
+            let mut writer = manifest.session_write().await.unwrap();
+            writer.put("k".into(), "v1".into());
+            writer.commit().await.unwrap();
+
+            let reader = manifest.session_read().await.unwrap();
+            assert_eq!(
+                reader.get(&"k".to_owned()).await.unwrap(),
+                Some("v1".to_owned())
+            );
+
+            writer = manifest.session_write().await.unwrap();
+            writer.put("k".into(), "v2".into());
+            assert_eq!(
+                reader.get(&"k".to_owned()).await.unwrap(),
+                Some("v1".to_owned())
+            );
+
+            writer.commit().await.unwrap();
+            assert_eq!(
+                reader.get(&"k".to_owned()).await.unwrap(),
+                Some("v1".to_owned())
+            );
+
+            reader.end().await.unwrap();
+        })
+    }
+
+    #[rstest]
+    fn write_session_concurrent_threads_single_winner_load_test(in_memory_stores: InMemoryStores) {
+        let manifest = test_utils::string_in_memory_manifest(in_memory_stores);
+        for attempt in 0..100 {
+            let mut writer1 = block_on(manifest.session_write()).unwrap();
+            let mut writer2 = block_on(manifest.session_write()).unwrap();
+
+            let (res1, res2) = thread::scope(|scope| {
+                let handle1 = scope.spawn({
+                    let key = format!("thread-1-{attempt}").to_owned();
+                    let val = format!("value-1-{attempt}").to_owned();
+                    move || {
+                        writer1.put(key.clone(), val.clone());
+                        block_on(async move {
+                            match writer1.commit().await {
+                                Ok(()) => Ok(key),
+                                Err(err) => Err(err),
+                            }
+                        })
+                    }
+                });
+
+                let handle2 = scope.spawn({
+                    let key = format!("thread-2-{attempt}").to_owned();
+                    let val = format!("value-2-{attempt}").to_owned();
+                    move || {
+                        writer2.put(key.clone(), val.clone());
+                        block_on(async move {
+                            match writer2.commit().await {
+                                Ok(()) => Ok(key),
+                                Err(err) => Err(err),
+                            }
+                        })
+                    }
+                });
+
+                (handle1.join().unwrap(), handle2.join().unwrap())
+            });
+
+            let success_count = res1.is_ok() as u8 + res2.is_ok() as u8;
+            assert_eq!(success_count, 1);
+            assert!(
+                (res1.is_ok() && matches!(res2, Err(Error::PreconditionFailed)))
+                    || (res2.is_ok() && matches!(res1, Err(Error::PreconditionFailed))),
+                "expected losing commit to fail with PreconditionFailed in iteration {attempt}: \
+                 res1={res1:?}, res2={res2:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    #[rstest]
+    async fn write_session_prevents_write_skew(in_memory_stores: InMemoryStores) {
+        let manifest: StringManifest = test_utils::string_in_memory_manifest(in_memory_stores);
+
+        // 1. Initial state: Both key points to the same value
+        let mut setup_session = manifest.session_write().await.unwrap();
+        setup_session.put("k1".to_string(), "v1".to_string());
+        setup_session.put("k2".to_string(), "v1".to_string());
+        setup_session.commit().await.unwrap();
+
+        let barrier = Arc::new(Barrier::new(2));
+
+        async fn worker(
+            key: String,
+            manifest: Arc<StringManifest>,
+            barrier: Arc<Barrier>,
+        ) -> Result<(), crate::types::Error> {
+            let mut session = manifest.session_write().await.unwrap();
+
+            let all_keys = session.scan().await.unwrap();
+            let keys_equal_to_v1 = all_keys.into_iter().filter(|(_, v)| &(*v) == "v1").count();
+
+            // Both transactions will see count > 1 and proceed. Barrier ensures they both read
+            // before either tries to write.
+            barrier.wait().await;
+            assert_eq!(keys_equal_to_v1, 2);
+
+            session.put(key, "v2".to_owned());
+            return session.commit().await; // This should fail for one of the transactions
+        }
+
+        // 2. Run both transactions concurrently.
+        let handle1 = tokio::spawn(worker(
+            "k1".to_owned(),
+            Arc::new(manifest.clone()),
+            Arc::clone(&barrier),
+        ));
+        let handle2 = tokio::spawn(worker(
+            "k2".to_owned(),
+            Arc::new(manifest.clone()),
+            Arc::clone(&barrier),
+        ));
+        let res_a = handle1.await.unwrap();
+        let res_b = handle2.await.unwrap();
+
+        // 3. Assert: One transaction MUST fail. It's a failure if both succeed.
+        let success_count = [res_a, res_b].iter().filter(|r| r.is_ok()).count();
+        assert_eq!(
+            success_count, 1,
+            "Expected exactly one transaction to succeed, but got {}",
+            success_count
+        );
+
+        // 4. Final check: The business rule must be intact.
+        let final_state = manifest.scan_latest(None).await.unwrap();
+        let final_on_call_count = final_state
+            .into_iter()
+            .filter(|(_, v)| &(*v) == "v2")
+            .count();
+        assert_eq!(
+            final_on_call_count, 1,
+            "The invariant was violated; expected only one key is modified, found {}.",
+            final_on_call_count
+        );
     }
 }
