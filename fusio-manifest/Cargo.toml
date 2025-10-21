@@ -32,6 +32,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
 rand = "0.8"
 rstest = "0.21"
 loom = "0.7"
+proptest = "1"
 
 [package.metadata.docs.rs]
 all-features = true

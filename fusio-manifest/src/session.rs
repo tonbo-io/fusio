@@ -649,7 +649,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::{thread, time::Duration};
+    use std::time::Duration;
 
     use fusio::{executor::NoopExecutor, mem::fs::InMemoryFs};
     use futures_executor::block_on;
@@ -845,15 +845,18 @@ mod tests {
 
 #[cfg(test)]
 mod deterministic_test {
-    use loom::sync::{atomic::AtomicUsize, atomic::Ordering, Arc as LoomArc};
     use std::collections::{BTreeSet, HashMap};
 
-    use crate::snapshot::ScanRange;
-    use crate::types::Error;
+    use loom::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc as LoomArc,
+    };
+    use proptest::prelude::*;
+
+    use crate::{snapshot::ScanRange, types::Error};
 
     mod loom_support {
-        use std::future::Future;
-        use std::sync::Arc;
+        use std::{future::Future, sync::Arc};
 
         pub(crate) fn run<F>(f: F)
         where
@@ -1115,7 +1118,8 @@ mod deterministic_test {
                 let range = range.clone();
                 move || {
                     let session = reader;
-                    let initial = loom_support::block_on(session.scan_range(range.clone())).unwrap();
+                    let initial =
+                        loom_support::block_on(session.scan_range(range.clone())).unwrap();
                     readiness.store(1, Ordering::SeqCst);
                     loom::thread::yield_now();
                     let after = loom_support::block_on(session.scan_range(range.clone())).unwrap();
@@ -1147,16 +1151,14 @@ mod deterministic_test {
 
             let initial_keys = to_key_set(initial);
             let after_keys = to_key_set(after);
-            let expected: BTreeSet<String> = ["bb".to_string(), "cc".to_string()]
-                .into_iter()
-                .collect();
+            let expected: BTreeSet<String> =
+                ["bb".to_string(), "cc".to_string()].into_iter().collect();
 
             assert_eq!(initial_keys, expected);
             assert_eq!(after_keys, expected);
 
             let latest_range = loom_support::block_on(manifest.scan_latest(Some(range))).unwrap();
-            let latest_keys: BTreeSet<String> =
-                latest_range.into_iter().map(|(k, _)| k).collect();
+            let latest_keys: BTreeSet<String> = latest_range.into_iter().map(|(k, _)| k).collect();
             assert!(latest_keys.contains("bc"));
         });
     }
@@ -1201,7 +1203,8 @@ mod deterministic_test {
                 "expected exactly one winner: del={del_res:?}, upd={upd_res:?}"
             );
 
-            let latest = loom_support::block_on(manifest.get_latest(&"victim".to_string())).unwrap();
+            let latest =
+                loom_support::block_on(manifest.get_latest(&"victim".to_string())).unwrap();
             if del_res.is_ok() {
                 assert_eq!(latest, None);
             } else {
@@ -1235,14 +1238,14 @@ mod deterministic_test {
                     session.put("new".into(), "fresh".into());
                     session.delete("drop".into());
 
-                    let keep_local = loom_support::block_on(session.get_local(&"keep".to_string()))
-                        .unwrap();
+                    let keep_local =
+                        loom_support::block_on(session.get_local(&"keep".to_string())).unwrap();
                     assert_eq!(keep_local.as_deref(), Some("updated"));
-                    let new_local = loom_support::block_on(session.get_local(&"new".to_string()))
-                        .unwrap();
+                    let new_local =
+                        loom_support::block_on(session.get_local(&"new".to_string())).unwrap();
                     assert_eq!(new_local.as_deref(), Some("fresh"));
-                    let drop_local = loom_support::block_on(session.get_local(&"drop".to_string()))
-                        .unwrap();
+                    let drop_local =
+                        loom_support::block_on(session.get_local(&"drop".to_string())).unwrap();
                     assert_eq!(drop_local, None);
 
                     let staged = loom_support::block_on(session.scan_local(None)).unwrap();
@@ -1287,5 +1290,177 @@ mod deterministic_test {
             assert_eq!(final_map.get("new").map(String::as_str), Some("fresh"));
             assert!(!final_map.contains_key("drop"));
         });
+    }
+
+    #[derive(Clone, Debug)]
+    enum TxnOp {
+        Put(String, String),
+        Delete(String),
+    }
+
+    fn key_strategy() -> impl Strategy<Value = String> {
+        proptest::sample::select(vec!["a", "b", "c"]).prop_map(|s| s.to_string())
+    }
+
+    fn value_strategy() -> impl Strategy<Value = String> {
+        proptest::sample::select(vec!["0", "1", "2", "3"]).prop_map(|s| s.to_string())
+    }
+
+    fn initial_entries_strategy() -> impl Strategy<Value = Vec<(String, String)>> {
+        proptest::collection::vec((key_strategy(), value_strategy()), 0..10)
+    }
+
+    fn txn_op_strategy() -> impl Strategy<Value = TxnOp> {
+        prop_oneof![
+            (key_strategy(), value_strategy()).prop_map(|(k, v)| TxnOp::Put(k, v)),
+            key_strategy().prop_map(TxnOp::Delete),
+        ]
+    }
+
+    fn txn_ops_strategy() -> impl Strategy<Value = Vec<TxnOp>> {
+        proptest::collection::vec(txn_op_strategy(), 1..8)
+    }
+
+    fn apply_ops_to_map(map: &mut HashMap<String, String>, ops: &[TxnOp]) {
+        for op in ops {
+            match op {
+                TxnOp::Put(k, v) => {
+                    map.insert(k.clone(), v.clone());
+                }
+                TxnOp::Delete(k) => {
+                    map.remove(k);
+                }
+            }
+        }
+    }
+
+    fn run_two_writer_script(initial: Vec<(String, String)>, ops1: Vec<TxnOp>, ops2: Vec<TxnOp>) {
+        use std::sync::Arc;
+
+        let initial_arc = Arc::new(initial);
+        let ops1_arc = Arc::new(ops1);
+        let ops2_arc = Arc::new(ops2);
+
+        loom_support::run(move || {
+            let initial_pairs = initial_arc.clone();
+            let ops1 = ops1_arc.clone();
+            let ops2 = ops2_arc.clone();
+
+            let stores = crate::test_utils::in_memory_stores();
+            let manifest = crate::test_utils::string_in_memory_manifest(stores.clone());
+
+            if !initial_pairs.is_empty() {
+                loom_support::block_on(async {
+                    let mut setup = manifest.session_write().await.unwrap();
+                    for (k, v) in initial_pairs.iter() {
+                        setup.put(k.clone(), v.clone());
+                    }
+                    setup.commit().await.unwrap();
+                });
+            }
+
+            let ops1_vec = ops1.as_ref().clone();
+            let ops2_vec = ops2.as_ref().clone();
+            let initial_map: HashMap<String, String> = initial_pairs.iter().cloned().collect();
+
+            let writer1_handle = {
+                let manifest_writer1 = manifest.clone();
+                let ops = ops1.clone();
+                loom_support::spawn("prop-writer1", move || {
+                    let mut session =
+                        loom_support::block_on(manifest_writer1.session_write()).unwrap();
+                    for op in ops.iter() {
+                        match op {
+                            TxnOp::Put(k, v) => session.put(k.clone(), v.clone()),
+                            TxnOp::Delete(k) => session.delete(k.clone()),
+                        }
+                    }
+                    loom_support::block_on(session.commit())
+                })
+            };
+
+            let writer2_handle = {
+                let manifest_writer2 = manifest.clone();
+                let ops = ops2.clone();
+                loom_support::spawn("prop-writer2", move || {
+                    let mut session =
+                        loom_support::block_on(manifest_writer2.session_write()).unwrap();
+                    for op in ops.iter() {
+                        match op {
+                            TxnOp::Put(k, v) => session.put(k.clone(), v.clone()),
+                            TxnOp::Delete(k) => session.delete(k.clone()),
+                        }
+                    }
+                    loom_support::block_on(session.commit())
+                })
+            };
+
+            let res1 = writer1_handle.join().unwrap();
+            let res2 = writer2_handle.join().unwrap();
+
+            let final_map: HashMap<String, String> =
+                loom_support::block_on(manifest.scan_latest(None))
+                    .unwrap()
+                    .into_iter()
+                    .collect();
+
+            let mut expect1 = initial_map.clone();
+            apply_ops_to_map(&mut expect1, &ops1_vec);
+            let mut expect2 = initial_map.clone();
+            apply_ops_to_map(&mut expect2, &ops2_vec);
+            let mut expect12 = expect1.clone();
+            apply_ops_to_map(&mut expect12, &ops2_vec);
+            let mut expect21 = expect2.clone();
+            apply_ops_to_map(&mut expect21, &ops1_vec);
+
+            match (res1, res2) {
+                (Ok(_), Ok(_)) => {
+                    assert!(
+                        final_map == expect12 || final_map == expect21,
+                        "final state {final_map:?} not serializable for ops1={ops1_vec:?}, \
+                         ops2={ops2_vec:?}, initial={initial_map:?}"
+                    );
+                }
+                (Ok(_), Err(err)) => {
+                    assert!(
+                        matches!(err, Error::PreconditionFailed),
+                        "losing writer returned unexpected error {err:?}"
+                    );
+                    assert_eq!(
+                        final_map, expect1,
+                        "winner state mismatch for ops1={ops1_vec:?}, ops2={ops2_vec:?}, \
+                         initial={initial_map:?}"
+                    );
+                }
+                (Err(err), Ok(_)) => {
+                    assert!(
+                        matches!(err, Error::PreconditionFailed),
+                        "losing writer returned unexpected error {err:?}"
+                    );
+                    assert_eq!(
+                        final_map, expect2,
+                        "winner state mismatch for ops2={ops2_vec:?}, ops1={ops1_vec:?}, \
+                         initial={initial_map:?}"
+                    );
+                }
+                (Err(e1), Err(e2)) => {
+                    panic!(
+                        "both writers failed (unexpected) ops1={ops1_vec:?}, ops2={ops2_vec:?}, \
+                         errors=({e1:?},{e2:?})"
+                    );
+                }
+            }
+        });
+    }
+
+    proptest! {
+        #[test]
+        fn proptest_two_writer_serializable(
+            initial in initial_entries_strategy(),
+            ops1 in txn_ops_strategy(),
+            ops2 in txn_ops_strategy(),
+        ) {
+            run_two_writer_script(initial, ops1, ops2);
+        }
     }
 }
