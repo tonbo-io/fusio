@@ -664,6 +664,7 @@ mod tests {
         manifest::Manifest,
         segment::SegmentStoreImpl,
         test_utils::{self, in_memory_stores, InMemoryStores},
+        types::Error,
     };
 
     type StringManifest = Manifest<
@@ -774,88 +775,6 @@ mod tests {
         })
     }
 
-    #[rstest]
-    fn read_session_prevents_dirty_and_phantom_read(in_memory_stores: InMemoryStores) {
-        block_on(async move {
-            let manifest = test_utils::string_in_memory_manifest(in_memory_stores.clone());
-
-            let mut writer = manifest.session_write().await.unwrap();
-            writer.put("k".into(), "v1".into());
-            writer.commit().await.unwrap();
-
-            let reader = manifest.session_read().await.unwrap();
-            assert_eq!(
-                reader.get(&"k".to_owned()).await.unwrap(),
-                Some("v1".to_owned())
-            );
-
-            writer = manifest.session_write().await.unwrap();
-            writer.put("k".into(), "v2".into());
-            assert_eq!(
-                reader.get(&"k".to_owned()).await.unwrap(),
-                Some("v1".to_owned())
-            );
-
-            writer.commit().await.unwrap();
-            assert_eq!(
-                reader.get(&"k".to_owned()).await.unwrap(),
-                Some("v1".to_owned())
-            );
-
-            reader.end().await.unwrap();
-        })
-    }
-
-    #[rstest]
-    fn write_session_concurrent_threads_single_winner_load_test(in_memory_stores: InMemoryStores) {
-        let manifest = test_utils::string_in_memory_manifest(in_memory_stores);
-        for attempt in 0..100 {
-            let mut writer1 = block_on(manifest.session_write()).unwrap();
-            let mut writer2 = block_on(manifest.session_write()).unwrap();
-
-            let (res1, res2) = thread::scope(|scope| {
-                let handle1 = scope.spawn({
-                    let key = format!("thread-1-{attempt}").to_owned();
-                    let val = format!("value-1-{attempt}").to_owned();
-                    move || {
-                        writer1.put(key.clone(), val.clone());
-                        block_on(async move {
-                            match writer1.commit().await {
-                                Ok(()) => Ok(key),
-                                Err(err) => Err(err),
-                            }
-                        })
-                    }
-                });
-
-                let handle2 = scope.spawn({
-                    let key = format!("thread-2-{attempt}").to_owned();
-                    let val = format!("value-2-{attempt}").to_owned();
-                    move || {
-                        writer2.put(key.clone(), val.clone());
-                        block_on(async move {
-                            match writer2.commit().await {
-                                Ok(()) => Ok(key),
-                                Err(err) => Err(err),
-                            }
-                        })
-                    }
-                });
-
-                (handle1.join().unwrap(), handle2.join().unwrap())
-            });
-
-            let success_count = res1.is_ok() as u8 + res2.is_ok() as u8;
-            assert_eq!(success_count, 1);
-            assert!(
-                (res1.is_ok() && matches!(res2, Err(Error::PreconditionFailed)))
-                    || (res2.is_ok() && matches!(res1, Err(Error::PreconditionFailed))),
-                "expected losing commit to fail with PreconditionFailed in iteration {attempt}: \
-                 res1={res1:?}, res2={res2:?}"
-            );
-        }
-    }
-
     #[tokio::test]
     #[rstest]
     async fn write_session_prevents_write_skew(in_memory_stores: InMemoryStores) {
@@ -921,5 +840,452 @@ mod tests {
             "The invariant was violated; expected only one key is modified, found {}.",
             final_on_call_count
         );
+    }
+}
+
+#[cfg(test)]
+mod deterministic_test {
+    use loom::sync::{atomic::AtomicUsize, atomic::Ordering, Arc as LoomArc};
+    use std::collections::{BTreeSet, HashMap};
+
+    use crate::snapshot::ScanRange;
+    use crate::types::Error;
+
+    mod loom_support {
+        use std::future::Future;
+        use std::sync::Arc;
+
+        pub(crate) fn run<F>(f: F)
+        where
+            F: Fn() + Send + Sync + 'static,
+        {
+            let shared = Arc::new(f);
+            let builder = loom::model::Builder::new();
+            builder.check(move || {
+                let shared = shared.clone();
+                loom::thread::Builder::new()
+                    .name("loom-root".to_string())
+                    .stack_size(4 * 1024 * 1024)
+                    .spawn(move || shared())
+                    .expect("loom root spawn")
+                    .join()
+                    .expect("loom root join");
+            });
+        }
+
+        pub(crate) fn spawn<F, R>(name: &'static str, f: F) -> loom::thread::JoinHandle<R>
+        where
+            F: FnOnce() -> R + Send + 'static,
+            R: Send + 'static,
+        {
+            loom::thread::Builder::new()
+                .name(name.to_string())
+                .stack_size(4 * 1024 * 1024)
+                .spawn(f)
+                .expect("loom thread spawn")
+        }
+
+        pub(crate) fn block_on<F>(future: F) -> F::Output
+        where
+            F: Future,
+        {
+            futures_executor::block_on(future)
+        }
+    }
+
+    #[test]
+    fn write_sessions_serializable_conflict() {
+        loom_support::run(|| {
+            let stores = crate::test_utils::in_memory_stores();
+            let manifest = crate::test_utils::string_in_memory_manifest(stores.clone());
+
+            loom_support::block_on(async {
+                let mut setup = manifest.session_write().await.unwrap();
+                setup.put("bootstrap".into(), "v0".into());
+                setup.commit().await.unwrap();
+            });
+
+            let writer1 = loom_support::block_on(manifest.session_write()).unwrap();
+            let writer2 = loom_support::block_on(manifest.session_write()).unwrap();
+
+            let key1 = "loom-write-1".to_owned();
+            let key2 = "loom-write-2".to_owned();
+            let val1 = "value-1".to_owned();
+            let val2 = "value-2".to_owned();
+
+            let handle1 = loom_support::spawn("writer1", {
+                let key = key1.clone();
+                let val = val1.clone();
+                move || {
+                    let mut writer = writer1;
+                    writer.put(key.clone(), val.clone());
+                    loom_support::block_on(async move { writer.commit().await.map(|_| key) })
+                }
+            });
+
+            let handle2 = loom_support::spawn("writer2", {
+                let key = key2.clone();
+                let val = val2.clone();
+                move || {
+                    let mut writer = writer2;
+                    writer.put(key.clone(), val.clone());
+                    loom_support::block_on(async move { writer.commit().await.map(|_| key) })
+                }
+            });
+
+            let res1 = handle1.join().unwrap();
+            let res2 = handle2.join().unwrap();
+
+            let ok_count = res1.is_ok() as u8 + res2.is_ok() as u8;
+            assert_eq!(ok_count, 1, "exactly one write session must commit");
+
+            let latest1 = loom_support::block_on(manifest.get_latest(&key1)).unwrap();
+            let latest2 = loom_support::block_on(manifest.get_latest(&key2)).unwrap();
+
+            match (res1, res2) {
+                (Ok(committed_key), Err(err)) => {
+                    assert_eq!(committed_key, key1);
+                    assert_eq!(latest1.as_deref(), Some(val1.as_str()));
+                    assert_eq!(latest2, None);
+                    assert!(matches!(err, Error::PreconditionFailed));
+                }
+                (Err(err), Ok(committed_key)) => {
+                    assert_eq!(committed_key, key2);
+                    assert_eq!(latest2.as_deref(), Some(val2.as_str()));
+                    assert_eq!(latest1, None);
+                    assert!(matches!(err, Error::PreconditionFailed));
+                }
+                _ => unreachable!("one commit must succeed and the other must fail"),
+            }
+        });
+    }
+
+    #[test]
+    fn read_session_observes_stable_snapshot() {
+        loom_support::run(|| {
+            let stores = crate::test_utils::in_memory_stores();
+            let manifest = crate::test_utils::string_in_memory_manifest(stores.clone());
+
+            loom_support::block_on(async {
+                let mut setup = manifest.session_write().await.unwrap();
+                setup.put("account".into(), "v0".into());
+                setup.commit().await.unwrap();
+            });
+
+            let reader = loom_support::block_on(manifest.session_read()).unwrap();
+            let readiness = LoomArc::new(AtomicUsize::new(0));
+
+            let key = "account".to_owned();
+
+            let reader_handle = loom_support::spawn("reader", {
+                let readiness = readiness.clone();
+                let key = key.clone();
+                move || {
+                    let session = reader;
+                    let first = loom_support::block_on(session.get(&key)).unwrap();
+                    readiness.store(1, Ordering::SeqCst);
+                    loom::thread::yield_now();
+                    let second = loom_support::block_on(session.get(&key)).unwrap();
+                    loom_support::block_on(session.end()).unwrap();
+                    (first, second)
+                }
+            });
+
+            let writer_handle = loom_support::spawn("writer", {
+                let readiness = readiness.clone();
+                let manifest = manifest.clone();
+                let key = key.clone();
+                move || {
+                    while readiness.load(Ordering::SeqCst) == 0 {
+                        loom::thread::yield_now();
+                    }
+                    let mut session = loom_support::block_on(manifest.session_write()).unwrap();
+                    session.put(key, "v1".to_owned());
+                    loom_support::block_on(session.commit())
+                }
+            });
+
+            let (first, second) = reader_handle.join().unwrap();
+            let writer_res = writer_handle.join().unwrap();
+
+            assert_eq!(first.as_deref(), Some("v0"));
+            assert_eq!(second.as_deref(), Some("v0"));
+            assert!(writer_res.is_ok(), "writer must succeed");
+
+            let latest = loom_support::block_on(manifest.get_latest(&key)).unwrap();
+            assert_eq!(latest.as_deref(), Some("v1"));
+        });
+    }
+
+    #[test]
+    fn read_session_prevents_phantoms() {
+        loom_support::run(|| {
+            let stores = crate::test_utils::in_memory_stores();
+            let manifest = crate::test_utils::string_in_memory_manifest(stores.clone());
+
+            loom_support::block_on(async {
+                let mut setup = manifest.session_write().await.unwrap();
+                setup.put("alpha".into(), "1".into());
+                setup.put("beta".into(), "2".into());
+                setup.commit().await.unwrap();
+            });
+
+            let reader = loom_support::block_on(manifest.session_read()).unwrap();
+            let readiness = LoomArc::new(AtomicUsize::new(0));
+            let new_key = "gamma".to_owned();
+
+            let reader_handle = loom_support::spawn("reader", {
+                let readiness = readiness.clone();
+                move || {
+                    let session = reader;
+                    let initial = loom_support::block_on(session.scan()).unwrap();
+                    readiness.store(1, Ordering::SeqCst);
+                    loom::thread::yield_now();
+                    let after = loom_support::block_on(session.scan()).unwrap();
+                    loom_support::block_on(session.end()).unwrap();
+                    (initial, after)
+                }
+            });
+
+            let writer_handle = loom_support::spawn("writer", {
+                let readiness = readiness.clone();
+                let manifest = manifest.clone();
+                let new_key = new_key.clone();
+                move || {
+                    while readiness.load(Ordering::SeqCst) == 0 {
+                        loom::thread::yield_now();
+                    }
+                    let mut session = loom_support::block_on(manifest.session_write()).unwrap();
+                    session.put(new_key.clone(), "3".to_owned());
+                    loom_support::block_on(session.commit())
+                }
+            });
+
+            let (initial, after) = reader_handle.join().unwrap();
+            let writer_res = writer_handle.join().unwrap();
+            assert!(writer_res.is_ok(), "writer must succeed");
+
+            let initial_keys: BTreeSet<String> = initial.into_iter().map(|(k, _)| k).collect();
+            let after_keys: BTreeSet<String> = after.into_iter().map(|(k, _)| k).collect();
+
+            assert_eq!(
+                initial_keys, after_keys,
+                "snapshot should not observe new keys"
+            );
+            assert!(initial_keys.contains("alpha"));
+            assert!(initial_keys.contains("beta"));
+            assert!(!after_keys.contains(&new_key));
+
+            let latest_keys: BTreeSet<String> = loom_support::block_on(async {
+                manifest
+                    .scan_latest(None)
+                    .await
+                    .unwrap()
+                    .into_iter()
+                    .map(|(k, _)| k)
+                    .collect()
+            });
+            assert!(latest_keys.contains(&new_key));
+        });
+    }
+
+    #[test]
+    fn read_session_range_no_phantoms() {
+        loom_support::run(|| {
+            let stores = crate::test_utils::in_memory_stores();
+            let manifest = crate::test_utils::string_in_memory_manifest(stores.clone());
+
+            loom_support::block_on(async {
+                let mut setup = manifest.session_write().await.unwrap();
+                setup.put("aa".into(), "0".into());
+                setup.put("bb".into(), "1".into());
+                setup.put("cc".into(), "2".into());
+                setup.commit().await.unwrap();
+            });
+
+            let reader = loom_support::block_on(manifest.session_read()).unwrap();
+            let readiness = LoomArc::new(AtomicUsize::new(0));
+            let range = ScanRange {
+                start: Some("bb".to_string()),
+                end: Some("dd".to_string()),
+            };
+
+            let reader_handle = loom_support::spawn("range-reader", {
+                let readiness = readiness.clone();
+                let range = range.clone();
+                move || {
+                    let session = reader;
+                    let initial = loom_support::block_on(session.scan_range(range.clone())).unwrap();
+                    readiness.store(1, Ordering::SeqCst);
+                    loom::thread::yield_now();
+                    let after = loom_support::block_on(session.scan_range(range.clone())).unwrap();
+                    loom_support::block_on(session.end()).unwrap();
+                    (initial, after)
+                }
+            });
+
+            let writer_handle = loom_support::spawn("range-writer", {
+                let readiness = readiness.clone();
+                let manifest = manifest.clone();
+                move || {
+                    while readiness.load(Ordering::SeqCst) == 0 {
+                        loom::thread::yield_now();
+                    }
+                    let mut session = loom_support::block_on(manifest.session_write()).unwrap();
+                    session.put("bc".into(), "3".into());
+                    loom_support::block_on(session.commit())
+                }
+            });
+
+            let (initial, after) = reader_handle.join().unwrap();
+            let writer_res = writer_handle.join().unwrap();
+            assert!(writer_res.is_ok(), "writer must succeed");
+
+            let to_key_set = |entries: Vec<(String, String)>| -> BTreeSet<String> {
+                entries.into_iter().map(|(k, _)| k).collect()
+            };
+
+            let initial_keys = to_key_set(initial);
+            let after_keys = to_key_set(after);
+            let expected: BTreeSet<String> = ["bb".to_string(), "cc".to_string()]
+                .into_iter()
+                .collect();
+
+            assert_eq!(initial_keys, expected);
+            assert_eq!(after_keys, expected);
+
+            let latest_range = loom_support::block_on(manifest.scan_latest(Some(range))).unwrap();
+            let latest_keys: BTreeSet<String> =
+                latest_range.into_iter().map(|(k, _)| k).collect();
+            assert!(latest_keys.contains("bc"));
+        });
+    }
+
+    #[test]
+    fn concurrent_delete_vs_update_consistency() {
+        loom_support::run(|| {
+            let stores = crate::test_utils::in_memory_stores();
+            let manifest = crate::test_utils::string_in_memory_manifest(stores.clone());
+
+            loom_support::block_on(async {
+                let mut setup = manifest.session_write().await.unwrap();
+                setup.put("victim".into(), "v1".into());
+                setup.commit().await.unwrap();
+            });
+
+            let deleter = loom_support::block_on(manifest.session_write()).unwrap();
+            let updater = loom_support::block_on(manifest.session_write()).unwrap();
+
+            let delete_handle = loom_support::spawn("deleter", {
+                move || {
+                    let mut session = deleter;
+                    session.delete("victim".into());
+                    loom_support::block_on(session.commit())
+                }
+            });
+
+            let update_handle = loom_support::spawn("updater", {
+                move || {
+                    let mut session = updater;
+                    session.put("victim".into(), "v2".into());
+                    loom_support::block_on(session.commit())
+                }
+            });
+
+            let del_res = delete_handle.join().unwrap();
+            let upd_res = update_handle.join().unwrap();
+
+            assert!(
+                (del_res.is_ok() && matches!(upd_res, Err(Error::PreconditionFailed)))
+                    || (upd_res.is_ok() && matches!(del_res, Err(Error::PreconditionFailed))),
+                "expected exactly one winner: del={del_res:?}, upd={upd_res:?}"
+            );
+
+            let latest = loom_support::block_on(manifest.get_latest(&"victim".to_string())).unwrap();
+            if del_res.is_ok() {
+                assert_eq!(latest, None);
+            } else {
+                assert_eq!(latest.as_deref(), Some("v2"));
+            }
+        });
+    }
+
+    #[test]
+    fn write_session_local_view_reflects_stage() {
+        loom_support::run(|| {
+            let stores = crate::test_utils::in_memory_stores();
+            let manifest = crate::test_utils::string_in_memory_manifest(stores.clone());
+
+            loom_support::block_on(async {
+                let mut setup = manifest.session_write().await.unwrap();
+                setup.put("keep".into(), "1".into());
+                setup.put("drop".into(), "2".into());
+                setup.commit().await.unwrap();
+            });
+
+            let proceed = LoomArc::new(AtomicUsize::new(0));
+            let manifest_for_reader = manifest.clone();
+
+            let writer = loom_support::spawn("writer", {
+                let proceed = proceed.clone();
+                let manifest = manifest.clone();
+                move || {
+                    let mut session = loom_support::block_on(manifest.session_write()).unwrap();
+                    session.put("keep".into(), "updated".into());
+                    session.put("new".into(), "fresh".into());
+                    session.delete("drop".into());
+
+                    let keep_local = loom_support::block_on(session.get_local(&"keep".to_string()))
+                        .unwrap();
+                    assert_eq!(keep_local.as_deref(), Some("updated"));
+                    let new_local = loom_support::block_on(session.get_local(&"new".to_string()))
+                        .unwrap();
+                    assert_eq!(new_local.as_deref(), Some("fresh"));
+                    let drop_local = loom_support::block_on(session.get_local(&"drop".to_string()))
+                        .unwrap();
+                    assert_eq!(drop_local, None);
+
+                    let staged = loom_support::block_on(session.scan_local(None)).unwrap();
+                    let staged_map: HashMap<_, _> = staged.into_iter().collect();
+                    assert_eq!(staged_map.get("keep").map(String::as_str), Some("updated"));
+                    assert_eq!(staged_map.get("new").map(String::as_str), Some("fresh"));
+                    assert!(!staged_map.contains_key("drop"));
+
+                    proceed.store(1, Ordering::SeqCst);
+                    while proceed.load(Ordering::SeqCst) < 2 {
+                        loom::thread::yield_now();
+                    }
+
+                    loom_support::block_on(session.commit())
+                }
+            });
+
+            let reader = loom_support::spawn("reader", move || {
+                while proceed.load(Ordering::SeqCst) < 1 {
+                    loom::thread::yield_now();
+                }
+                let session = loom_support::block_on(manifest_for_reader.session_read()).unwrap();
+                let keep = loom_support::block_on(session.get(&"keep".to_string())).unwrap();
+                let drop = loom_support::block_on(session.get(&"drop".to_string())).unwrap();
+                let new = loom_support::block_on(session.get(&"new".to_string())).unwrap();
+                loom_support::block_on(session.end()).unwrap();
+
+                proceed.store(2, Ordering::SeqCst);
+
+                assert_eq!(keep.as_deref(), Some("1"));
+                assert_eq!(drop.as_deref(), Some("2"));
+                assert_eq!(new, None);
+            });
+
+            let writer_res = writer.join().unwrap();
+            let _ = reader.join().unwrap();
+            assert!(writer_res.is_ok(), "writer must succeed");
+
+            let latest = loom_support::block_on(manifest.scan_latest(None)).unwrap();
+            let final_map: HashMap<_, _> = latest.into_iter().collect();
+            assert_eq!(final_map.get("keep").map(String::as_str), Some("updated"));
+            assert_eq!(final_map.get("new").map(String::as_str), Some("fresh"));
+            assert!(!final_map.contains_key("drop"));
+        });
     }
 }
