@@ -89,6 +89,12 @@ jobs:
           command: build
           args: --package fusio-parquet --features=monoio
 
+      - name: Run cargo build on fusio-manifest
+        uses: actions-rs/cargo@v1
+        with:
+          command: build
+          args: --package fusio-manifest
+
       # - name: Configure aws credentials
       #   if: ${{ (github.event_name == 'push' && github.ref_name == 'main') || startsWith(github.ref, 'refs/tags/') }}
       #   uses: aws-actions/configure-aws-credentials@v4
@@ -104,7 +110,6 @@ jobs:
         uses: actions-rs/cargo@v1
         with:
           command: test
-          # args: --package fusio --features=tokio,aws,tokio-http
           args: --package fusio --features=tokio,tokio-http
 
       - name: Run cargo test on monoio
@@ -133,6 +138,12 @@ jobs:
         with:
           command: test
           args: --package fusio-parquet --features=monoio
+
+      - name: Run cargo test on fusio-manifest
+        uses: actions-rs/cargo@v1
+        with:
+          command: test
+          args: --package fusio-manifest --lib
 
   # 2
   fmt:
