@@ -844,7 +844,7 @@ mod tests {
 }
 
 #[cfg(test)]
-mod deterministic_test {
+mod deterministic_tests {
     use std::collections::{BTreeSet, HashMap};
 
     use loom::sync::{
@@ -855,9 +855,17 @@ mod deterministic_test {
 
     use crate::{snapshot::ScanRange, types::Error};
 
+    /// Support functions for running Loom models. Loom will explore every interleaving of any
+    /// threads executors and memory modeles.
     mod loom_support {
         use std::{future::Future, sync::Arc};
 
+        /// Execute a Loom model run for the provided closure.
+        ///
+        /// This wraps `loom::model::Builder::check`, spawning a single root thread with
+        /// a larger stack so async-heavy tests can run without extra boilerplate.
+        /// Every deterministic test should call `run(|| { ... })` so Loom explores all
+        /// interleavings of any threads spawned inside the closure.
         pub(crate) fn run<F>(f: F)
         where
             F: Fn() + Send + Sync + 'static,
@@ -876,6 +884,11 @@ mod deterministic_test {
             });
         }
 
+        /// Spawn a Loom-controlled thread with a friendly name and relaxed stack limit.
+        ///
+        /// Use this instead of `loom::thread::spawn` in deterministic tests so the thread
+        /// inherits the same enlarged stack and consistent naming for debugging.
+        /// The returned handle behaves like the standard Loom join handle.
         pub(crate) fn spawn<F, R>(name: &'static str, f: F) -> loom::thread::JoinHandle<R>
         where
             F: FnOnce() -> R + Send + 'static,
@@ -888,6 +901,11 @@ mod deterministic_test {
                 .expect("loom thread spawn")
         }
 
+        /// Synchronously drive an async future to completion inside a Loom thread.
+        ///
+        /// Loom threads cannot `await` directly; call `block_on(async { ... })`
+        /// whenever a deterministic test needs to invoke the real async `Manifest`
+        /// APIs from within Loom’s model run.
         pub(crate) fn block_on<F>(future: F) -> F::Output
         where
             F: Future,
@@ -976,18 +994,13 @@ mod deterministic_test {
             });
 
             let reader = loom_support::block_on(manifest.session_read()).unwrap();
-            let readiness = LoomArc::new(AtomicUsize::new(0));
-
             let key = "account".to_owned();
 
             let reader_handle = loom_support::spawn("reader", {
-                let readiness = readiness.clone();
                 let key = key.clone();
                 move || {
                     let session = reader;
                     let first = loom_support::block_on(session.get(&key)).unwrap();
-                    readiness.store(1, Ordering::SeqCst);
-                    loom::thread::yield_now();
                     let second = loom_support::block_on(session.get(&key)).unwrap();
                     loom_support::block_on(session.end()).unwrap();
                     (first, second)
@@ -995,13 +1008,9 @@ mod deterministic_test {
             });
 
             let writer_handle = loom_support::spawn("writer", {
-                let readiness = readiness.clone();
                 let manifest = manifest.clone();
                 let key = key.clone();
                 move || {
-                    while readiness.load(Ordering::SeqCst) == 0 {
-                        loom::thread::yield_now();
-                    }
                     let mut session = loom_support::block_on(manifest.session_write()).unwrap();
                     session.put(key, "v1".to_owned());
                     loom_support::block_on(session.commit())
@@ -1021,6 +1030,75 @@ mod deterministic_test {
     }
 
     #[test]
+    fn concurrent_deletes_preserve_snapshot_and_serializability() {
+        loom_support::run(|| {
+            let stores = crate::test_utils::in_memory_stores();
+            let manifest = crate::test_utils::string_in_memory_manifest(stores.clone());
+
+            let key = "victim".to_string();
+            let value = "alive".to_string();
+
+            loom_support::block_on(async {
+                let mut setup = manifest.session_write().await.unwrap();
+                setup.put(key.clone(), value.clone());
+                setup.commit().await.unwrap();
+            });
+
+            let reader = loom_support::block_on(manifest.session_read()).unwrap();
+            let reader_handle = loom_support::spawn("reader", {
+                let key = key.clone();
+                move || {
+                    let session = reader;
+                    let first = loom_support::block_on(session.get(&key)).unwrap();
+                    let second = loom_support::block_on(session.get(&key)).unwrap();
+                    loom_support::block_on(session.end()).unwrap();
+                    (first, second)
+                }
+            });
+
+            let writer1 = loom_support::block_on(manifest.session_write()).unwrap();
+            let deleter1 = loom_support::spawn("deleter1", {
+                let key = key.clone();
+                move || {
+                    let mut session = writer1;
+                    session.delete(key.clone());
+                    loom_support::block_on(session.commit())
+                }
+            });
+
+            let writer2 = loom_support::block_on(manifest.session_write()).unwrap();
+            let deleter2 = loom_support::spawn("deleter2", {
+                let key = key.clone();
+                move || {
+                    let mut session = writer2;
+                    session.delete(key.clone());
+                    loom_support::block_on(session.commit())
+                }
+            });
+
+            let (first, second) = reader_handle.join().unwrap();
+            let res1 = deleter1.join().unwrap();
+            let res2 = deleter2.join().unwrap();
+
+            assert_eq!(first.as_deref(), Some(value.as_str()));
+            assert_eq!(second.as_deref(), Some(value.as_str()));
+
+            let ok_count = res1.is_ok() as u8 + res2.is_ok() as u8;
+            assert_eq!(ok_count, 1, "exactly one delete should commit");
+
+            match (res1, res2) {
+                (Ok(_), Err(err)) | (Err(err), Ok(_)) => {
+                    assert!(matches!(err, Error::PreconditionFailed));
+                }
+                _ => unreachable!("one delete must succeed and the other must fail"),
+            }
+
+            let latest = loom_support::block_on(manifest.get_latest(&key)).unwrap();
+            assert!(latest.is_none(), "committed delete removes the key");
+        });
+    }
+
+    #[test]
     fn read_session_prevents_phantoms() {
         loom_support::run(|| {
             let stores = crate::test_utils::in_memory_stores();
@@ -1034,16 +1112,12 @@ mod deterministic_test {
             });
 
             let reader = loom_support::block_on(manifest.session_read()).unwrap();
-            let readiness = LoomArc::new(AtomicUsize::new(0));
             let new_key = "gamma".to_owned();
 
             let reader_handle = loom_support::spawn("reader", {
-                let readiness = readiness.clone();
                 move || {
                     let session = reader;
                     let initial = loom_support::block_on(session.scan()).unwrap();
-                    readiness.store(1, Ordering::SeqCst);
-                    loom::thread::yield_now();
                     let after = loom_support::block_on(session.scan()).unwrap();
                     loom_support::block_on(session.end()).unwrap();
                     (initial, after)
@@ -1051,13 +1125,9 @@ mod deterministic_test {
             });
 
             let writer_handle = loom_support::spawn("writer", {
-                let readiness = readiness.clone();
                 let manifest = manifest.clone();
                 let new_key = new_key.clone();
                 move || {
-                    while readiness.load(Ordering::SeqCst) == 0 {
-                        loom::thread::yield_now();
-                    }
                     let mut session = loom_support::block_on(manifest.session_write()).unwrap();
                     session.put(new_key.clone(), "3".to_owned());
                     loom_support::block_on(session.commit())
@@ -1107,21 +1177,17 @@ mod deterministic_test {
             });
 
             let reader = loom_support::block_on(manifest.session_read()).unwrap();
-            let readiness = LoomArc::new(AtomicUsize::new(0));
             let range = ScanRange {
                 start: Some("bb".to_string()),
                 end: Some("dd".to_string()),
             };
 
             let reader_handle = loom_support::spawn("range-reader", {
-                let readiness = readiness.clone();
                 let range = range.clone();
                 move || {
                     let session = reader;
                     let initial =
                         loom_support::block_on(session.scan_range(range.clone())).unwrap();
-                    readiness.store(1, Ordering::SeqCst);
-                    loom::thread::yield_now();
                     let after = loom_support::block_on(session.scan_range(range.clone())).unwrap();
                     loom_support::block_on(session.end()).unwrap();
                     (initial, after)
@@ -1129,12 +1195,8 @@ mod deterministic_test {
             });
 
             let writer_handle = loom_support::spawn("range-writer", {
-                let readiness = readiness.clone();
                 let manifest = manifest.clone();
                 move || {
-                    while readiness.load(Ordering::SeqCst) == 0 {
-                        loom::thread::yield_now();
-                    }
                     let mut session = loom_support::block_on(manifest.session_write()).unwrap();
                     session.put("bc".into(), "3".into());
                     loom_support::block_on(session.commit())
@@ -1363,6 +1425,21 @@ mod deterministic_test {
             let ops2_vec = ops2.as_ref().clone();
             let initial_map: HashMap<String, String> = initial_pairs.iter().cloned().collect();
 
+            let reader_handle = {
+                let manifest_reader = manifest.clone();
+                let expected_snapshot = initial_map.clone();
+                loom_support::spawn("prop-reader", move || {
+                    let session = loom_support::block_on(manifest_reader.session_read()).unwrap();
+                    let observed = loom_support::block_on(session.scan()).unwrap();
+                    loom_support::block_on(session.end()).unwrap();
+                    let observed_map: HashMap<String, String> = observed.into_iter().collect();
+                    assert_eq!(
+                        observed_map, expected_snapshot,
+                        "reader observed unexpected pre-commit snapshot"
+                    );
+                })
+            };
+
             let writer1_handle = {
                 let manifest_writer1 = manifest.clone();
                 let ops = ops1.clone();
@@ -1397,6 +1474,7 @@ mod deterministic_test {
 
             let res1 = writer1_handle.join().unwrap();
             let res2 = writer2_handle.join().unwrap();
+            reader_handle.join().unwrap();
 
             let final_map: HashMap<String, String> =
                 loom_support::block_on(manifest.scan_latest(None))
