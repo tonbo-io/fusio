@@ -3,6 +3,13 @@ pub(crate) mod monoio;
 #[cfg(feature = "tokio")]
 pub(crate) mod tokio;
 
+#[cfg(feature = "asyncfs")]
+pub(crate) mod asyncfs;
+#[cfg(all(feature = "asyncfs", feature = "fs"))]
+pub use asyncfs::fs::*;
+#[cfg(feature = "asyncfs")]
+pub use asyncfs::AsyncFile;
+
 #[cfg(all(feature = "opfs", target_arch = "wasm32"))]
 pub(crate) mod opfs;
 #[cfg(all(feature = "opfs", target_arch = "wasm32", feature = "fs"))]
