@@ -10,10 +10,10 @@ pub mod session;
 pub mod snapshot; // Snapshot types and snapshot-bound reader // Unified read/write session API
                   // Re-export lease handle type for public read-lease APIs
 pub use lease::{keeper::LeaseKeeper, LeaseHandle};
-pub use crate::checkpoint::CheckpointStore;
-pub use crate::head::HeadStore;
-pub use crate::lease::LeaseStore;
-pub use crate::segment::SegmentIo;
+
+pub use crate::{
+    checkpoint::CheckpointStore, head::HeadStore, lease::LeaseStore, segment::SegmentIo,
+};
 pub(crate) mod backoff;
 pub use backoff::BackoffPolicy;
 pub mod context;
