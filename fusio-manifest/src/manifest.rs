@@ -127,6 +127,7 @@ where
     /// - Consider verifying segment continuity more strictly (e.g., ensure txn_ids are strictly
     ///   increasing without gaps and optionally validate a checksum header).
     /// - Yield between batches if recovery spans many windows to avoid starving other tasks.
+    #[tracing::instrument(skip(self))]
     pub async fn recover_orphans(&self) -> Result<usize> {
         let timer = self.store.opts.timer().clone();
         let pol = self.store.opts.backoff;
@@ -175,6 +176,7 @@ where
             if expected == 0 {
                 expected = 1;
             }
+            tracing::debug!(from_seq = ?expected, "recovering orphans");
 
             let mut adopted = 0;
             let mut max_seq = cur.last_segment_seq.unwrap_or(0);
@@ -229,7 +231,16 @@ where
             };
 
             match self.store.head.put(&new_head, cond.clone()).await {
-                Ok(_t) => return Ok(adopted),
+                Ok(_t) => {
+                    let adopted_seqs: Vec<u64> =
+                        ((max_seq - adopted as u64 + 1)..=max_seq).collect();
+                    tracing::warn!(
+                        count = adopted,
+                        segment_seqs = ?adopted_seqs,
+                        "orphan segments recovered"
+                    );
+                    return Ok(adopted);
+                }
                 Err(Error::PreconditionFailed) => {
                     if let Some(delay) = backoff_iter.next() {
                         timer.sleep(delay).await;
@@ -258,13 +269,17 @@ where
     R: RetentionPolicy + Clone,
 {
     /// Open a read session, always acquiring a lease so GC honors the snapshot.
+    #[tracing::instrument(skip(self), fields(session_type = "read"))]
     pub async fn session_read(&self) -> Result<ReadSession<K, V, HS, SS, CS, LS, E, R>> {
+        tracing::debug!("session_read started");
         let snap = self.snapshot().await?;
         self.session_at(snap).await
     }
 
     /// Open a write session (pinned, with lease)
+    #[tracing::instrument(skip(self), fields(session_type = "write"))]
     pub async fn session_write(&self) -> Result<WriteSession<K, V, HS, SS, CS, LS, E, R>> {
+        tracing::debug!("session_write started");
         // Opportunistically adopt durable-but-unpublished segments before opening a writer.
         self.recover_orphans().await?;
         let snap = self.snapshot().await?;
@@ -326,7 +341,9 @@ where
         Ok(result)
     }
 
+    #[tracing::instrument(skip(self))]
     pub async fn snapshot(&self) -> Result<Snapshot> {
+        tracing::debug!("loading snapshot");
         match self.store.head.load().await? {
             None => Ok(Snapshot {
                 head_tag: None,
@@ -342,13 +359,19 @@ where
                 } else {
                     (None, None)
                 };
-                Ok(Snapshot {
+                let snap = Snapshot {
                     head_tag: Some(tag),
                     txn_id: TxnId(h.last_txn_id),
                     last_segment_seq: h.last_segment_seq,
                     checkpoint_seq,
                     checkpoint_id,
-                })
+                };
+                tracing::info!(
+                    txn_id = %snap.txn_id.0,
+                    last_segment_seq = ?snap.last_segment_seq,
+                    "snapshot loaded"
+                );
+                Ok(snap)
             }
         }
     }

@@ -492,6 +492,7 @@ where
         self.inner.release_lease().await
     }
 
+    #[tracing::instrument(skip(self), fields(txn_id = %self.inner.snapshot().txn_id.0.saturating_add(1)))]
     pub async fn commit(mut self) -> Result<()> {
         let snapshot = self.inner.snapshot().clone();
         let store = self.inner.store().clone();
@@ -509,6 +510,16 @@ where
         let expected_tag = snapshot.head_tag.clone();
 
         let staged = core::mem::take(&mut self.staged);
+
+        let num_puts = staged.iter().filter(|(_, op, _)| *op == Op::Put).count();
+        let num_dels = staged.iter().filter(|(_, op, _)| *op == Op::Del).count();
+        tracing::debug!(
+            txn_id = %next_txn,
+            num_puts = %num_puts,
+            num_dels = %num_dels,
+            "committing write session"
+        );
+
         let mut records = Vec::with_capacity(staged.len());
         for (k, op, v) in staged.into_iter() {
             records.push(Record {
@@ -534,6 +545,7 @@ where
                 (Some(_), None) => true,
             };
             if stale {
+                tracing::warn!(txn_id = %next_txn, "PRECONDITION FAILED on commit");
                 self.inner.release_lease_silent().await;
                 return Err(Error::PreconditionFailed);
             }
@@ -599,6 +611,7 @@ where
 
             match store.head.put(&new_head, cond).await {
                 Ok(_) => {
+                    tracing::info!(txn_id = %next_txn, "commit succeeded");
                     if let Some(lease) = self.inner.lease_mut().take() {
                         let _ = store.leases.release(lease).await;
                     }
@@ -626,6 +639,7 @@ where
                         }
                     }
                     RetryClass::DurableConflict => {
+                        tracing::warn!(txn_id = %next_txn, "PRECONDITION FAILED on commit");
                         self.inner.release_lease_silent().await;
                         return Err(Error::PreconditionFailed);
                     }

@@ -90,21 +90,41 @@ where
         head: &HeadJson,
         cond: PutCondition,
     ) -> impl MaybeSendFuture<Output = Result<HeadTag, Error>> + '_ {
+        let txn_id = head.last_txn_id;
         let body =
             serde_json::to_vec(head).map_err(|e| Error::Corrupt(format!("serialize head: {e}")));
         async move {
+            tracing::debug!(
+                txn_id = %txn_id,
+                condition = ?cond,
+                "putting HEAD with condition"
+            );
+
             let body = body?;
             let path = Path::parse(&self.key).map_err(Error::other)?;
             let condition = match cond {
                 PutCondition::IfNotExists => CasCondition::IfNotExists,
                 PutCondition::IfMatch(tag) => CasCondition::IfMatch(tag.0.clone()),
             };
-            let tag = self
+            let result = self
                 .cas
                 .put_conditional(&path, &body, Some("application/json"), None, condition)
                 .await
-                .map_err(map_fs_error)?;
-            Ok(HeadTag(tag))
+                .map_err(map_fs_error);
+
+            match &result {
+                Ok(tag) => tracing::info!(
+                    txn_id = %txn_id,
+                    tag = %tag,
+                    "HEAD updated successfully"
+                ),
+                Err(_) => tracing::warn!(
+                    txn_id = %txn_id,
+                    "HEAD CAS conflict"
+                ),
+            }
+
+            result.map(HeadTag)
         }
     }
 }
