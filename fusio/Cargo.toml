@@ -16,9 +16,9 @@ aws = [
     "chrono",
     "chrono?/serde",
     "fs",
+    "hex",
     "http",
     "quick-xml",
-    "hex",
     "reqsign-aws-v4",
     "reqsign-core",
     "serde",
@@ -27,8 +27,10 @@ aws = [
 ]
 bytes = ["dep:bytes", "fusio-core/bytes"]
 completion-based = ["fusio-core/completion-based"]
-default = ["dyn", "fs", "executor"]
+default = ["dyn", "executor", "fs"]
 dyn = ["fusio-core/alloc"]
+executor = []
+executor-tokio = ["executor", "tokio", "tokio/rt", "tokio/sync", "tokio/time"]
 fs = ["tokio?/fs", "tokio?/rt"]
 http = [
     "async-stream",
@@ -41,7 +43,7 @@ http = [
     "tokio?/rt",
 ]
 monoio = ["async-stream", "completion-based", "dep:monoio", "no-send"]
-monoio-http = ["http", "dep:monoio-http-client", "dep:monoio-http", "monoio"]
+monoio-http = ["dep:monoio-http", "dep:monoio-http-client", "http", "monoio"]
 no-send = ["fusio-core/no-send"]
 opfs = [
     "async-stream",
@@ -57,8 +59,6 @@ tokio = ["async-stream", "dep:tokio"]
 tokio-http = ["dep:reqwest", "http", "tokio"]
 tokio-uring = ["async-stream", "completion-based", "dep:tokio-uring", "no-send"]
 wasm-http = ["dep:reqwest", "http"]
-executor = []
-executor-tokio = ["executor", "tokio", "tokio/sync", "tokio/rt"]
 
 [[bench]]
 harness = false
