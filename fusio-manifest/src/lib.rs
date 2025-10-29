@@ -12,7 +12,10 @@ pub mod snapshot; // Snapshot types and snapshot-bound reader // Unified read/wr
 pub use lease::{keeper::LeaseKeeper, LeaseHandle};
 
 pub use crate::{
-    checkpoint::CheckpointStore, head::HeadStore, lease::LeaseStore, segment::SegmentIo,
+    checkpoint::{CheckpointStore, CheckpointStoreImpl},
+    head::{HeadStore, HeadStoreImpl},
+    lease::{LeaseStore, LeaseStoreImpl},
+    segment::{SegmentIo, SegmentStoreImpl},
 };
 pub(crate) mod backoff;
 pub use backoff::BackoffPolicy;
