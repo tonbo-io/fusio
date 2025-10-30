@@ -125,7 +125,6 @@ async fn replace_file(tmp_path: &StdPath, final_path: &StdPath) -> Result<(), Er
     match tokio::fs::rename(tmp_path, final_path).await {
         Ok(()) => Ok(()),
         Err(err) if err.kind() == ErrorKind::AlreadyExists => {
-            tokio::fs::remove_file(final_path).await?;
             tokio::fs::rename(tmp_path, final_path).await?;
             Ok(())
         }
