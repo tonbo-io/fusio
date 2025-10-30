@@ -10,7 +10,9 @@ use std::os::unix::fs::FileExt;
 
 #[cfg(not(unix))]
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
-use tokio::{fs::File, io::AsyncWriteExt, task::block_in_place};
+#[cfg(unix)]
+use tokio::task::block_in_place;
+use tokio::{fs::File, io::AsyncWriteExt};
 
 use crate::{
     durability::{FileCommit, FileSync},

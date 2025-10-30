@@ -51,10 +51,10 @@ fn metadata_tag(meta: &std::fs::Metadata) -> String {
 
         let last_write = meta.last_write_time();
         let creation = meta.creation_time();
-        let file_index = ((meta.file_index_high() as u128) << 64) | meta.file_index_low() as u128;
+        let attributes = meta.file_attributes();
         let tag = format!(
-            "{:016x}:{:016x}:{:016x}:{:032x}",
-            len, last_write, creation, file_index
+            "{:016x}:{:016x}:{:016x}:{:08x}",
+            len, last_write, creation, attributes
         );
         tag
     }
