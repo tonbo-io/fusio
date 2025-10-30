@@ -12,6 +12,7 @@ use fusio_core::MaybeSendFuture;
 use futures_core::Stream;
 use tokio::{
     fs::{create_dir_all, remove_file, File, OpenOptions as TokioOpenOptions},
+    io::AsyncReadExt,
     task::spawn_blocking,
 };
 
@@ -26,17 +27,57 @@ use crate::{
 static TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 fn metadata_tag(meta: &std::fs::Metadata) -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-
     let len = meta.len();
-    let modified = meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
-    let duration = modified.duration_since(UNIX_EPOCH).unwrap_or_default();
-    format!(
-        "{:016x}:{:016x}:{:08x}",
-        len,
-        duration.as_secs(),
-        duration.subsec_nanos()
-    )
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+
+        let mtime = meta.mtime() as u64;
+        let mtime_nsec = meta.mtime_nsec() as u32;
+        let ctime = meta.ctime() as u64;
+        let ctime_nsec = meta.ctime_nsec() as u32;
+        let ino = meta.ino();
+        let tag = format!(
+            "{:016x}:{:016x}:{:08x}:{:016x}:{:08x}:{:016x}",
+            len, mtime, mtime_nsec, ctime, ctime_nsec, ino
+        );
+        tag
+    }
+
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+
+        let last_write = meta.last_write_time();
+        let creation = meta.creation_time();
+        let file_index = ((meta.file_index_high() as u128) << 64) | meta.file_index_low() as u128;
+        let tag = format!(
+            "{:016x}:{:016x}:{:016x}:{:032x}",
+            len, last_write, creation, file_index
+        );
+        tag
+    }
+
+    #[cfg(not(any(unix, windows)))]
+    {
+        use std::time::SystemTime;
+
+        let modified = meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
+        let (secs, nanos, sign) = encode_system_time(modified);
+        format!("{:016x}:{:016x}:{:08x}:{:02x}", len, secs, nanos, sign)
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
+fn encode_system_time(time: std::time::SystemTime) -> (u64, u32, u8) {
+    match time.duration_since(std::time::SystemTime::UNIX_EPOCH) {
+        Ok(duration) => (duration.as_secs(), duration.subsec_nanos(), 0),
+        Err(err) => {
+            let duration = err.duration();
+            (duration.as_secs(), duration.subsec_nanos(), 1)
+        }
+    }
 }
 
 async fn current_tag(path: &StdPath) -> Result<String, Error> {
@@ -64,20 +105,58 @@ async fn write_atomic(path: &StdPath, payload: &[u8]) -> Result<(), Error> {
 
     tokio::fs::write(&tmp_path, payload).await?;
 
-    if tokio::fs::try_exists(path).await? {
-        tokio::fs::remove_file(path).await?;
+    match replace_file(&tmp_path, path).await {
+        Ok(()) => Ok(()),
+        Err(err) => {
+            let _ = tokio::fs::remove_file(&tmp_path).await;
+            Err(err)
+        }
     }
+}
 
-    let result = tokio::fs::rename(&tmp_path, path).await;
-    if let Err(err) = result {
-        let _ = tokio::fs::remove_file(&tmp_path).await;
-        return Err(err.into());
-    }
-
+#[cfg(not(windows))]
+async fn replace_file(tmp_path: &StdPath, final_path: &StdPath) -> Result<(), Error> {
+    tokio::fs::rename(tmp_path, final_path).await?;
     Ok(())
 }
 
-async fn acquire_lock(path: &StdPath) -> Result<File, Error> {
+#[cfg(windows)]
+async fn replace_file(tmp_path: &StdPath, final_path: &StdPath) -> Result<(), Error> {
+    match tokio::fs::rename(tmp_path, final_path).await {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == ErrorKind::AlreadyExists => {
+            tokio::fs::remove_file(final_path).await?;
+            tokio::fs::rename(tmp_path, final_path).await?;
+            Ok(())
+        }
+        Err(err) => Err(err.into()),
+    }
+}
+
+struct LockFileGuard {
+    path: PathBuf,
+    file: Option<File>,
+}
+
+impl LockFileGuard {
+    fn new(path: PathBuf, file: File) -> Self {
+        Self {
+            path,
+            file: Some(file),
+        }
+    }
+}
+
+impl Drop for LockFileGuard {
+    fn drop(&mut self) {
+        if let Some(file) = self.file.take() {
+            drop(file);
+        }
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+async fn acquire_lock(path: &StdPath) -> Result<LockFileGuard, Error> {
     loop {
         match TokioOpenOptions::new()
             .create_new(true)
@@ -85,7 +164,7 @@ async fn acquire_lock(path: &StdPath) -> Result<File, Error> {
             .open(path)
             .await
         {
-            Ok(file) => return Ok(file),
+            Ok(file) => return Ok(LockFileGuard::new(path.to_path_buf(), file)),
             Err(err) if err.kind() == ErrorKind::AlreadyExists => {
                 return Err(Error::PreconditionFailed)
             }
@@ -233,17 +312,18 @@ impl FsCas for TokioFs {
         let path = path.clone();
         Box::pin(async move {
             let local_path = path_to_local(&path).map_err(|err| Error::Path(Box::new(err)))?;
-            match tokio::fs::read(&local_path).await {
-                Ok(bytes) => {
-                    let meta = tokio::fs::metadata(&local_path).await;
-                    let tag = match meta {
-                        Ok(meta) => metadata_tag(&meta),
-                        Err(err) if err.kind() == ErrorKind::NotFound => {
-                            return Err(Error::PreconditionFailed)
+            match File::open(&local_path).await {
+                Ok(mut file) => {
+                    let mut bytes = Vec::new();
+                    file.read_to_end(&mut bytes).await?;
+                    let meta = file.metadata().await.map_err(|err| {
+                        if err.kind() == ErrorKind::NotFound {
+                            Error::PreconditionFailed
+                        } else {
+                            err.into()
                         }
-                        Err(err) => return Err(err.into()),
-                    };
-                    Ok(Some((bytes, tag)))
+                    })?;
+                    Ok(Some((bytes, metadata_tag(&meta))))
                 }
                 Err(err) if err.kind() == ErrorKind::NotFound => Ok(None),
                 Err(err) => Err(err.into()),
@@ -299,8 +379,6 @@ impl FsCas for TokioFs {
             .await;
 
             drop(lock);
-            let _ = tokio::fs::remove_file(&lock_path).await;
-
             outcome
         })
     }
