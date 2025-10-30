@@ -53,6 +53,11 @@ mod tests {
 
         use super::{HttpClient, TokioClient};
 
+        if std::env::var_os("FUSIO_ENABLE_NETWORK_TESTS").is_none() {
+            // Skip when outbound networking is not explicitly enabled.
+            return;
+        }
+
         let request = Request::get("https://hyper.rs/")
             .body(Empty::<Bytes>::new())
             .unwrap();

@@ -1,9 +1,17 @@
-use std::io;
+use std::{
+    ffi::OsString,
+    io,
+    io::ErrorKind,
+    path::{Path as StdPath, PathBuf},
+    pin::Pin,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 use async_stream::stream;
+use fusio_core::MaybeSendFuture;
 use futures_core::Stream;
 use tokio::{
-    fs::{create_dir_all, remove_file},
+    fs::{create_dir_all, remove_file, File, OpenOptions as TokioOpenOptions},
     task::spawn_blocking,
 };
 
@@ -11,9 +19,87 @@ use crate::{
     disk::tokio::TokioFile,
     durability::DirSync,
     error::Error,
-    fs::{FileMeta, FileSystemTag, Fs, OpenOptions},
+    fs::{CasCondition, FileMeta, FileSystemTag, Fs, FsCas, OpenOptions},
     path::{path_to_local, Path},
 };
+
+static TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+fn metadata_tag(meta: &std::fs::Metadata) -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let len = meta.len();
+    let modified = meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
+    let duration = modified.duration_since(UNIX_EPOCH).unwrap_or_default();
+    format!(
+        "{:016x}:{:016x}:{:08x}",
+        len,
+        duration.as_secs(),
+        duration.subsec_nanos()
+    )
+}
+
+async fn current_tag(path: &StdPath) -> Result<String, Error> {
+    let meta = tokio::fs::metadata(path).await?;
+    Ok(metadata_tag(&meta))
+}
+
+fn with_suffix(path: &StdPath, suffix: &str) -> PathBuf {
+    let mut os: OsString = path.as_os_str().to_os_string();
+    os.push(suffix);
+    PathBuf::from(os)
+}
+
+async fn write_atomic(path: &StdPath, payload: &[u8]) -> Result<(), Error> {
+    let parent = path.parent().ok_or_else(|| {
+        Error::Path(Box::new(io::Error::new(
+            ErrorKind::InvalidInput,
+            "path has no parent",
+        )))
+    })?;
+
+    let unique = TMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let tmp_name = format!(".tmp-{}-{}", std::process::id(), unique);
+    let tmp_path = parent.join(tmp_name);
+
+    tokio::fs::write(&tmp_path, payload).await?;
+
+    if tokio::fs::try_exists(path).await? {
+        tokio::fs::remove_file(path).await?;
+    }
+
+    let result = tokio::fs::rename(&tmp_path, path).await;
+    if let Err(err) = result {
+        let _ = tokio::fs::remove_file(&tmp_path).await;
+        return Err(err.into());
+    }
+
+    Ok(())
+}
+
+async fn acquire_lock(path: &StdPath) -> Result<File, Error> {
+    loop {
+        match TokioOpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(path)
+            .await
+        {
+            Ok(file) => return Ok(file),
+            Err(err) if err.kind() == ErrorKind::AlreadyExists => {
+                return Err(Error::PreconditionFailed)
+            }
+            Err(err) if err.kind() == ErrorKind::NotFound => {
+                if let Some(parent) = path.parent() {
+                    create_dir_all(parent).await?;
+                    continue;
+                }
+                return Err(err.into());
+            }
+            Err(err) => return Err(err.into()),
+        }
+    }
+}
 
 pub struct TokioFs;
 
@@ -136,5 +222,149 @@ impl DirSync for TokioFs {
         Err(Error::Unsupported {
             message: "DirSync is not supported on Windows".into(),
         })
+    }
+}
+
+impl FsCas for TokioFs {
+    fn load_with_tag(
+        &self,
+        path: &Path,
+    ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<Option<(Vec<u8>, String)>, Error>> + '_>> {
+        let path = path.clone();
+        Box::pin(async move {
+            let local_path = path_to_local(&path).map_err(|err| Error::Path(Box::new(err)))?;
+            match tokio::fs::read(&local_path).await {
+                Ok(bytes) => {
+                    let meta = tokio::fs::metadata(&local_path).await;
+                    let tag = match meta {
+                        Ok(meta) => metadata_tag(&meta),
+                        Err(err) if err.kind() == ErrorKind::NotFound => {
+                            return Err(Error::PreconditionFailed)
+                        }
+                        Err(err) => return Err(err.into()),
+                    };
+                    Ok(Some((bytes, tag)))
+                }
+                Err(err) if err.kind() == ErrorKind::NotFound => Ok(None),
+                Err(err) => Err(err.into()),
+            }
+        })
+    }
+
+    fn put_conditional(
+        &self,
+        path: &Path,
+        payload: &[u8],
+        _content_type: Option<&str>,
+        _metadata: Option<Vec<(String, String)>>,
+        condition: CasCondition,
+    ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<String, Error>> + '_>> {
+        let path = path.clone();
+        let payload = payload.to_vec();
+        Box::pin(async move {
+            let local_path = path_to_local(&path).map_err(|err| Error::Path(Box::new(err)))?;
+            if let Some(parent) = local_path.parent() {
+                create_dir_all(parent).await?;
+            }
+
+            let lock_path = with_suffix(&local_path, ".lock");
+            let lock = acquire_lock(&lock_path).await?;
+
+            let outcome = async {
+                match condition {
+                    CasCondition::IfNotExists => {
+                        if tokio::fs::try_exists(&local_path).await? {
+                            return Err(Error::PreconditionFailed);
+                        }
+                        write_atomic(&local_path, &payload).await?;
+                        current_tag(&local_path).await
+                    }
+                    CasCondition::IfMatch(expected) => {
+                        let meta = tokio::fs::metadata(&local_path).await.map_err(|err| {
+                            if err.kind() == ErrorKind::NotFound {
+                                Error::PreconditionFailed
+                            } else {
+                                err.into()
+                            }
+                        })?;
+                        let tag = metadata_tag(&meta);
+                        if tag != expected {
+                            return Err(Error::PreconditionFailed);
+                        }
+                        write_atomic(&local_path, &payload).await?;
+                        current_tag(&local_path).await
+                    }
+                }
+            }
+            .await;
+
+            drop(lock);
+            let _ = tokio::fs::remove_file(&lock_path).await;
+
+            outcome
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::fs::CasCondition;
+
+    #[tokio::test]
+    async fn cas_round_trip() {
+        let fs = TokioFs;
+        let tmp = tempfile::tempdir().unwrap();
+        let local = tmp.path().join("state.json");
+        let path = Path::from_absolute_path(&local).unwrap();
+
+        assert!(fs.load_with_tag(&path).await.unwrap().is_none());
+
+        let payload1 = br#"{"a":1}"#;
+        let tag1 = fs
+            .put_conditional(
+                &path,
+                payload1,
+                Some("application/json"),
+                None,
+                CasCondition::IfNotExists,
+            )
+            .await
+            .unwrap();
+
+        let loaded = fs.load_with_tag(&path).await.unwrap().unwrap();
+        assert_eq!(loaded.0, payload1);
+        assert_eq!(loaded.1, tag1);
+
+        let err = fs
+            .put_conditional(&path, payload1, None, None, CasCondition::IfNotExists)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, Error::PreconditionFailed));
+
+        let payload2 = br#"{"a":2}"#;
+        let tag2 = fs
+            .put_conditional(
+                &path,
+                payload2,
+                None,
+                None,
+                CasCondition::IfMatch(tag1.clone()),
+            )
+            .await
+            .unwrap();
+        assert_ne!(tag1, tag2);
+
+        let err = fs
+            .put_conditional(
+                &path,
+                payload1,
+                None,
+                None,
+                CasCondition::IfMatch("bogus".into()),
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, Error::PreconditionFailed));
     }
 }
