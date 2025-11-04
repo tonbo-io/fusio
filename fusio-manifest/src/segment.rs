@@ -1,4 +1,4 @@
-use std::{collections::HashMap, io::ErrorKind, pin::Pin};
+use std::{collections::HashMap, fmt, io::ErrorKind, pin::Pin};
 
 use fusio::{
     fs::{CasCondition, Fs, FsCas},
@@ -8,6 +8,7 @@ use fusio::{
 };
 use fusio_core::{MaybeSend, MaybeSendFuture, MaybeSync};
 use futures_util::StreamExt;
+use serde::Deserialize;
 
 use crate::types::{Error, Result, SegmentId};
 
@@ -265,6 +266,63 @@ fn map_fs_error(err: FsError) -> Error {
     }
 }
 
+#[derive(Deserialize)]
+struct SegmentTxnOnly {
+    txn_id: u64,
+}
+
+#[derive(Debug)]
+struct SegmentMetadataParseError {
+    path: String,
+    source: serde_json::Error,
+}
+
+impl SegmentMetadataParseError {
+    fn new(path: &Path, source: serde_json::Error) -> Self {
+        Self {
+            path: path.to_string(),
+            source,
+        }
+    }
+}
+
+impl fmt::Display for SegmentMetadataParseError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "failed to parse txn metadata from segment {}", self.path)
+    }
+}
+
+impl std::error::Error for SegmentMetadataParseError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.source)
+    }
+}
+
+impl ObjectHead for fusio::impls::disk::TokioFs {
+    fn head_metadata<'a>(
+        &'a self,
+        path: &'a Path,
+    ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<Option<HashMap<String, String>>, FsError>> + 'a>>
+    {
+        Box::pin(async move {
+            let path_clone = path.clone();
+            let ext = path_clone.extension().map(str::to_owned);
+            match FsCas::load_with_tag(self, &path_clone).await? {
+                Some((bytes, _)) if matches!(ext.as_deref(), Some("json")) => {
+                    let header: SegmentTxnOnly = serde_json::from_slice(&bytes).map_err(|err| {
+                        FsError::Other(Box::new(SegmentMetadataParseError::new(&path_clone, err)))
+                    })?;
+                    let mut meta = HashMap::with_capacity(1);
+                    meta.insert(TXN_ID_HEADER.to_string(), header.txn_id.to_string());
+                    Ok(Some(meta))
+                }
+                Some(_) => Ok(None),
+                None => Ok(None),
+            }
+        })
+    }
+}
+
 impl ObjectHead for AmazonS3 {
     fn head_metadata<'a>(
         &'a self,
@@ -288,5 +346,42 @@ impl ObjectHead for InMemoryFs {
     ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<Option<HashMap<String, String>>, FsError>> + 'a>>
     {
         Box::pin(async move { Ok(self.head_object(path).await?.map(|head| head.metadata)) })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use fusio::disk::LocalFs;
+    use tempfile::TempDir;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn segment_store_localfs_round_trip() {
+        let tmp = TempDir::new().expect("create temp dir");
+        let segments_root = tmp.path().join("segments");
+        std::fs::create_dir_all(&segments_root).expect("create segments dir");
+
+        let prefix_path = fusio::path::Path::from_absolute_path(&segments_root)
+            .expect("convert absolute path to fusio path");
+        let prefix: String = prefix_path.into();
+
+        let store = SegmentStoreImpl::new(LocalFs {}, prefix);
+
+        let payload = br#"{"txn_id":42,"records":[]}"#;
+        let seg_id = store
+            .put_next(1, 42, payload, "application/json")
+            .await
+            .expect("write segment");
+        assert_eq!(seg_id.seq, 1);
+
+        let meta = store.load_meta(&seg_id).await.expect("load metadata");
+        assert_eq!(meta.txn_id, 42);
+
+        let listed = store.list_from(0, 10).await.expect("list segments");
+        assert_eq!(listed, vec![SegmentId { seq: 1 }]);
+
+        let bytes = store.get(&seg_id).await.expect("fetch segment payload");
+        assert_eq!(bytes, payload);
     }
 }

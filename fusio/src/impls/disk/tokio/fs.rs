@@ -179,6 +179,7 @@ async fn acquire_lock(path: &StdPath) -> Result<LockFileGuard, Error> {
     }
 }
 
+#[derive(Clone, Copy, Default, Debug)]
 pub struct TokioFs;
 
 impl Fs for TokioFs {
