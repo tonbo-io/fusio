@@ -214,7 +214,11 @@ where
     ) -> impl MaybeSendFuture<Output = Result<Vec<SegmentId>>> + '_ {
         async move {
             let mut out = Vec::new();
-            let prefix_path = Path::from(self.prefix.clone());
+            let prefix_path = if self.prefix.is_empty() {
+                Path::default()
+            } else {
+                Path::parse(&self.prefix).map_err(Error::other)?
+            };
             let stream = self.fs.list(&prefix_path).await?;
             futures_util::pin_mut!(stream);
             while let Some(item) = stream.next().await {
@@ -237,7 +241,11 @@ where
 
     fn delete_upto(&self, upto_seq: u64) -> impl MaybeSendFuture<Output = Result<()>> + '_ {
         async move {
-            let prefix_path = Path::from(self.prefix.clone());
+            let prefix_path = if self.prefix.is_empty() {
+                Path::default()
+            } else {
+                Path::parse(&self.prefix).map_err(Error::other)?
+            };
             let stream = self.fs.list(&prefix_path).await?;
             futures_util::pin_mut!(stream);
             while let Some(item) = stream.next().await {
