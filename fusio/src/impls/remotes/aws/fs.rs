@@ -251,16 +251,13 @@ impl Fs for AmazonS3 {
     }
 
     async fn open_options(&self, path: &Path, options: OpenOptions) -> Result<Self::File, Error> {
+        let mut file = S3File::new(self.clone(), path.clone(), options.create || options.write);
+
         if options.write && !options.truncate {
-            return Err(Error::Unsupported {
-                message: "Only truncate is supported in S3".to_string(),
-            });
+            file.prefill_existing().await?;
         }
-        Ok(S3File::new(
-            self.clone(),
-            path.clone(),
-            options.create || options.write,
-        ))
+
+        Ok(file)
     }
 
     async fn create_dir_all(_path: &Path) -> Result<(), Error> {
