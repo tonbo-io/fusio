@@ -16,7 +16,7 @@ fusio-core = { path = "../fusio-core", version = "0.4.1", features = ["std"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1" }
 sha2 = { version = "0.10" }
-fusio = { path = "../fusio", version = "0.4.1", default-features = false, features = ["executor", "executor-tokio", "aws", "tokio-http"] }
+fusio = { path = "../fusio", version = "0.4.1", default-features = false, features = ["executor", "executor-tokio", "fs", "aws", "tokio-http"] }
 bytes = { version = "1" }
 futures-util = { workspace = true }
 futures-channel = "0.3"
@@ -34,6 +34,7 @@ rand = "0.8"
 rstest = "0.21"
 loom = "0.7"
 proptest = "1"
+tempfile = "3"
 
 [package.metadata.docs.rs]
 all-features = true
