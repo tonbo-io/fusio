@@ -183,7 +183,6 @@ impl S3Writer {
 
         Ok(true)
     }
-
     async fn upload_part<F>(&mut self, fn_bytes_init: F) -> Result<(), Error>
     where
         F: FnOnce() -> BytesMut,
