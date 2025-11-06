@@ -99,9 +99,10 @@ impl MultipartUpload {
                 (None, body, Some(from_url))
             }
         };
+        let endpoint = self.fs.as_ref().options.endpoint.trim_end_matches('/');
         let url = format!(
             "{}/{}",
-            self.fs.as_ref().options.endpoint,
+            endpoint,
             utf8_percent_encode(self.path.as_ref(), &STRICT_PATH_ENCODE_SET)
         );
         let mut builder = Request::builder().uri(url).method(Method::PUT);
@@ -129,9 +130,10 @@ impl MultipartUpload {
     }
 
     pub(crate) async fn initiate(&self, headers: Option<&HeaderMap>) -> Result<String, Error> {
+        let endpoint = self.fs.as_ref().options.endpoint.trim_end_matches('/');
         let url = format!(
             "{}/{}?uploads",
-            self.fs.as_ref().options.endpoint,
+            endpoint,
             utf8_percent_encode(self.path.as_ref(), &STRICT_PATH_ENCODE_SET)
         );
         let mut builder = Request::builder()
@@ -173,9 +175,10 @@ impl MultipartUpload {
         B: Body<Data = Bytes> + Clone + Unpin + Send + Sync + 'static,
         B::Error: std::error::Error + Send + Sync + 'static,
     {
+        let endpoint = self.fs.as_ref().options.endpoint.trim_end_matches('/');
         let url = format!(
             "{}/{}?partNumber={}&uploadId={}",
-            self.fs.as_ref().options.endpoint,
+            endpoint,
             utf8_percent_encode(self.path.as_ref(), &STRICT_PATH_ENCODE_SET),
             part_num + 1,
             utf8_percent_encode(upload_id, &STRICT_PATH_ENCODE_SET),
@@ -205,9 +208,10 @@ impl MultipartUpload {
         upload_id: &str,
         parts: &[MultipartPart],
     ) -> Result<(), Error> {
+        let endpoint = self.fs.as_ref().options.endpoint.trim_end_matches('/');
         let url = format!(
             "{}/{}?uploadId={}",
-            self.fs.as_ref().options.endpoint,
+            endpoint,
             utf8_percent_encode(self.path.as_ref(), &STRICT_PATH_ENCODE_SET),
             utf8_percent_encode(upload_id, &STRICT_PATH_ENCODE_SET),
         );
