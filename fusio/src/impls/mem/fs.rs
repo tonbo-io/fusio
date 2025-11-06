@@ -373,6 +373,7 @@ pub struct HeadObject {
     pub size: u64,
     pub etag: Option<String>,
     pub metadata: HashMap<String, String>,
+    pub headers: Vec<(String, String)>,
 }
 
 impl InMemoryFs {
@@ -382,10 +383,18 @@ impl InMemoryFs {
             return Ok(None);
         };
         let state = entry.state.lock().unwrap();
+        let mut headers = Vec::new();
+        if let Some(content_type) = state.content_type.as_ref() {
+            headers.push(("content-type".to_string(), content_type.clone()));
+        }
+        for (name, value) in &state.metadata {
+            headers.push((name.clone(), value.clone()));
+        }
         Ok(Some(HeadObject {
             size: state.data.len() as u64,
             etag: Some(state.etag.clone()),
             metadata: state.metadata.clone(),
+            headers,
         }))
     }
 }

@@ -25,6 +25,7 @@ pub struct S3File {
     fs: AmazonS3,
     path: Path,
     writer: Option<S3Writer>,
+    prefilled: bool,
 }
 
 impl S3File {
@@ -35,7 +36,53 @@ impl S3File {
                 .then(|| S3Writer::new(Arc::new(MultipartUpload::new(fs.clone(), path.clone())))),
             fs,
             path,
+            prefilled: false,
         }
+    }
+
+    pub(crate) async fn prefill_existing(&mut self) -> Result<(), Error> {
+        if self.prefilled {
+            return Ok(());
+        }
+
+        let Some(writer) = self.writer.as_mut() else {
+            self.prefilled = true;
+            return Ok(());
+        };
+
+        let Some(existing) = self.fs.head_object(&self.path).await? else {
+            self.prefilled = true;
+            return Ok(());
+        };
+
+        writer.copy_object_headers(&existing.headers)?;
+
+        if existing.size == 0 {
+            self.prefilled = true;
+            return Ok(());
+        }
+
+        let mut reader = S3File::new(self.fs.clone(), self.path.clone(), false);
+        let mut offset: u64 = 0;
+        let mut remaining = existing.size;
+        const CHUNK_SIZE: u64 = 8 * 1024 * 1024;
+
+        while remaining > 0 {
+            let to_read = remaining.min(CHUNK_SIZE) as usize;
+            let buf = vec![0u8; to_read];
+            let (read_res, buf) = reader.read_exact_at(buf, offset).await;
+            read_res?;
+            let (write_res, _buf) = writer.write_all(buf).await;
+            write_res?;
+
+            offset = offset.saturating_add(to_read as u64);
+            remaining = remaining.saturating_sub(to_read as u64);
+        }
+
+        writer.flush().await?;
+
+        self.prefilled = true;
+        Ok(())
     }
 
     fn build_request(&self, method: Method) -> Builder {
@@ -284,6 +331,8 @@ mod tests {
         use std::sync::Arc;
 
         use crate::{
+            fs::{Fs, OpenOptions},
+            path::Path,
             remotes::{
                 aws::{
                     credential::AwsCredential,
@@ -336,23 +385,42 @@ mod tests {
             }),
         };
 
+        let path: Path = "read-write.txt".into();
+        let initial = b"The answer of life, universe and everthing";
+        let appended = b" (revisited)";
+
         {
-            let mut s3 = S3File::new(s3.clone(), "read-write.txt".into(), true);
+            let mut file = s3
+                .open_options(&path, OpenOptions::default().create(true).truncate(true))
+                .await
+                .unwrap();
 
-            let (result, _) = s3
-                .write_all(&b"The answer of life, universe and everthing"[..])
-                .await;
+            let (result, _) = file.write_all(&initial[..]).await;
             result.unwrap();
-            s3.close().await.unwrap();
+            file.close().await.unwrap();
         }
-        let mut s3 = S3File::new(s3, "read-write.txt".into(), false);
 
-        let size = s3.size().await.unwrap();
-        assert_eq!(size, 42);
+        {
+            let mut file = s3
+                .open_options(&path, OpenOptions::default().write(true))
+                .await
+                .unwrap();
+
+            let (result, _) = file.write_all(&appended[..]).await;
+            result.unwrap();
+            file.close().await.unwrap();
+        }
+
+        let mut reader = S3File::new(s3, path.clone(), false);
+
+        let size = reader.size().await.unwrap();
+        assert_eq!(size, (initial.len() + appended.len()) as u64);
         let buf = Vec::new();
-        let (result, buf) = s3.read_to_end_at(buf, 0).await;
+        let (result, buf) = reader.read_to_end_at(buf, 0).await;
         result.unwrap();
-        assert_eq!(buf, b"The answer of life, universe and everthing");
+        let mut expected = initial.to_vec();
+        expected.extend_from_slice(appended);
+        assert_eq!(buf, expected);
     }
 
     #[ignore]

@@ -133,6 +133,7 @@ pub struct HeadObject {
     pub size: u64,
     pub etag: Option<String>,
     pub metadata: HashMap<String, String>,
+    pub headers: Vec<(String, String)>,
 }
 
 impl AsRef<AmazonS3Inner> for AmazonS3 {
@@ -229,6 +230,13 @@ impl AmazonS3 {
             }
         }
 
+        let mut header_pairs = Vec::new();
+        for (name, value) in headers.iter() {
+            if let Ok(val) = value.to_str() {
+                header_pairs.push((name.as_str().to_string(), val.to_string()));
+            }
+        }
+
         let _ = response
             .into_body()
             .collect()
@@ -239,6 +247,7 @@ impl AmazonS3 {
             size,
             etag,
             metadata,
+            headers: header_pairs,
         }))
     }
 }
@@ -251,16 +260,13 @@ impl Fs for AmazonS3 {
     }
 
     async fn open_options(&self, path: &Path, options: OpenOptions) -> Result<Self::File, Error> {
+        let mut file = S3File::new(self.clone(), path.clone(), options.create || options.write);
+
         if options.write && !options.truncate {
-            return Err(Error::Unsupported {
-                message: "Only truncate is supported in S3".to_string(),
-            });
+            file.prefill_existing().await?;
         }
-        Ok(S3File::new(
-            self.clone(),
-            path.clone(),
-            options.create || options.write,
-        ))
+
+        Ok(file)
     }
 
     async fn create_dir_all(_path: &Path) -> Result<(), Error> {
@@ -392,11 +398,14 @@ impl Fs for AmazonS3 {
     async fn copy(&self, from: &Path, to: &Path) -> Result<(), Error> {
         let upload = MultipartUpload::new(self.clone(), to.clone());
         upload
-            .upload_once(UploadType::Copy {
-                bucket: self.inner.options.bucket.clone(),
-                from: from.clone(),
-                body: Empty::<Bytes>::new(),
-            })
+            .upload_once(
+                UploadType::Copy {
+                    bucket: self.inner.options.bucket.clone(),
+                    from: from.clone(),
+                    body: Empty::<Bytes>::new(),
+                },
+                None,
+            )
             .await?;
 
         Ok(())

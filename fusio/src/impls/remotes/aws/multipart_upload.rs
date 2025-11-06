@@ -1,7 +1,7 @@
 use bytes::{Buf, Bytes};
 use http::{
     header::{CONTENT_LENGTH, CONTENT_TYPE, ETAG},
-    Method, Request, Response,
+    HeaderMap, Method, Request, Response,
 };
 use http_body::Body;
 use http_body_util::{BodyExt, Empty, Full};
@@ -80,7 +80,11 @@ impl MultipartUpload {
         Self::check_response(response).await
     }
 
-    pub(crate) async fn upload_once<B>(&self, upload_type: UploadType<B>) -> Result<(), Error>
+    pub(crate) async fn upload_once<B>(
+        &self,
+        upload_type: UploadType<B>,
+        headers: Option<&HeaderMap>,
+    ) -> Result<(), Error>
     where
         B: Body<Data = Bytes> + Clone + Unpin + Send + Sync + 'static,
         B::Error: std::error::Error + Send + Sync + 'static,
@@ -101,6 +105,13 @@ impl MultipartUpload {
             utf8_percent_encode(self.path.as_ref(), &STRICT_PATH_ENCODE_SET)
         );
         let mut builder = Request::builder().uri(url).method(Method::PUT);
+        if let Some(headers) = headers {
+            if let Some(dest) = builder.headers_mut() {
+                for (name, value) in headers.iter() {
+                    dest.insert(name.clone(), value.clone());
+                }
+            }
+        }
         if let Some(from_url) = copy_from {
             builder = builder.header("x-amz-copy-source", from_url);
         }
@@ -117,16 +128,24 @@ impl MultipartUpload {
         Ok(())
     }
 
-    pub(crate) async fn initiate(&self) -> Result<String, Error> {
+    pub(crate) async fn initiate(&self, headers: Option<&HeaderMap>) -> Result<String, Error> {
         let url = format!(
             "{}/{}?uploads",
             self.fs.as_ref().options.endpoint,
             utf8_percent_encode(self.path.as_ref(), &STRICT_PATH_ENCODE_SET)
         );
-        let request = Request::builder()
+        let mut builder = Request::builder()
             .uri(url)
             .method(Method::POST)
-            .header(CONTENT_LENGTH, 0)
+            .header(CONTENT_LENGTH, 0);
+        if let Some(headers) = headers {
+            if let Some(dest) = builder.headers_mut() {
+                for (name, value) in headers.iter() {
+                    dest.insert(name.clone(), value.clone());
+                }
+            }
+        }
+        let request = builder
             .body(Empty::new())
             .map_err(|e| Error::Other(e.into()))?;
         let response = self.send_request(request).await?;
