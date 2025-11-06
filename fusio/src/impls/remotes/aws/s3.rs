@@ -9,13 +9,18 @@ use http::{
 use http_body_util::{BodyExt, Empty};
 use percent_encoding::utf8_percent_encode;
 
-use super::{fs::AmazonS3, sign::Sign, S3Error, STRICT_PATH_ENCODE_SET};
+use super::{
+    fs::AmazonS3,
+    sign::Sign,
+    writer::{S3Writer, S3_PART_MINIMUM_SIZE},
+    S3Error, STRICT_PATH_ENCODE_SET,
+};
 use crate::{
     durability::{FileCommit, FileSync},
     error::Error,
     path::Path,
     remotes::{
-        aws::{multipart_upload::MultipartUpload, writer::S3Writer},
+        aws::multipart_upload::MultipartUpload,
         http::{HttpClient, HttpError},
     },
     IoBuf, IoBufMut, Read, Write,
@@ -45,26 +50,57 @@ impl S3File {
             return Ok(());
         }
 
-        let Some(writer) = self.writer.as_mut() else {
+        if self.writer.is_none() {
             self.prefilled = true;
             return Ok(());
-        };
+        }
 
         let Some(existing) = self.fs.head_object(&self.path).await? else {
             self.prefilled = true;
             return Ok(());
         };
 
-        writer.copy_object_headers(&existing.headers)?;
+        let copied = {
+            let writer = self.writer.as_mut().expect("writer checked above");
+            writer.copy_object_headers(&existing.headers)?;
 
-        if existing.size == 0 {
-            self.prefilled = true;
+            if existing.size >= S3_PART_MINIMUM_SIZE as u64 {
+                writer
+                    .copy_existing_object(existing.size, existing.etag.as_deref())
+                    .await?
+            } else {
+                false
+            }
+        };
+
+        if !copied {
+            let writer = self.writer.as_mut().expect("writer checked above");
+            Self::download_existing_into_writer(
+                self.fs.clone(),
+                self.path.clone(),
+                writer,
+                existing.size,
+            )
+            .await?;
+        }
+
+        self.prefilled = true;
+        Ok(())
+    }
+
+    async fn download_existing_into_writer(
+        fs: AmazonS3,
+        path: Path,
+        writer: &mut S3Writer,
+        existing_size: u64,
+    ) -> Result<(), Error> {
+        if existing_size == 0 {
             return Ok(());
         }
 
-        let mut reader = S3File::new(self.fs.clone(), self.path.clone(), false);
+        let mut reader = S3File::new(fs, path, false);
         let mut offset: u64 = 0;
-        let mut remaining = existing.size;
+        let mut remaining = existing_size;
         const CHUNK_SIZE: u64 = 8 * 1024 * 1024;
 
         while remaining > 0 {
@@ -80,8 +116,6 @@ impl S3File {
         }
 
         writer.flush().await?;
-
-        self.prefilled = true;
         Ok(())
     }
 
@@ -324,6 +358,270 @@ impl FileCommit for S3File {
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        collections::VecDeque,
+        pin::Pin,
+        sync::{Arc, Mutex},
+    };
+
+    use bytes::Bytes;
+    use fusio_core::MaybeSendFuture;
+    use futures_executor::block_on;
+    use http::{HeaderMap, Method, StatusCode};
+    use http_body_util::{BodyExt, Full};
+
+    use super::*;
+    use crate::{
+        fs::{Fs, OpenOptions},
+        impls::remotes::http::{BoxBody, DynHttpClient, HttpError},
+    };
+
+    #[derive(Clone, Default)]
+    struct RecordedRequest {
+        method: Method,
+        uri: String,
+        headers: HeaderMap,
+    }
+
+    #[derive(Clone)]
+    struct MockHttpClient {
+        responses: Arc<Mutex<VecDeque<http::Response<BoxBody>>>>,
+        requests: Arc<Mutex<Vec<RecordedRequest>>>,
+    }
+
+    impl MockHttpClient {
+        fn new(responses: Vec<http::Response<BoxBody>>) -> Self {
+            Self {
+                responses: Arc::new(Mutex::new(responses.into_iter().collect::<VecDeque<_>>())),
+                requests: Arc::new(Mutex::new(Vec::new())),
+            }
+        }
+
+        fn record(&self, request: RecordedRequest) {
+            self.requests.lock().unwrap().push(request);
+        }
+
+        fn take_requests(&self) -> Vec<RecordedRequest> {
+            self.requests.lock().unwrap().clone()
+        }
+    }
+
+    impl DynHttpClient for MockHttpClient {
+        fn dyn_send_request(
+            &self,
+            request: http::Request<BoxBody>,
+        ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<http::Response<BoxBody>, HttpError>> + '_>>
+        {
+            let (parts, _body) = request.into_parts();
+            let recorded = RecordedRequest {
+                method: parts.method.clone(),
+                uri: parts.uri.to_string(),
+                headers: parts.headers.clone(),
+            };
+            self.record(recorded);
+
+            let response = self
+                .responses
+                .lock()
+                .unwrap()
+                .pop_front()
+                .expect("mock response exhausted");
+
+            Box::pin(async move { Ok(response) })
+        }
+    }
+
+    fn mock_response(
+        status: StatusCode,
+        headers: &[(&str, &str)],
+        body: &str,
+    ) -> http::Response<BoxBody> {
+        let mut builder = http::Response::builder().status(status);
+        for (name, value) in headers {
+            builder = builder.header(*name, *value);
+        }
+        builder
+            .body(BoxBody::new(
+                Full::new(Bytes::from(body.to_owned()))
+                    .map_err(|_| HttpError::Other("infallible".into())),
+            ))
+            .expect("failed to build mock response")
+    }
+
+    #[test]
+    fn appending_large_object_uses_server_side_copy() {
+        let copy_size = (S3_PART_MINIMUM_SIZE as u64) * 2;
+        let etag = "\"etag-123\"";
+
+        let responses = vec![
+            mock_response(
+                StatusCode::OK,
+                &[
+                    ("content-length", &copy_size.to_string()),
+                    ("etag", etag),
+                    ("x-amz-meta-foo", "bar"),
+                    ("x-amz-server-side-encryption", "AES256"),
+                ],
+                "",
+            ),
+            mock_response(
+                StatusCode::OK,
+                &[],
+                "<InitiateMultipartUploadResult><UploadId>upload-id</UploadId></\
+                 InitiateMultipartUploadResult>",
+            ),
+            mock_response(
+                StatusCode::OK,
+                &[],
+                "<CopyPartResult><ETag>\"copy-etag\"</ETag><LastModified>2024-01-01T00:00:00Z</\
+                 LastModified></CopyPartResult>",
+            ),
+            mock_response(StatusCode::OK, &[("etag", "\"append-etag\"")], ""),
+            mock_response(StatusCode::OK, &[], "<CompleteMultipartUploadResult/>"),
+        ];
+
+        let client = MockHttpClient::new(responses);
+
+        let options = super::super::options::S3Options {
+            endpoint: "https://s3.test".into(),
+            bucket: "bucket".into(),
+            region: "us-east-1".into(),
+            credential: None,
+            sign_payload: false,
+            checksum: false,
+        };
+
+        let s3 = super::super::fs::AmazonS3 {
+            inner: Arc::new(super::super::fs::AmazonS3Inner {
+                options,
+                client: Box::new(client.clone()) as Box<dyn DynHttpClient>,
+            }),
+        };
+
+        let path: Path = "data.bin".into();
+        block_on(async {
+            let mut file = Fs::open_options(&s3, &path, OpenOptions::default().write(true))
+                .await
+                .expect("open file");
+
+            let append = vec![1u8; 1_024];
+            let (res, _buf) = file.write_all(append).await;
+            res.expect("write append data");
+            file.close().await.expect("close");
+        });
+
+        let requests = client.take_requests();
+        assert_eq!(requests.len(), 5);
+        assert_eq!(requests[0].method, Method::HEAD);
+        assert!(requests[0].uri.contains("data.bin"));
+
+        assert_eq!(requests[1].method, Method::POST);
+        assert!(requests[1].uri.contains("uploads"));
+        assert_eq!(
+            requests[1]
+                .headers
+                .get("x-amz-server-side-encryption")
+                .expect("sse header")
+                .to_str()
+                .unwrap(),
+            "AES256"
+        );
+
+        assert_eq!(requests[2].method, Method::PUT);
+        assert!(requests[2].uri.contains("partNumber=1"));
+        assert_eq!(
+            requests[2]
+                .headers
+                .get("x-amz-copy-source-if-match")
+                .expect("if-match")
+                .to_str()
+                .unwrap(),
+            etag
+        );
+        assert_eq!(
+            requests[2]
+                .headers
+                .get("x-amz-copy-source-range")
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            format!("bytes=0-{}", copy_size - 1)
+        );
+
+        assert_ne!(requests[2].method, Method::GET);
+        assert_ne!(requests[3].method, Method::GET);
+        assert_ne!(requests[4].method, Method::GET);
+    }
+
+    #[test]
+    fn small_objects_fallback_to_download() {
+        let existing = S3_PART_MINIMUM_SIZE as u64 - 1;
+        let responses = vec![
+            mock_response(
+                StatusCode::OK,
+                &[
+                    ("content-length", &existing.to_string()),
+                    ("etag", "\"small\""),
+                    ("x-amz-meta-foo", "bar"),
+                ],
+                "",
+            ),
+            mock_response(
+                StatusCode::PARTIAL_CONTENT,
+                &[("content-length", &existing.to_string())],
+                &"x".repeat(existing as usize),
+            ),
+            mock_response(StatusCode::OK, &[("etag", "\"upload\"")], ""),
+        ];
+
+        let client = MockHttpClient::new(responses);
+        let options = super::super::options::S3Options {
+            endpoint: "https://s3.test".into(),
+            bucket: "bucket".into(),
+            region: "us-east-1".into(),
+            credential: None,
+            sign_payload: false,
+            checksum: false,
+        };
+
+        let s3 = super::super::fs::AmazonS3 {
+            inner: Arc::new(super::super::fs::AmazonS3Inner {
+                options,
+                client: Box::new(client.clone()) as Box<dyn DynHttpClient>,
+            }),
+        };
+
+        let path: Path = "small.bin".into();
+        block_on(async {
+            let mut file = Fs::open_options(&s3, &path, OpenOptions::default().write(true))
+                .await
+                .expect("open file");
+            let (res, _buf) = file.write_all(vec![2u8; 4]).await;
+            res.expect("append");
+            file.close().await.expect("close");
+        });
+
+        let requests = client.take_requests();
+        assert_eq!(requests[0].method, Method::HEAD);
+        assert!(requests.iter().any(|req| req.method == Method::GET));
+        let put_request = requests
+            .iter()
+            .find(|req| req.method == Method::PUT)
+            .expect("expected final PUT");
+        assert!(put_request
+            .headers
+            .get("content-length")
+            .and_then(|hv| hv.to_str().ok())
+            .is_some());
+        assert_eq!(
+            put_request
+                .headers
+                .get("x-amz-meta-foo")
+                .and_then(|hv| hv.to_str().ok())
+                .unwrap(),
+            "bar"
+        );
+    }
 
     #[cfg(all(feature = "tokio-http", not(feature = "completion-based")))]
     #[tokio::test]

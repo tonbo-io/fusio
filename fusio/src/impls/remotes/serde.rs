@@ -11,6 +11,13 @@ pub struct InitiateMultipartUploadResult {
     pub upload_id: String,
 }
 
+#[derive(Default, Debug, Deserialize)]
+#[serde(default, rename_all = "PascalCase")]
+pub struct CopyPartResult {
+    #[serde(rename = "ETag")]
+    pub etag: String,
+}
+
 #[derive(Default, Debug, Serialize)]
 #[serde(default, rename = "CompleteMultipartUpload", rename_all = "PascalCase")]
 pub struct CompleteMultipartUploadRequest {

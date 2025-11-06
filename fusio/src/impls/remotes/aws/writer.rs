@@ -1,4 +1,4 @@
-use std::{mem, pin::Pin, sync::Arc};
+use std::{borrow::ToOwned, mem, pin::Pin, sync::Arc};
 
 use bytes::{BufMut, BytesMut};
 use fusio_core::MaybeSendFuture;
@@ -15,7 +15,8 @@ use crate::{
     IoBuf, Write,
 };
 
-const S3_PART_MINIMUM_SIZE: usize = 5 * 1024 * 1024;
+pub(crate) const S3_PART_MINIMUM_SIZE: usize = 5 * 1024 * 1024;
+const COPY_PART_SIZE: usize = 16 * 1024 * 1024;
 
 const PRESERVED_HEADER_NAMES: &[&str] = &[
     "cache-control",
@@ -101,11 +102,9 @@ impl S3Writer {
         Ok(())
     }
 
-    async fn upload_part<F>(&mut self, fn_bytes_init: F) -> Result<(), Error>
-    where
-        F: FnOnce() -> BytesMut,
-    {
-        let upload_id = match self.upload_id.clone() {
+    async fn ensure_upload_id(&mut self) -> Result<Arc<String>, Error> {
+        match self.upload_id.clone() {
+            Some(upload_id) => Ok(upload_id),
             None => {
                 let upload_id = Arc::new(
                     self.inner
@@ -114,10 +113,82 @@ impl S3Writer {
                         .map_err(|err| Error::Remote(Box::new(err)))?,
                 );
                 self.upload_id = Some(upload_id.clone());
-                upload_id
+                Ok(upload_id)
             }
-            Some(upload_id) => upload_id,
-        };
+        }
+    }
+
+    pub async fn copy_existing_object(
+        &mut self,
+        object_size: u64,
+        etag: Option<&str>,
+    ) -> Result<bool, Error> {
+        if object_size < S3_PART_MINIMUM_SIZE as u64 {
+            return Ok(false);
+        }
+
+        let upload_id = self.ensure_upload_id().await?;
+        let mut remaining = object_size;
+        let mut offset = 0u64;
+        let min_size = S3_PART_MINIMUM_SIZE as u64;
+        let chunk_size = COPY_PART_SIZE as u64;
+        let mut ranges: Vec<(u64, u64)> = Vec::new();
+
+        while remaining > 0 {
+            if remaining <= min_size {
+                if ranges.is_empty() {
+                    ranges.push((offset, remaining));
+                } else if let Some(last) = ranges.last_mut() {
+                    last.1 += remaining;
+                }
+                break;
+            }
+
+            let mut take = remaining.min(chunk_size.max(min_size));
+            if take < min_size {
+                take = min_size;
+            }
+
+            if remaining > take && remaining - take < min_size {
+                take = remaining;
+            }
+
+            ranges.push((offset, take));
+            offset = offset.saturating_add(take);
+            remaining = remaining.saturating_sub(take);
+        }
+
+        let if_match = etag.map(ToOwned::to_owned);
+        let part_count = ranges.len();
+        for (idx, (start, len)) in ranges.into_iter().enumerate() {
+            let upload = self.inner.clone();
+            let upload_id = upload_id.clone();
+            let range_start = start;
+            let range_end = start + len - 1;
+            let part_num = self.next_part_numer + idx;
+            let if_match = if_match.clone();
+
+            self.handlers.push_back(Box::pin(async move {
+                upload
+                    .copy_part(
+                        &upload_id,
+                        part_num,
+                        range_start..=range_end,
+                        if_match.as_deref(),
+                    )
+                    .await
+            }));
+        }
+        self.next_part_numer += part_count;
+
+        Ok(true)
+    }
+
+    async fn upload_part<F>(&mut self, fn_bytes_init: F) -> Result<(), Error>
+    where
+        F: FnOnce() -> BytesMut,
+    {
+        let upload_id = self.ensure_upload_id().await?;
         let part_num = self.next_part_numer;
         self.next_part_numer += 1;
 
