@@ -55,6 +55,8 @@ impl S3File {
             return Ok(());
         };
 
+        writer.copy_object_headers(&existing.headers)?;
+
         if existing.size == 0 {
             self.prefilled = true;
             return Ok(());

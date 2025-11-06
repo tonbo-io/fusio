@@ -3,6 +3,7 @@ use std::{mem, pin::Pin, sync::Arc};
 use bytes::{BufMut, BytesMut};
 use fusio_core::MaybeSendFuture;
 use futures_util::{stream::FuturesOrdered, StreamExt};
+use http::{header, HeaderMap};
 use http_body_util::Full;
 
 use crate::{
@@ -16,11 +17,41 @@ use crate::{
 
 const S3_PART_MINIMUM_SIZE: usize = 5 * 1024 * 1024;
 
+const PRESERVED_HEADER_NAMES: &[&str] = &[
+    "cache-control",
+    "content-disposition",
+    "content-encoding",
+    "content-language",
+    "content-type",
+    "expires",
+    "x-amz-checksum-algorithm",
+    "x-amz-object-lock-legal-hold",
+    "x-amz-object-lock-mode",
+    "x-amz-object-lock-retain-until-date",
+    "x-amz-server-side-encryption",
+    "x-amz-server-side-encryption-aws-kms-key-id",
+    "x-amz-server-side-encryption-bucket-key-enabled",
+    "x-amz-server-side-encryption-context",
+    "x-amz-storage-class",
+    "x-amz-website-redirect-location",
+];
+
+const PRESERVED_HEADER_PREFIXES: &[&str] = &["x-amz-meta-"];
+
+fn should_preserve_header(lower_name: &str) -> bool {
+    let lower_ref: &str = lower_name;
+    PRESERVED_HEADER_NAMES.contains(&lower_ref)
+        || PRESERVED_HEADER_PREFIXES
+            .iter()
+            .any(|prefix| lower_name.starts_with(prefix))
+}
+
 pub struct S3Writer {
     inner: Arc<MultipartUpload>,
     upload_id: Option<Arc<String>>,
     next_part_numer: usize,
     buf: BytesMut,
+    object_headers: Option<HeaderMap>,
 
     handlers: FuturesOrdered<Pin<Box<dyn MaybeSendFuture<Output = Result<MultipartPart, Error>>>>>,
 }
@@ -34,8 +65,40 @@ impl S3Writer {
             upload_id: None,
             next_part_numer: 0,
             buf: BytesMut::with_capacity(S3_PART_MINIMUM_SIZE),
+            object_headers: None,
             handlers: FuturesOrdered::new(),
         }
+    }
+
+    pub fn copy_object_headers(&mut self, headers: &[(String, String)]) -> Result<(), Error> {
+        if headers.iter().any(|(name, _)| {
+            name.eq_ignore_ascii_case("x-amz-server-side-encryption-customer-algorithm")
+        }) {
+            return Err(Error::Unsupported {
+                message: "appending to SSE-C encrypted S3 objects is not supported".into(),
+            });
+        }
+
+        let mut filtered = HeaderMap::new();
+        for (name, value) in headers.iter() {
+            let lower = name.to_ascii_lowercase();
+            if should_preserve_header(&lower) {
+                if let (Ok(header_name), Ok(header_value)) = (
+                    name.parse::<header::HeaderName>(),
+                    value.parse::<header::HeaderValue>(),
+                ) {
+                    filtered.insert(header_name, header_value);
+                }
+            }
+        }
+
+        self.object_headers = if filtered.is_empty() {
+            None
+        } else {
+            Some(filtered)
+        };
+
+        Ok(())
     }
 
     async fn upload_part<F>(&mut self, fn_bytes_init: F) -> Result<(), Error>
@@ -46,7 +109,7 @@ impl S3Writer {
             None => {
                 let upload_id = Arc::new(
                     self.inner
-                        .initiate()
+                        .initiate(self.object_headers.as_ref())
                         .await
                         .map_err(|err| Error::Remote(Box::new(err)))?,
                 );
@@ -98,10 +161,13 @@ impl Write for S3Writer {
             let bytes = mem::replace(&mut self.buf, BytesMut::new()).freeze();
 
             self.inner
-                .upload_once(UploadType::Write {
-                    size: bytes.len(),
-                    body: Full::new(bytes),
-                })
+                .upload_once(
+                    UploadType::Write {
+                        size: bytes.len(),
+                        body: Full::new(bytes),
+                    },
+                    self.object_headers.as_ref(),
+                )
                 .await?;
             return Ok(());
         };
