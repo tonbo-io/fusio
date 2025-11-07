@@ -1,3 +1,5 @@
+use std::ops::RangeInclusive;
+
 use bytes::{Buf, Bytes};
 use http::{
     header::{CONTENT_LENGTH, CONTENT_TYPE, ETAG},
@@ -16,7 +18,7 @@ use crate::{
         aws::{sign::Sign, S3Error, S3ResponseError, STRICT_PATH_ENCODE_SET},
         http::{BoxBody, HttpClient},
         serde::{
-            CompleteMultipartUploadRequest, CompleteMultipartUploadRequestPart,
+            CompleteMultipartUploadRequest, CompleteMultipartUploadRequestPart, CopyPartResult,
             InitiateMultipartUploadResult, MultipartPart,
         },
     },
@@ -197,6 +199,61 @@ impl MultipartUpload {
         Ok(MultipartPart {
             part_num,
             etag: etag.to_string(),
+        })
+    }
+
+    pub(crate) async fn copy_part(
+        &self,
+        upload_id: &str,
+        part_num: usize,
+        range: RangeInclusive<u64>,
+        if_match: Option<&str>,
+    ) -> Result<MultipartPart, Error> {
+        let (start, end) = (*range.start(), *range.end());
+        let url = format!(
+            "{}/{}?partNumber={}&uploadId={}",
+            self.fs.as_ref().options.endpoint,
+            utf8_percent_encode(self.path.as_ref(), &STRICT_PATH_ENCODE_SET),
+            part_num + 1,
+            utf8_percent_encode(upload_id, &STRICT_PATH_ENCODE_SET),
+        );
+
+        let source = format!(
+            "/{}/{}",
+            self.fs.as_ref().options.bucket.trim_start_matches('/'),
+            utf8_percent_encode(self.path.as_ref(), &STRICT_PATH_ENCODE_SET),
+        );
+
+        let mut builder = Request::builder()
+            .uri(url)
+            .method(Method::PUT)
+            .header(CONTENT_LENGTH, 0)
+            .header("x-amz-copy-source", source)
+            .header(
+                "x-amz-copy-source-range",
+                format!("bytes={}-{}", start, end),
+            );
+
+        if let Some(tag) = if_match {
+            builder = builder.header("x-amz-copy-source-if-match", tag);
+        }
+
+        let request = builder
+            .body(Empty::new())
+            .map_err(|e| Error::Other(e.into()))?;
+
+        let response = self.send_request(request).await?;
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .map_err(|err| Error::Remote(err.into()))?;
+        let result: CopyPartResult = quick_xml::de::from_reader(body.aggregate().reader())
+            .map_err(|err| Error::Remote(S3Error::from(err).into()))?;
+
+        Ok(MultipartPart {
+            part_num,
+            etag: result.etag,
         })
     }
 
