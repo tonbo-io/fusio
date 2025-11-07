@@ -195,7 +195,8 @@ impl S3Writer {
         if chunk_size > S3_PART_MAXIMUM_SIZE {
             return Err(Error::Unsupported {
                 message: format!(
-                    "S3 UploadPartCopy would need more than {S3_MAX_PARTS} parts even with 5 GiB chunks for an object of size {object_size} bytes",
+                    "S3 UploadPartCopy would need more than {S3_MAX_PARTS} parts even with 5 GiB \
+                     chunks for an object of size {object_size} bytes",
                 ),
             });
         }
