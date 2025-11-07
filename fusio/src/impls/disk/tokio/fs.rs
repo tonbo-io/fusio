@@ -545,7 +545,7 @@ mod tests {
             .write(true)
             .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
             .open(&local)
-            .unwrap();
+            .expect("test setup ensures destination exists");
 
         let updated = br#"{"a":2}"#;
         let tag2 = match fs
@@ -560,7 +560,17 @@ mod tests {
         {
             Ok(tag) => tag,
             Err(Error::Io(err)) if err.raw_os_error() == Some(ERROR_SHARING_VIOLATION as i32) => {
-                eprintln!("skipping test: destination lock prevented ReplaceFileW fallback");
+                drop(guard);
+                let tag = fs
+                    .put_conditional(
+                        &path,
+                        updated,
+                        Some("application/json"),
+                        None,
+                        CasCondition::IfMatch(tag1.clone()),
+                    )
+                    .await
+                    .unwrap();
                 return;
             }
             Err(err) => panic!("unexpected error: {err:?}"),
