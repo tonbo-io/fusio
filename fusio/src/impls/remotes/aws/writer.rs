@@ -16,7 +16,9 @@ use crate::{
 };
 
 pub(crate) const S3_PART_MINIMUM_SIZE: usize = 5 * 1024 * 1024;
-const COPY_PART_SIZE: usize = 16 * 1024 * 1024;
+const DEFAULT_COPY_PART_SIZE: usize = 16 * 1024 * 1024;
+const S3_PART_MAXIMUM_SIZE: u64 = 5 * 1024 * 1024 * 1024; // 5 GiB UploadPartCopy limit
+const S3_MAX_PARTS: u64 = 10_000;
 
 const PRESERVED_HEADER_NAMES: &[&str] = &[
     "cache-control",
@@ -127,11 +129,11 @@ impl S3Writer {
             return Ok(false);
         }
 
+        let chunk_size = Self::determine_copy_part_size(object_size)?;
         let upload_id = self.ensure_upload_id().await?;
         let mut remaining = object_size;
         let mut offset = 0u64;
         let min_size = S3_PART_MINIMUM_SIZE as u64;
-        let chunk_size = COPY_PART_SIZE as u64;
         let mut ranges: Vec<(u64, u64)> = Vec::new();
 
         while remaining > 0 {
@@ -144,7 +146,7 @@ impl S3Writer {
                 break;
             }
 
-            let mut take = remaining.min(chunk_size.max(min_size));
+            let mut take = remaining.min(chunk_size);
             if take < min_size {
                 take = min_size;
             }
@@ -182,6 +184,23 @@ impl S3Writer {
         self.next_part_numer += part_count;
 
         Ok(true)
+    }
+
+    fn determine_copy_part_size(object_size: u64) -> Result<u64, Error> {
+        let min_part = S3_PART_MINIMUM_SIZE as u64;
+        let default_part = DEFAULT_COPY_PART_SIZE as u64;
+        let required_part = (object_size + S3_MAX_PARTS - 1) / S3_MAX_PARTS;
+        let chunk_size = min_part.max(default_part).max(required_part);
+
+        if chunk_size > S3_PART_MAXIMUM_SIZE {
+            return Err(Error::Unsupported {
+                message: format!(
+                    "S3 UploadPartCopy would need more than {S3_MAX_PARTS} parts even with 5 GiB chunks for an object of size {object_size} bytes",
+                ),
+            });
+        }
+
+        Ok(chunk_size)
     }
     async fn upload_part<F>(&mut self, fn_bytes_init: F) -> Result<(), Error>
     where
@@ -260,6 +279,30 @@ impl Write for S3Writer {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    #[test]
+    fn default_chunk_size_is_used_for_small_objects() {
+        let chunk = S3Writer::determine_copy_part_size(1 * 1024 * 1024 * 1024).unwrap();
+        assert_eq!(chunk, DEFAULT_COPY_PART_SIZE as u64);
+    }
+
+    #[test]
+    fn chunk_size_scales_to_respect_part_limit() {
+        let large_object = 200_u64 * 1024 * 1024 * 1024;
+        let chunk = S3Writer::determine_copy_part_size(large_object).unwrap();
+        assert!(chunk > DEFAULT_COPY_PART_SIZE as u64);
+        let part_count = (large_object + chunk - 1) / chunk;
+        assert!(part_count <= S3_MAX_PARTS);
+    }
+
+    #[test]
+    fn exceeding_maximum_parts_returns_unsupported() {
+        let too_large = S3_MAX_PARTS * S3_PART_MAXIMUM_SIZE + 1;
+        let err = S3Writer::determine_copy_part_size(too_large).unwrap_err();
+        assert!(matches!(err, Error::Unsupported { .. }));
+    }
+
     #[ignore]
     #[cfg(all(
         feature = "aws",
