@@ -1,3 +1,5 @@
+#[cfg(windows)]
+use std::os::windows::ffi::OsStrExt;
 use std::{
     ffi::OsString,
     io,
@@ -124,11 +126,76 @@ async fn replace_file(tmp_path: &StdPath, final_path: &StdPath) -> Result<(), Er
 async fn replace_file(tmp_path: &StdPath, final_path: &StdPath) -> Result<(), Error> {
     match tokio::fs::rename(tmp_path, final_path).await {
         Ok(()) => Ok(()),
-        Err(err) if err.kind() == ErrorKind::AlreadyExists => {
-            tokio::fs::rename(tmp_path, final_path).await?;
-            Ok(())
+        Err(err) if should_try_windows_replace(&err) => {
+            if let Err(fallback_err) = windows_replace_file(tmp_path, final_path).await {
+                Err(fallback_err.into())
+            } else {
+                Ok(())
+            }
         }
         Err(err) => Err(err.into()),
+    }
+}
+
+#[cfg(windows)]
+fn should_try_windows_replace(err: &io::Error) -> bool {
+    use windows_sys::Win32::Foundation::{
+        ERROR_ACCESS_DENIED, ERROR_ALREADY_EXISTS, ERROR_SHARING_VIOLATION,
+    };
+
+    matches!(
+        err.kind(),
+        ErrorKind::AlreadyExists | ErrorKind::PermissionDenied
+    ) || matches!(err.raw_os_error(), Some(raw) if {
+        let raw = raw as u32;
+        raw == ERROR_ALREADY_EXISTS
+            || raw == ERROR_ACCESS_DENIED
+            || raw == ERROR_SHARING_VIOLATION
+    })
+}
+
+#[cfg(windows)]
+async fn windows_replace_file(tmp_path: &StdPath, final_path: &StdPath) -> io::Result<()> {
+    let replacement = tmp_path.to_path_buf();
+    let destination = final_path.to_path_buf();
+
+    spawn_blocking(move || replace_file_with_swap(replacement, destination))
+        .await
+        .map_err(|join_err| io::Error::new(ErrorKind::Other, join_err.to_string()))?
+}
+
+#[cfg(windows)]
+fn replace_file_with_swap(tmp_path: PathBuf, final_path: PathBuf) -> io::Result<()> {
+    use std::iter;
+
+    use windows_sys::Win32::Storage::FileSystem::{ReplaceFileW, REPLACEFILE_WRITE_THROUGH};
+
+    let tmp_w: Vec<u16> = tmp_path
+        .as_os_str()
+        .encode_wide()
+        .chain(iter::once(0))
+        .collect();
+    let final_w: Vec<u16> = final_path
+        .as_os_str()
+        .encode_wide()
+        .chain(iter::once(0))
+        .collect();
+
+    let result = unsafe {
+        ReplaceFileW(
+            final_w.as_ptr(),
+            tmp_w.as_ptr(),
+            std::ptr::null(),
+            REPLACEFILE_WRITE_THROUGH,
+            0,
+            0,
+        )
+    };
+
+    if result == 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(())
     }
 }
 
@@ -444,5 +511,56 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, Error::PreconditionFailed));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[tokio::test]
+    async fn cas_replace_succeeds_when_destination_locked() {
+        use std::os::windows::fs::OpenOptionsExt;
+
+        use windows_sys::Win32::Storage::FileSystem::{FILE_SHARE_READ, FILE_SHARE_WRITE};
+
+        let fs = TokioFs;
+        let tmp = tempfile::tempdir().unwrap();
+        let local = tmp.path().join("state.json");
+        let path = Path::from_absolute_path(&local).unwrap();
+
+        let initial = br#"{"a":1}"#;
+        let tag1 = fs
+            .put_conditional(
+                &path,
+                initial,
+                Some("application/json"),
+                None,
+                CasCondition::IfNotExists,
+            )
+            .await
+            .unwrap();
+
+        let guard = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+            .open(&local)
+            .unwrap();
+
+        let updated = br#"{"a":2}"#;
+        let tag2 = fs
+            .put_conditional(
+                &path,
+                updated,
+                Some("application/json"),
+                None,
+                CasCondition::IfMatch(tag1.clone()),
+            )
+            .await
+            .unwrap();
+        assert_ne!(tag1, tag2);
+
+        drop(guard);
+
+        let loaded = fs.load_with_tag(&path).await.unwrap().unwrap();
+        assert_eq!(loaded.0, updated);
+        assert_eq!(loaded.1, tag2);
     }
 }
