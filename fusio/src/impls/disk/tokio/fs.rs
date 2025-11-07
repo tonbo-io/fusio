@@ -166,7 +166,7 @@ async fn windows_replace_file(tmp_path: &StdPath, final_path: &StdPath) -> io::R
 
 #[cfg(windows)]
 fn replace_file_with_swap(tmp_path: PathBuf, final_path: PathBuf) -> io::Result<()> {
-    use std::iter;
+    use std::{iter, ptr};
 
     use windows_sys::Win32::Storage::FileSystem::{ReplaceFileW, REPLACEFILE_WRITE_THROUGH};
 
@@ -185,10 +185,10 @@ fn replace_file_with_swap(tmp_path: PathBuf, final_path: PathBuf) -> io::Result<
         ReplaceFileW(
             final_w.as_ptr(),
             tmp_w.as_ptr(),
-            std::ptr::null(),
+            ptr::null(),
             REPLACEFILE_WRITE_THROUGH,
-            0,
-            0,
+            ptr::null(),
+            ptr::null(),
         )
     };
 
