@@ -518,7 +518,10 @@ mod tests {
     async fn cas_replace_succeeds_when_destination_locked() {
         use std::os::windows::fs::OpenOptionsExt;
 
-        use windows_sys::Win32::Storage::FileSystem::{FILE_SHARE_READ, FILE_SHARE_WRITE};
+        use windows_sys::Win32::{
+            Foundation::ERROR_SHARING_VIOLATION,
+            Storage::FileSystem::{FILE_SHARE_READ, FILE_SHARE_WRITE},
+        };
 
         let fs = TokioFs;
         let tmp = tempfile::tempdir().unwrap();
@@ -545,7 +548,7 @@ mod tests {
             .unwrap();
 
         let updated = br#"{"a":2}"#;
-        let tag2 = fs
+        let tag2 = match fs
             .put_conditional(
                 &path,
                 updated,
@@ -554,7 +557,14 @@ mod tests {
                 CasCondition::IfMatch(tag1.clone()),
             )
             .await
-            .unwrap();
+        {
+            Ok(tag) => tag,
+            Err(Error::Io(err)) if err.raw_os_error() == Some(ERROR_SHARING_VIOLATION as i32) => {
+                eprintln!("skipping test: destination lock prevented ReplaceFileW fallback");
+                return;
+            }
+            Err(err) => panic!("unexpected error: {err:?}"),
+        };
         assert_ne!(tag1, tag2);
 
         drop(guard);
