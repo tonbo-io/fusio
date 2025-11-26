@@ -2,10 +2,14 @@ use core::sync::atomic::{AtomicBool, Ordering};
 use std::{sync::Arc, time::Duration};
 
 use fusio::executor::{Executor, Timer};
+use fusio_core::{MaybeSend, MaybeSync};
 use futures_channel::oneshot;
 
 use super::{LeaseHandle, LeaseStore};
-use crate::types::{Error, Result};
+use crate::{
+    types::{Error, Result},
+    DynTimer,
+};
 
 /// Keeps a lease alive by issuing periodic heartbeats on a background task.
 #[derive(Debug)]
@@ -17,14 +21,14 @@ pub struct LeaseKeeper {
 impl LeaseKeeper {
     pub(crate) fn spawn<E, LS>(
         executor: E,
-        timer: Arc<dyn Timer + Send + Sync>,
+        timer: Arc<DynTimer>,
         leases: LS,
         lease: LeaseHandle,
         ttl: Duration,
     ) -> Result<Self>
     where
         LS: LeaseStore + Clone + 'static,
-        E: Executor + Timer + Clone + Send + Sync + 'static,
+        E: Executor + Timer + Clone + MaybeSend + MaybeSync + 'static,
     {
         if ttl == Duration::from_millis(0) {
             return Err(Error::Unimplemented("lease keeper requires positive ttl"));
@@ -72,7 +76,7 @@ where
     LS: LeaseStore + Clone + 'static,
 {
     stop: Arc<AtomicBool>,
-    timer: Arc<dyn Timer + Send + Sync>,
+    timer: Arc<DynTimer>,
     leases: LS,
     lease: LeaseHandle,
     ttl: Duration,

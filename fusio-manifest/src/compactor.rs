@@ -10,6 +10,7 @@ use core::{hash::Hash, marker::PhantomData, time::Duration};
 use std::{collections::HashMap, sync::Arc, time::SystemTime};
 
 use fusio::executor::{Executor, Timer};
+use fusio_core::{MaybeSend, MaybeSync};
 use futures_util::TryStreamExt;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
@@ -34,11 +35,11 @@ use crate::{
 /// the caller.
 pub struct Compactor<K, V, HS, SS, CS, LS, E = BlockingExecutor, R = DefaultRetention>
 where
-    HS: HeadStore + Send + Sync + 'static,
-    SS: SegmentIo + Send + Sync + 'static,
-    CS: CheckpointStore + Send + Sync + 'static,
-    LS: LeaseStore + Send + Sync + 'static,
-    E: Executor + Timer + Clone + Send + Sync + 'static,
+    HS: HeadStore + MaybeSend + MaybeSync + 'static,
+    SS: SegmentIo + MaybeSend + MaybeSync + 'static,
+    CS: CheckpointStore + MaybeSend + MaybeSync + 'static,
+    LS: LeaseStore + MaybeSend + MaybeSync + 'static,
+    E: Executor + Timer + Clone + MaybeSend + MaybeSync + 'static,
     R: RetentionPolicy + Clone,
 {
     _phantom: PhantomData<(K, V)>,
@@ -57,11 +58,11 @@ impl<K, V, HS, SS, CS, LS, E, R> Compactor<K, V, HS, SS, CS, LS, E, R>
 where
     K: PartialOrd + Eq + Hash + Serialize + DeserializeOwned,
     V: Serialize + DeserializeOwned,
-    HS: HeadStore + Send + Sync + 'static,
-    SS: SegmentIo + Send + Sync + 'static,
-    CS: CheckpointStore + Send + Sync + 'static,
-    LS: LeaseStore + Send + Sync + 'static,
-    E: Executor + Timer + Clone + Send + Sync + 'static,
+    HS: HeadStore + MaybeSend + MaybeSync + 'static,
+    SS: SegmentIo + MaybeSend + MaybeSync + 'static,
+    CS: CheckpointStore + MaybeSend + MaybeSync + 'static,
+    LS: LeaseStore + MaybeSend + MaybeSync + 'static,
+    E: Executor + Timer + Clone + MaybeSend + MaybeSync + 'static,
     R: RetentionPolicy + Clone,
 {
     pub fn new(head: HS, seg: SS, ckpt: CS, leases: LS, opts: Arc<ManifestContext<R, E>>) -> Self {

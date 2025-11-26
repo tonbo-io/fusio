@@ -1,5 +1,14 @@
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
+use fusio::executor::Timer;
+use fusio_core::{MaybeSend, MaybeSync};
+
+// Timer trait object that follows fusio's MaybeSend/MaybeSync policy.
+pub trait TimerMaybe: Timer + MaybeSend + MaybeSync {}
+impl<T> TimerMaybe for T where T: Timer + MaybeSend + MaybeSync {}
+
+pub type DynTimer = dyn TimerMaybe;
+pub type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 pub(crate) mod checkpoint;
 pub mod compactor; // Headless remote compactor façade
 pub(crate) mod gc;

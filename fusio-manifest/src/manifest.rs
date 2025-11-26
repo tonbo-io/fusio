@@ -7,6 +7,7 @@ use std::{
 };
 
 use fusio::executor::{Executor, Timer};
+use fusio_core::{MaybeSend, MaybeSync};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 use crate::{
@@ -51,11 +52,11 @@ pub(crate) struct Segment<K, V> {
 #[derive(Clone)]
 pub struct Manifest<K, V, HS, SS, CS, LS, E = BlockingExecutor, R = DefaultRetention>
 where
-    HS: HeadStore + Send + Sync + 'static,
-    SS: SegmentIo + Send + Sync + 'static,
-    CS: CheckpointStore + Send + Sync + 'static,
-    LS: LeaseStore + Send + Sync + 'static,
-    E: Executor + Timer + Clone + Send + Sync + 'static,
+    HS: HeadStore + MaybeSend + MaybeSync + 'static,
+    SS: SegmentIo + MaybeSend + MaybeSync + 'static,
+    CS: CheckpointStore + MaybeSend + MaybeSync + 'static,
+    LS: LeaseStore + MaybeSend + MaybeSync + 'static,
+    E: Executor + Timer + Clone + MaybeSend + MaybeSync + 'static,
     R: RetentionPolicy + Clone,
 {
     _phantom: PhantomData<(K, V)>,
@@ -66,10 +67,10 @@ impl<K, V, HS, SS, CS, LS> Manifest<K, V, HS, SS, CS, LS>
 where
     K: PartialOrd + Eq + Hash + Serialize + DeserializeOwned,
     V: Serialize + DeserializeOwned,
-    HS: HeadStore + Send + Sync + 'static,
-    SS: SegmentIo + Send + Sync + 'static,
-    CS: CheckpointStore + Send + Sync + 'static,
-    LS: LeaseStore + Send + Sync + 'static,
+    HS: HeadStore + MaybeSend + MaybeSync + 'static,
+    SS: SegmentIo + MaybeSend + MaybeSync + 'static,
+    CS: CheckpointStore + MaybeSend + MaybeSync + 'static,
+    LS: LeaseStore + MaybeSend + MaybeSync + 'static,
 {
     pub fn new(head: HS, seg: SS, ckpt: CS, leases: LS) -> Self {
         Self::new_with_context(
@@ -86,11 +87,11 @@ impl<K, V, HS, SS, CS, LS, E, R> Manifest<K, V, HS, SS, CS, LS, E, R>
 where
     K: PartialOrd + Eq + Hash + Serialize + DeserializeOwned,
     V: Serialize + DeserializeOwned,
-    HS: HeadStore + Send + Sync + 'static,
-    SS: SegmentIo + Send + Sync + 'static,
-    CS: CheckpointStore + Send + Sync + 'static,
-    LS: LeaseStore + Send + Sync + 'static,
-    E: Executor + Timer + Clone + Send + Sync + 'static,
+    HS: HeadStore + MaybeSend + MaybeSync + 'static,
+    SS: SegmentIo + MaybeSend + MaybeSync + 'static,
+    CS: CheckpointStore + MaybeSend + MaybeSync + 'static,
+    LS: LeaseStore + MaybeSend + MaybeSync + 'static,
+    E: Executor + Timer + Clone + MaybeSend + MaybeSync + 'static,
     R: RetentionPolicy + Clone,
 {
     pub fn new_with_context(
@@ -261,11 +262,11 @@ impl<K, V, HS, SS, CS, LS, E, R> Manifest<K, V, HS, SS, CS, LS, E, R>
 where
     K: PartialOrd + Eq + Hash + Serialize + DeserializeOwned,
     V: Serialize + DeserializeOwned,
-    HS: HeadStore + Send + Sync + 'static,
-    SS: SegmentIo + Send + Sync + 'static,
-    CS: CheckpointStore + Send + Sync + 'static,
-    LS: LeaseStore + Send + Sync + 'static,
-    E: Executor + Timer + Clone + Send + Sync + 'static,
+    HS: HeadStore + MaybeSend + MaybeSync + 'static,
+    SS: SegmentIo + MaybeSend + MaybeSync + 'static,
+    CS: CheckpointStore + MaybeSend + MaybeSync + 'static,
+    LS: LeaseStore + MaybeSend + MaybeSync + 'static,
+    E: Executor + Timer + Clone + MaybeSend + MaybeSync + 'static,
     R: RetentionPolicy + Clone,
 {
     /// Open a read session, always acquiring a lease so GC honors the snapshot.

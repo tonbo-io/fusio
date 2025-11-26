@@ -110,8 +110,8 @@ where
 
 impl<FS, T> LeaseStore for LeaseStoreImpl<FS, T>
 where
-    FS: Fs + FsCas + Clone + Send + Sync + 'static,
-    T: Timer + Clone + Send + Sync + 'static,
+    FS: Fs + FsCas + Clone + MaybeSend + MaybeSync + 'static,
+    T: Timer + Clone + MaybeSend + MaybeSync + 'static,
 {
     fn create(
         &self,

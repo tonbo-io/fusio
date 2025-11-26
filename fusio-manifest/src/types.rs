@@ -1,6 +1,8 @@
 use fusio::Error as FusioError;
 use thiserror::Error;
 
+use crate::BoxError;
+
 /// Monotonic transaction identifier assigned per committed session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
 pub struct TxnId(pub u64);
@@ -28,7 +30,7 @@ pub enum Error {
     Io(#[from] FusioError),
     /// Other errors propagated as boxed error.
     #[error(transparent)]
-    Other(Box<dyn std::error::Error + Send + Sync>),
+    Other(BoxError),
 }
 
 pub type Result<T, E = Error> = core::result::Result<T, E>;
@@ -42,10 +44,7 @@ impl Error {
         Error::Other(Box::new(err))
     }
 
-    pub fn from_box<E>(err: Box<E>) -> Self
-    where
-        E: std::error::Error + Send + Sync + 'static,
-    {
+    pub fn from_box(err: BoxError) -> Self {
         Error::Other(err)
     }
 }

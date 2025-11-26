@@ -67,7 +67,7 @@ impl<C> HeadStoreImpl<C> {
 
 impl<C> HeadStore for HeadStoreImpl<C>
 where
-    C: FsCas + Clone + Send + Sync + 'static,
+    C: FsCas + Clone + MaybeSend + MaybeSync + 'static,
 {
     fn load(
         &self,

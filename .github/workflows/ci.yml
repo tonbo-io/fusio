@@ -197,6 +197,12 @@ jobs:
           command: build
           args: --target wasm32-unknown-unknown --package fusio-parquet --features=web
 
+      - name: Run cargo build on fusio-manifest
+        uses: actions-rs/cargo@v1
+        with:
+          command: build
+          args: --target wasm32-unknown-unknown --package fusio-manifest --features=wasm
+
       - name: Install Chrome Environment
         run: |
           mkdir -p /tmp/chrome

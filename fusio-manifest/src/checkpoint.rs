@@ -138,7 +138,7 @@ impl<FS> CheckpointStoreImpl<FS> {
 
 impl<FS> CheckpointStore for CheckpointStoreImpl<FS>
 where
-    FS: Fs + FsCas + Clone + Send + Sync + 'static,
+    FS: Fs + FsCas + Clone + MaybeSend + MaybeSync + 'static,
     <FS as Fs>::File: FileCommit,
 {
     fn put_checkpoint<'s>(
@@ -299,7 +299,7 @@ where
 
 impl<FS> CheckpointStoreImpl<FS>
 where
-    FS: Fs + Send + Sync,
+    FS: Fs + MaybeSend + MaybeSync,
 {
     async fn load_meta(fs: &FS, meta_key: String) -> Result<CheckpointMeta> {
         let mut mf = fs.open(&Path::from(meta_key)).await?;
