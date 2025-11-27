@@ -3,7 +3,11 @@ mod error;
 pub mod monoio;
 #[cfg(all(feature = "tokio-http", not(feature = "completion-based")))]
 pub mod tokio;
-#[cfg(all(feature = "wasm-http", not(feature = "completion-based")))]
+#[cfg(all(
+    feature = "wasm-http",
+    not(feature = "completion-based"),
+    target_arch = "wasm32"
+))]
 pub mod wasm;
 
 use std::{future::Future, pin::Pin};
@@ -18,25 +22,48 @@ use http_body_util::BodyExt;
 
 use crate::error::BoxedError;
 
+#[cfg(target_arch = "wasm32")]
+pub trait HttpMaybeSend: MaybeSend {}
+#[cfg(target_arch = "wasm32")]
+impl<T> HttpMaybeSend for T where T: MaybeSend {}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub trait HttpMaybeSend: MaybeSend + Send {}
+#[cfg(not(target_arch = "wasm32"))]
+impl<T> HttpMaybeSend for T where T: MaybeSend + Send {}
+
+#[cfg(target_arch = "wasm32")]
+pub trait HttpMaybeSync: MaybeSync {}
+#[cfg(target_arch = "wasm32")]
+impl<T> HttpMaybeSync for T where T: MaybeSync {}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub trait HttpMaybeSync: MaybeSync + Sync {}
+#[cfg(not(target_arch = "wasm32"))]
+impl<T> HttpMaybeSync for T where T: MaybeSync + Sync {}
+
 pub trait HttpClient: MaybeSend + MaybeSync {
-    type RespBody: Body<Data: Into<Bytes>, Error: Into<BoxedError>> + Send + MaybeSync + 'static;
+    type RespBody: Body<Data: Into<Bytes>, Error: Into<BoxedError>>
+        + HttpMaybeSend
+        + HttpMaybeSync
+        + 'static;
 
     fn send_request<B>(
         &self,
         request: Request<B>,
     ) -> impl Future<Output = Result<Response<Self::RespBody>, HttpError>> + MaybeSend
     where
-        B: Body + Send + MaybeSync + 'static,
+        B: Body + HttpMaybeSend + HttpMaybeSync + 'static,
         B::Data: Into<Bytes>,
         B::Error: Into<BoxedError>;
 }
 
 pub trait MaybeSendStream: Stream + Unpin + MaybeSend {}
 
-#[cfg(not(feature = "no-send"))]
-pub type BoxBody = http_body_util::combinators::BoxBody<Bytes, HttpError>;
-#[cfg(feature = "no-send")]
+#[cfg(target_arch = "wasm32")]
 pub type BoxBody = http_body_util::combinators::UnsyncBoxBody<Bytes, HttpError>;
+#[cfg(not(target_arch = "wasm32"))]
+pub type BoxBody = http_body_util::combinators::BoxBody<Bytes, HttpError>;
 
 pub trait DynHttpClient: MaybeSend + MaybeSync {
     fn dyn_send_request(
@@ -48,6 +75,7 @@ pub trait DynHttpClient: MaybeSend + MaybeSync {
 impl<C> DynHttpClient for C
 where
     C: HttpClient,
+    C::RespBody: HttpMaybeSend + HttpMaybeSync + 'static,
 {
     fn dyn_send_request(
         &self,
@@ -80,7 +108,7 @@ impl HttpClient for Box<dyn DynHttpClient> {
         request: Request<B>,
     ) -> Result<Response<Self::RespBody>, HttpError>
     where
-        B: Body + Send + MaybeSync + 'static,
+        B: Body + HttpMaybeSend + HttpMaybeSync + 'static,
         B::Data: Into<Bytes>,
         B::Error: Into<BoxedError>,
     {
