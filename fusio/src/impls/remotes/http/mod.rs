@@ -23,9 +23,9 @@ use http_body_util::BodyExt;
 use crate::error::BoxedError;
 
 #[cfg(target_arch = "wasm32")]
-pub trait HttpMaybeSend: MaybeSend {}
+pub trait HttpMaybeSend: MaybeSend + Send {}
 #[cfg(target_arch = "wasm32")]
-impl<T> HttpMaybeSend for T where T: MaybeSend {}
+impl<T> HttpMaybeSend for T where T: MaybeSend + Send {}
 
 #[cfg(not(target_arch = "wasm32"))]
 pub trait HttpMaybeSend: MaybeSend + Send {}
