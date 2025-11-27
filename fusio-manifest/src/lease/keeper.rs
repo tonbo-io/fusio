@@ -2,7 +2,6 @@ use core::sync::atomic::{AtomicBool, Ordering};
 use std::{sync::Arc, time::Duration};
 
 use fusio::executor::{Executor, Timer};
-use fusio_core::{MaybeSend, MaybeSync};
 use futures_channel::oneshot;
 
 use super::{LeaseHandle, LeaseStore};
@@ -28,7 +27,7 @@ impl LeaseKeeper {
     ) -> Result<Self>
     where
         LS: LeaseStore + Clone + 'static,
-        E: Executor + Timer + Clone + MaybeSend + MaybeSync + 'static,
+        E: Executor + Timer + Clone + 'static,
     {
         if ttl == Duration::from_millis(0) {
             return Err(Error::Unimplemented("lease keeper requires positive ttl"));

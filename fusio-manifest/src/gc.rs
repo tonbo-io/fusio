@@ -119,7 +119,7 @@ where
 impl<C, T> GcPlanStore for FsGcPlanStore<C, T>
 where
     C: FsCas + Clone + MaybeSend + MaybeSync + 'static,
-    T: Timer + Clone + MaybeSend + MaybeSync + 'static,
+    T: Timer + Clone + 'static,
 {
     fn load(&self) -> impl MaybeSendFuture<Output = Result<Option<(GcPlan, GcTag)>, Error>> + '_ {
         async move {

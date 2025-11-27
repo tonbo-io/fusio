@@ -111,7 +111,7 @@ where
 impl<FS, T> LeaseStore for LeaseStoreImpl<FS, T>
 where
     FS: Fs + FsCas + Clone + MaybeSend + MaybeSync + 'static,
-    T: Timer + Clone + MaybeSend + MaybeSync + 'static,
+    T: Timer + Clone + 'static,
 {
     fn create(
         &self,

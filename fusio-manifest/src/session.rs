@@ -1,7 +1,6 @@
 use std::{collections::HashMap, hash::Hash, marker::PhantomData, sync::Arc, time::Duration};
 
 use fusio::executor::{Executor, Timer};
-use fusio_core::{MaybeSend, MaybeSync};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 use crate::{
@@ -26,7 +25,7 @@ where
     SS: SegmentIo,
     CS: CheckpointStore,
     LS: LeaseStore,
-    E: Executor + Timer + Clone + MaybeSend + MaybeSync + 'static,
+    E: Executor + Timer + Clone + 'static,
     R: RetentionPolicy + Clone,
 {
     store: Arc<Store<HS, SS, CS, LS, E, R>>,
@@ -45,7 +44,7 @@ where
     SS: SegmentIo,
     CS: CheckpointStore,
     LS: LeaseStore,
-    E: Executor + Timer + Clone + MaybeSend + MaybeSync + 'static,
+    E: Executor + Timer + Clone + 'static,
     R: RetentionPolicy + Clone,
 {
     fn drop(&mut self) {
@@ -64,7 +63,7 @@ where
     SS: SegmentIo,
     CS: CheckpointStore,
     LS: LeaseStore,
-    E: Executor + Timer + Clone + MaybeSend + MaybeSync + 'static,
+    E: Executor + Timer + Clone + 'static,
     R: RetentionPolicy + Clone,
 {
     fn new(
@@ -299,7 +298,7 @@ where
     SS: SegmentIo,
     CS: CheckpointStore,
     LS: LeaseStore,
-    E: Executor + Timer + Clone + MaybeSend + MaybeSync + 'static,
+    E: Executor + Timer + Clone + 'static,
     R: RetentionPolicy + Clone,
 {
     inner: SessionInner<K, V, HS, SS, CS, LS, E, R>,
@@ -313,7 +312,7 @@ where
     SS: SegmentIo,
     CS: CheckpointStore,
     LS: LeaseStore,
-    E: Executor + Timer + Clone + MaybeSend + MaybeSync + 'static,
+    E: Executor + Timer + Clone + 'static,
     R: RetentionPolicy + Clone,
 {
     pub(crate) fn new(
@@ -370,7 +369,7 @@ where
     SS: SegmentIo,
     CS: CheckpointStore,
     LS: LeaseStore,
-    E: Executor + Timer + Clone + MaybeSend + MaybeSync + 'static,
+    E: Executor + Timer + Clone + 'static,
     R: RetentionPolicy + Clone,
 {
     inner: SessionInner<K, V, HS, SS, CS, LS, E, R>,
@@ -385,7 +384,7 @@ where
     SS: SegmentIo,
     CS: CheckpointStore,
     LS: LeaseStore,
-    E: Executor + Timer + Clone + MaybeSend + MaybeSync + 'static,
+    E: Executor + Timer + Clone + 'static,
     R: RetentionPolicy + Clone,
 {
     pub(crate) fn new(
