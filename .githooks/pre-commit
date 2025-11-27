@@ -47,5 +47,6 @@ run_step "cargo clippy -p fusio-object-store --all-features -- -D warnings"
 run_step "cargo test -p fusio --features tokio,aws,tokio-http"
 run_step "cargo test -p fusio-parquet --features tokio"
 run_step "cargo test -p fusio-manifest --lib --no-default-features --features std"
+run_step "cargo build --target wasm32-unknown-unknown -p fusio --no-default-features --features \"aws,opfs,wasm-http\""
 
 exit 0
