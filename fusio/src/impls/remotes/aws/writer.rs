@@ -189,7 +189,7 @@ impl S3Writer {
     fn determine_copy_part_size(object_size: u64) -> Result<u64, Error> {
         let min_part = S3_PART_MINIMUM_SIZE as u64;
         let default_part = DEFAULT_COPY_PART_SIZE as u64;
-        let required_part = (object_size + S3_MAX_PARTS - 1) / S3_MAX_PARTS;
+        let required_part = object_size.div_ceil(S3_MAX_PARTS);
         let chunk_size = min_part.max(default_part).max(required_part);
 
         if chunk_size > S3_PART_MAXIMUM_SIZE {
