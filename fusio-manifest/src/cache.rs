@@ -7,7 +7,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use fusio_core::MaybeSendFuture;
+use fusio_core::{MaybeSend, MaybeSendFuture, MaybeSync};
 #[cfg(feature = "cache-moka")]
 use moka::sync::Cache;
 
@@ -161,7 +161,7 @@ pub struct CacheMetrics {
     pub evictions: u64,
 }
 
-pub trait BlobCache: Send + Sync {
+pub trait BlobCache: MaybeSend + MaybeSync {
     fn get(&self, key: &CacheKey) -> Option<CacheValue>;
     fn insert(&self, key: CacheKey, value: CacheValue);
     fn invalidate(&self, key: &CacheKey);
@@ -257,7 +257,7 @@ impl<S> CachedSegmentStore<S> {
 
 impl<S> SegmentIo for CachedSegmentStore<S>
 where
-    S: SegmentIo + Send + Sync,
+    S: SegmentIo + MaybeSend + MaybeSync,
 {
     fn put_next<'s>(
         &'s self,
@@ -457,7 +457,7 @@ impl<S> CachedCheckpointStore<S> {
 
 impl<S> CheckpointStore for CachedCheckpointStore<S>
 where
-    S: CheckpointStore + Send + Sync,
+    S: CheckpointStore + MaybeSend + MaybeSync,
 {
     fn put_checkpoint<'s>(
         &'s self,

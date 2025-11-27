@@ -104,7 +104,7 @@ impl<FS> SegmentStoreImpl<FS> {
 
 impl<FS> SegmentIo for SegmentStoreImpl<FS>
 where
-    FS: Fs + FsCas + ObjectHead + Clone + Send + Sync + 'static,
+    FS: Fs + FsCas + ObjectHead + Clone + MaybeSend + MaybeSync + 'static,
 {
     fn put_next<'s>(
         &'s self,
@@ -274,11 +274,13 @@ fn map_fs_error(err: FsError) -> Error {
     }
 }
 
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 #[derive(Deserialize)]
 struct SegmentTxnOnly {
     txn_id: u64,
 }
 
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 #[derive(Debug)]
 struct SegmentMetadataParseError {
     path: String,
@@ -286,6 +288,7 @@ struct SegmentMetadataParseError {
 }
 
 impl SegmentMetadataParseError {
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     fn new(path: &Path, source: serde_json::Error) -> Self {
         Self {
             path: path.to_string(),
@@ -306,6 +309,7 @@ impl std::error::Error for SegmentMetadataParseError {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl ObjectHead for fusio::impls::disk::TokioFs {
     fn head_metadata<'a>(
         &'a self,
@@ -357,7 +361,7 @@ impl ObjectHead for InMemoryFs {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use fusio::disk::LocalFs;
     use tempfile::TempDir;

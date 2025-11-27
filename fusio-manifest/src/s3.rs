@@ -39,7 +39,7 @@ const DEFAULT_CACHE_MAX_BYTES: u64 = 256 * 1024 * 1024;
 pub struct Config<R = DefaultRetention, E = BlockingExecutor>
 where
     R: RetentionPolicy + Clone,
-    E: Executor + Timer + Clone + Send + Sync + 'static,
+    E: Executor + Timer + Clone + 'static,
 {
     pub s3: AmazonS3,
     pub prefix: String,
@@ -66,11 +66,11 @@ impl Config<DefaultRetention, BlockingExecutor> {
 impl<R, E> Config<R, E>
 where
     R: RetentionPolicy + Clone,
-    E: Executor + Timer + Clone + Send + Sync + 'static,
+    E: Executor + Timer + Clone + 'static,
 {
     pub fn with_context<E2, C>(self, opts: C) -> Config<R, E2>
     where
-        E2: Executor + Timer + Clone + Send + Sync + 'static,
+        E2: Executor + Timer + Clone + 'static,
         C: Into<Arc<ManifestContext<R, E2>>>,
     {
         Config {
@@ -97,7 +97,7 @@ where
 pub struct Builder<R = DefaultRetention, E = BlockingExecutor>
 where
     R: RetentionPolicy + Clone,
-    E: Executor + Timer + Clone + Send + Sync + 'static,
+    E: Executor + Timer + Clone + 'static,
 {
     bucket: String,
     prefix: Option<String>,
@@ -136,7 +136,7 @@ impl Builder<DefaultRetention, BlockingExecutor> {
 impl<R, E> Clone for Config<R, E>
 where
     R: RetentionPolicy + Clone,
-    E: Executor + Timer + Clone + Send + Sync + 'static,
+    E: Executor + Timer + Clone + 'static,
 {
     fn clone(&self) -> Self {
         Self {
@@ -150,7 +150,7 @@ where
 impl<R, E> Builder<R, E>
 where
     R: RetentionPolicy + Clone,
-    E: Executor + Timer + Clone + Send + Sync + 'static,
+    E: Executor + Timer + Clone + 'static,
 {
     /// Optional manifest prefix. Defaults to root (no prefix).
     pub fn prefix(mut self, prefix: impl Into<String>) -> Self {
@@ -201,7 +201,7 @@ where
     pub fn with_context<R2, E2, C>(self, opts: C) -> Builder<R2, E2>
     where
         R2: RetentionPolicy + Clone,
-        E2: Executor + Timer + Clone + Send + Sync + 'static,
+        E2: Executor + Timer + Clone + 'static,
         C: Into<Arc<ManifestContext<R2, E2>>>,
     {
         Builder {
@@ -245,7 +245,7 @@ where
 impl<R, E> Clone for Builder<R, E>
 where
     R: RetentionPolicy + Clone,
-    E: Executor + Timer + Clone + Send + Sync + 'static,
+    E: Executor + Timer + Clone + 'static,
 {
     fn clone(&self) -> Self {
         Self {
@@ -277,7 +277,7 @@ type LeaseStore<T> = LeaseStoreImpl<AmazonS3, T>;
 
 pub struct S3Manifest<K, V, E = BlockingExecutor, R = DefaultRetention>
 where
-    E: Executor + Timer + Clone + Send + Sync + 'static,
+    E: Executor + Timer + Clone + 'static,
     R: RetentionPolicy + Clone,
 {
     inner: Manifest<K, V, HeadStore, SegmentStore, CheckpointStore, LeaseStore<E>, E, R>,
@@ -288,7 +288,7 @@ impl<K, V, E, R> S3Manifest<K, V, E, R>
 where
     K: PartialOrd + Eq + Hash + serde::Serialize + for<'de> serde::Deserialize<'de>,
     V: serde::Serialize + for<'de> serde::Deserialize<'de>,
-    E: Executor + Timer + Clone + Send + Sync + 'static,
+    E: Executor + Timer + Clone + 'static,
     R: RetentionPolicy + Clone,
 {
     pub async fn session_write(
@@ -337,7 +337,7 @@ where
 /// Wrapper that hides the GC plan store and exposes ergonomic GC methods.
 pub struct S3Compactor<K, V, E = BlockingExecutor, R = DefaultRetention>
 where
-    E: Executor + Timer + Clone + Send + Sync + 'static,
+    E: Executor + Timer + Clone + 'static,
     R: RetentionPolicy + Clone,
 {
     inner: Compactor<K, V, HeadStore, SegmentStore, CheckpointStore, LeaseStore<E>, E, R>,
@@ -348,7 +348,7 @@ impl<K, V, E, R> S3Compactor<K, V, E, R>
 where
     K: PartialOrd + Eq + Hash + serde::Serialize + for<'de> serde::Deserialize<'de>,
     V: serde::Serialize + for<'de> serde::Deserialize<'de>,
-    E: Executor + Timer + Clone + Send + Sync + 'static,
+    E: Executor + Timer + Clone + 'static,
     R: RetentionPolicy + Clone,
 {
     pub async fn compact_once(
@@ -385,7 +385,7 @@ fn compactor<K, V, E, R>(cfg: Config<R, E>) -> S3Compactor<K, V, E, R>
 where
     K: PartialOrd + Eq + Hash + serde::Serialize + for<'de> serde::Deserialize<'de>,
     V: serde::Serialize + for<'de> serde::Deserialize<'de>,
-    E: Executor + Timer + Clone + Send + Sync + 'static,
+    E: Executor + Timer + Clone + 'static,
     R: RetentionPolicy + Clone,
 {
     let head = HeadStoreImpl::new(cfg.s3.clone(), cfg.head_key());
@@ -413,7 +413,7 @@ impl<K, V, E, R> From<Config<R, E>> for S3Manifest<K, V, E, R>
 where
     K: PartialOrd + Eq + Hash + serde::Serialize + for<'de> serde::Deserialize<'de>,
     V: serde::Serialize + for<'de> serde::Deserialize<'de>,
-    E: Executor + Timer + Clone + Send + Sync + 'static,
+    E: Executor + Timer + Clone + 'static,
     R: RetentionPolicy + Clone,
 {
     fn from(cfg: Config<R, E>) -> Self {
@@ -435,7 +435,7 @@ impl<K, V, E, R> From<Config<R, E>> for S3Compactor<K, V, E, R>
 where
     K: PartialOrd + Eq + Hash + serde::Serialize + for<'de> serde::Deserialize<'de>,
     V: serde::Serialize + for<'de> serde::Deserialize<'de>,
-    E: Executor + Timer + Clone + Send + Sync + 'static,
+    E: Executor + Timer + Clone + 'static,
     R: RetentionPolicy + Clone,
 {
     fn from(cfg: Config<R, E>) -> Self {

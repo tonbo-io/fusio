@@ -14,7 +14,7 @@ use crate::{
     snapshot::{ScanRange, Snapshot},
     store::Store,
     types::{Error, Result},
-    BlockingExecutor,
+    BlockingExecutor, DynTimer,
 };
 
 struct SessionInner<K, V, HS, SS, CS, LS, E = BlockingExecutor, R = DefaultRetention>
@@ -25,7 +25,7 @@ where
     SS: SegmentIo,
     CS: CheckpointStore,
     LS: LeaseStore,
-    E: Executor + Timer + Clone + Send + Sync + 'static,
+    E: Executor + Timer + Clone + 'static,
     R: RetentionPolicy + Clone,
 {
     store: Arc<Store<HS, SS, CS, LS, E, R>>,
@@ -44,7 +44,7 @@ where
     SS: SegmentIo,
     CS: CheckpointStore,
     LS: LeaseStore,
-    E: Executor + Timer + Clone + Send + Sync + 'static,
+    E: Executor + Timer + Clone + 'static,
     R: RetentionPolicy + Clone,
 {
     fn drop(&mut self) {
@@ -63,7 +63,7 @@ where
     SS: SegmentIo,
     CS: CheckpointStore,
     LS: LeaseStore,
-    E: Executor + Timer + Clone + Send + Sync + 'static,
+    E: Executor + Timer + Clone + 'static,
     R: RetentionPolicy + Clone,
 {
     fn new(
@@ -286,7 +286,7 @@ where
     }
 }
 
-type ArcTimer = Arc<dyn Timer + Send + Sync>;
+type ArcTimer = Arc<DynTimer>;
 
 /// Read-only pinned session.
 #[must_use = "Sessions hold a lease; call end().await before dropping"]
@@ -298,7 +298,7 @@ where
     SS: SegmentIo,
     CS: CheckpointStore,
     LS: LeaseStore,
-    E: Executor + Timer + Clone + Send + Sync + 'static,
+    E: Executor + Timer + Clone + 'static,
     R: RetentionPolicy + Clone,
 {
     inner: SessionInner<K, V, HS, SS, CS, LS, E, R>,
@@ -312,7 +312,7 @@ where
     SS: SegmentIo,
     CS: CheckpointStore,
     LS: LeaseStore,
-    E: Executor + Timer + Clone + Send + Sync + 'static,
+    E: Executor + Timer + Clone + 'static,
     R: RetentionPolicy + Clone,
 {
     pub(crate) fn new(
@@ -369,7 +369,7 @@ where
     SS: SegmentIo,
     CS: CheckpointStore,
     LS: LeaseStore,
-    E: Executor + Timer + Clone + Send + Sync + 'static,
+    E: Executor + Timer + Clone + 'static,
     R: RetentionPolicy + Clone,
 {
     inner: SessionInner<K, V, HS, SS, CS, LS, E, R>,
@@ -384,7 +384,7 @@ where
     SS: SegmentIo,
     CS: CheckpointStore,
     LS: LeaseStore,
-    E: Executor + Timer + Clone + Send + Sync + 'static,
+    E: Executor + Timer + Clone + 'static,
     R: RetentionPolicy + Clone,
 {
     pub(crate) fn new(
@@ -874,6 +874,8 @@ mod deterministic_tests {
     mod loom_support {
         use std::{future::Future, sync::Arc};
 
+        use fusio::{MaybeSend, MaybeSync};
+
         /// Execute a Loom model run for the provided closure.
         ///
         /// This wraps `loom::model::Builder::check`, spawning a single root thread with
@@ -882,7 +884,7 @@ mod deterministic_tests {
         /// interleavings of any threads spawned inside the closure.
         pub(crate) fn run<F>(f: F)
         where
-            F: Fn() + Send + Sync + 'static,
+            F: Fn() + MaybeSend + MaybeSync + 'static,
         {
             let shared = Arc::new(f);
             let builder = loom::model::Builder::new();

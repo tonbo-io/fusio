@@ -34,11 +34,11 @@ use crate::{
 /// the caller.
 pub struct Compactor<K, V, HS, SS, CS, LS, E = BlockingExecutor, R = DefaultRetention>
 where
-    HS: HeadStore + Send + Sync + 'static,
-    SS: SegmentIo + Send + Sync + 'static,
-    CS: CheckpointStore + Send + Sync + 'static,
-    LS: LeaseStore + Send + Sync + 'static,
-    E: Executor + Timer + Clone + Send + Sync + 'static,
+    HS: HeadStore + 'static,
+    SS: SegmentIo + 'static,
+    CS: CheckpointStore + 'static,
+    LS: LeaseStore + 'static,
+    E: Executor + Timer + Clone + 'static,
     R: RetentionPolicy + Clone,
 {
     _phantom: PhantomData<(K, V)>,
@@ -57,11 +57,11 @@ impl<K, V, HS, SS, CS, LS, E, R> Compactor<K, V, HS, SS, CS, LS, E, R>
 where
     K: PartialOrd + Eq + Hash + Serialize + DeserializeOwned,
     V: Serialize + DeserializeOwned,
-    HS: HeadStore + Send + Sync + 'static,
-    SS: SegmentIo + Send + Sync + 'static,
-    CS: CheckpointStore + Send + Sync + 'static,
-    LS: LeaseStore + Send + Sync + 'static,
-    E: Executor + Timer + Clone + Send + Sync + 'static,
+    HS: HeadStore + 'static,
+    SS: SegmentIo + 'static,
+    CS: CheckpointStore + 'static,
+    LS: LeaseStore + 'static,
+    E: Executor + Timer + Clone + 'static,
     R: RetentionPolicy + Clone,
 {
     pub fn new(head: HS, seg: SS, ckpt: CS, leases: LS, opts: Arc<ManifestContext<R, E>>) -> Self {

@@ -47,11 +47,18 @@ impl HttpClient for TokioClient {
 mod tests {
     #[tokio::test]
     async fn test_tokio_client() {
+        use std::env;
+
         use bytes::Bytes;
         use http::{Request, StatusCode};
         use http_body_util::Empty;
 
         use super::{HttpClient, TokioClient};
+
+        // Skip when network access is unavailable (e.g., offline dev/pre-commit runs).
+        if env::var("FUSIO_NET_TESTS").as_deref() != Ok("1") {
+            return;
+        }
 
         let request = Request::get("https://hyper.rs/")
             .body(Empty::<Bytes>::new())

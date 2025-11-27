@@ -12,7 +12,7 @@ use crate::{
 /// Shared for head/segment/checkpoint/lease stores plus runtime context.
 pub(crate) struct Store<HS, SS, CS, LS, E = BlockingExecutor, R = DefaultRetention>
 where
-    E: Executor + Timer + Clone + Send + Sync + 'static,
+    E: Executor + Timer + Clone + 'static,
     R: RetentionPolicy + Clone,
 {
     pub(crate) head: HS,
@@ -24,7 +24,7 @@ where
 
 impl<HS, SS, CS, LS, E, R> Store<HS, SS, CS, LS, E, R>
 where
-    E: Executor + Timer + Clone + Send + Sync + 'static,
+    E: Executor + Timer + Clone + 'static,
     R: RetentionPolicy + Clone,
 {
     pub(crate) fn new(
