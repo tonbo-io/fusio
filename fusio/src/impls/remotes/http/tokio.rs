@@ -1,9 +1,6 @@
-use bytes::Bytes;
 use http::{Request, Response};
-use http_body::Body;
 
 use super::{HttpClient, HttpError};
-use crate::{error::BoxedError, MaybeSync};
 
 pub struct TokioClient {
     client: reqwest::Client,
@@ -31,9 +28,7 @@ impl HttpClient for TokioClient {
         request: Request<B>,
     ) -> Result<Response<Self::RespBody>, HttpError>
     where
-        B: Body + Send + MaybeSync + 'static,
-        B::Data: Into<Bytes>,
-        B::Error: Into<BoxedError>,
+        B: crate::remotes::http::HttpBody,
     {
         let (parts, body) = request.into_parts();
         let request = Request::from_parts(parts, reqwest::Body::wrap(body));

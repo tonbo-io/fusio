@@ -2,11 +2,9 @@ use std::str::FromStr;
 
 use bytes::Bytes;
 use http::{Request, Response};
-use http_body::Body;
 use http_body_util::BodyExt;
 
 use super::{HttpClient, HttpError};
-use crate::{BoxedError, MaybeSync};
 
 #[derive(Default)]
 pub struct WasmClient;
@@ -25,15 +23,12 @@ impl HttpClient for WasmClient {
         request: Request<B>,
     ) -> Result<Response<Self::RespBody>, HttpError>
     where
-        B: Body + Send + MaybeSync + 'static,
-        B::Data: Into<Bytes>,
-        B::Error: Into<BoxedError>,
+        B: crate::remotes::http::HttpBody,
     {
         let uri = request.uri().clone();
         let (parts, body) = request.into_parts();
 
         let url = reqwest::Url::from_str(&uri.to_string())?;
-        let body = http_body_util::combinators::UnsyncBoxBody::new(body);
 
         match body.collect().await {
             Ok(body) => {

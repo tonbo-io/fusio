@@ -1,6 +1,5 @@
 use bytes::Bytes;
 use http::{request::Builder, HeaderValue, Request, Response, Version};
-use http_body::Body;
 use http_body_util::BodyExt;
 use monoio_http::common::body::{Body as _, FixedBody, HttpBody};
 
@@ -23,9 +22,7 @@ impl HttpClient for MonoioClient {
         request: Request<B>,
     ) -> Result<Response<Self::RespBody>, HttpError>
     where
-        B: Body + Send + crate::MaybeSync + 'static,
-        B::Data: Into<bytes::Bytes>,
-        B::Error: Into<crate::BoxedError>,
+        B: crate::remotes::http::HttpBody,
     {
         let uri = request.uri().clone();
         let (parts, body) = request.into_parts();
