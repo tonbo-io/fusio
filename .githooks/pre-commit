@@ -33,6 +33,11 @@ if ! rustup toolchain list | grep -q "nightly"; then
 fi
 FMT_CHECK_CMD="${FMT_BIN} fmt --all -- --check"
 
+# Ensure wasm target is available for the wasm build step.
+if ! rustup target list --installed | grep -q "wasm32-unknown-unknown"; then
+  run_step "rustup target add wasm32-unknown-unknown"
+fi
+
 run_step "${FMT_CHECK_CMD}"
 run_step "cargo check --workspace --all-targets"
 run_step "cargo check -p fusio-manifest --no-default-features --features std"
@@ -47,5 +52,6 @@ run_step "cargo clippy -p fusio-object-store --all-features -- -D warnings"
 run_step "cargo test -p fusio --features tokio,aws,tokio-http"
 run_step "cargo test -p fusio-parquet --features tokio"
 run_step "cargo test -p fusio-manifest --lib --no-default-features --features std"
+run_step "cargo build --target wasm32-unknown-unknown -p fusio --no-default-features --features \"aws,opfs,wasm-http\""
 
 exit 0
