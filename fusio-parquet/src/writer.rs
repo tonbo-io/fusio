@@ -6,17 +6,18 @@ use futures::{future::BoxFuture, FutureExt};
 use parquet::{arrow::async_writer::AsyncFileWriter, errors::ParquetError};
 
 pub struct AsyncWriter {
-    #[cfg(any(feature = "web", feature = "monoio"))]
+    #[cfg(any(feature = "executor-web", feature = "monoio"))]
     #[allow(clippy::arc_with_non_send_sync)]
     inner: Option<std::sync::Arc<futures::lock::Mutex<Box<dyn DynFile>>>>,
-    #[cfg(not(any(feature = "web", feature = "monoio")))]
+    #[cfg(not(any(feature = "executor-web", feature = "monoio")))]
     inner: Option<Box<dyn DynFile>>,
 }
 
+#[cfg(any(feature = "executor-web", feature = "monoio"))]
 unsafe impl Send for AsyncWriter {}
 impl AsyncWriter {
     pub fn new(writer: Box<dyn DynFile>) -> Self {
-        #[cfg(any(feature = "web", feature = "monoio"))]
+        #[cfg(any(feature = "executor-web", feature = "monoio"))]
         #[allow(clippy::arc_with_non_send_sync)]
         let writer = std::sync::Arc::new(futures::lock::Mutex::new(writer));
         {
@@ -30,7 +31,7 @@ impl AsyncWriter {
 impl AsyncFileWriter for AsyncWriter {
     fn write(&mut self, bs: Bytes) -> BoxFuture<'_, parquet::errors::Result<()>> {
         cfg_if::cfg_if! {
-            if #[cfg(all(feature = "web", target_arch = "wasm32"))] {
+            if #[cfg(all(feature = "executor-web", target_arch = "wasm32"))] {
                 match self.inner.as_mut() {
                     Some(writer) => {
                         let (sender, receiver) = futures::channel::oneshot::channel::<Result<(), ParquetError>>();
@@ -84,7 +85,7 @@ impl AsyncFileWriter for AsyncWriter {
 
     fn complete(&mut self) -> BoxFuture<'_, parquet::errors::Result<()>> {
         cfg_if::cfg_if! {
-            if #[cfg(all(feature = "web", target_arch = "wasm32"))] {
+            if #[cfg(all(feature = "executor-web", target_arch = "wasm32"))] {
                  match self.inner.take() {
                     Some(writer) => {
                         let (sender, receiver) = futures::channel::oneshot::channel::<Result<(), ParquetError>>();

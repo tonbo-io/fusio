@@ -11,7 +11,9 @@ bench = ["dep:monoio", "dep:tokio"]
 default = []
 monoio = ["dep:monoio", "fusio/monoio"]
 tokio = ["fusio/tokio"]
-web = ["fusio/opfs"]
+executor-web = ["fusio/executor-web"]
+# Backward-compatible alias for the web executor path (previously tied to OPFS).
+web = ["executor-web"]
 
 [[bench]]
 harness = false
