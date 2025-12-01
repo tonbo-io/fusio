@@ -191,6 +191,12 @@ jobs:
           command: build
           args: --target wasm32-unknown-unknown --package fusio --no-default-features --features=executor-web,aws,wasm-http
 
+      - name: Run cargo build on fusio (opfs back-compat)
+        uses: actions-rs/cargo@v1
+        with:
+          command: build
+          args: --target wasm32-unknown-unknown --package fusio --no-default-features --features=executor-web,opfs,aws,wasm-http
+
       - name: Run cargo build on fusio-parquet
         uses: actions-rs/cargo@v1
         with:
