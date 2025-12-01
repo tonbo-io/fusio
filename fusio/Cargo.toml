@@ -30,6 +30,15 @@ completion-based = ["fusio-core/completion-based"]
 default = ["dyn", "executor", "fs"]
 dyn = ["fusio-core/alloc"]
 executor = []
+executor-web = [
+    "executor",
+    "no-send",
+    "dep:async-lock",
+    "dep:js-sys",
+    "dep:wasm-bindgen",
+    "dep:wasm-bindgen-futures",
+    "dep:web-sys",
+]
 executor-tokio = ["executor", "tokio", "tokio/rt", "tokio/sync", "tokio/time"]
 fs = ["tokio?/fs", "tokio?/rt"]
 http = [
@@ -46,6 +55,7 @@ monoio = ["async-stream", "completion-based", "dep:monoio", "no-send"]
 monoio-http = ["dep:monoio-http", "dep:monoio-http-client", "http", "monoio"]
 no-send = ["fusio-core/no-send"]
 opfs = [
+    "executor-web",
     "async-stream",
     "dep:async-lock",
     "dep:js-sys",

@@ -65,6 +65,18 @@ You can freely transmute between them.
 
 Opening an object with `OpenOptions::write(true).truncate(false)` now keeps the request fully server-side: `fusio` starts a multipart upload, uses `UploadPartCopy` to splice the existing object into the new upload, and preserves all metadata/SSE headers from the original object. New bytes are buffered while the copy finishes and then streamed as additional parts. Downstream consumers such as [`lotus`](../lotus) can remove their reopen-or-404 append workarounds once they depend on this release.
 
+### WASM executors
+
+- `executor-web`: browser/web executor for `wasm32` (no OPFS dependency). `JoinHandle::join` always returns an error because `spawn_local` tasks are not awaitable; use other signaling for completion.
+- `opfs`: back-compat alias of the same executor when OPFS is enabled. OPFS and S3/`wasm-http` are typically used separately.
+
+Feature combos:
+
+- `cargo build -p fusio --target wasm32-unknown-unknown --no-default-features --features "executor-web,aws,wasm-http"`
+- `cargo build -p fusio --target wasm32-unknown-unknown --no-default-features --features "executor-web,opfs,wasm-http"`
+
+See `examples/opfs` for OPFS usage.
+
 ## When to choose `fusio`?
 
 When you need a combination of: flexibility, abstraction on different storage backends without a performance penalty and a small binary. Overall, `fusio` carefully selects a subset of semantics and behaviors from multiple storage backends and async runtimes to ensure native performance in most scenarios. For example, `fusio` adopts a completion-based API (inspired by [monoio](https://docs.rs/monoio/latest/monoio/io/trait.AsyncReadRent.html)) so that file operations on `tokio` and `tokio-uring`  have the same performance as they would without `fusio`.
