@@ -1,7 +1,9 @@
 //! Implementations of the traits in the `fusio` crate.
 
 pub mod buffered;
+#[cfg(feature = "fs")]
 pub mod disk;
+#[cfg(feature = "fs")]
 pub mod mem;
 pub mod remotes;
 

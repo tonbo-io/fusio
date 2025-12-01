@@ -62,6 +62,8 @@ opfs = [
     "dep:wasm-bindgen",
     "dep:wasm-bindgen-futures",
     "dep:web-sys",
+    "fs",
+    "dyn",
     "no-send",
 ]
 sync = ["opfs"]
