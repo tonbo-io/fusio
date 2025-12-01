@@ -54,4 +54,27 @@ pub(crate) mod tests {
         assert_eq!(buf, b"fusio-web");
         file.close().await.unwrap();
     }
+
+    use wasm_bindgen::{prelude::wasm_bindgen, JsValue};
+
+    #[wasm_bindgen(module = "/tests/worker_scope_shim.js")]
+    extern "C" {
+        #[wasm_bindgen(catch)]
+        fn install_fake_worker_scope() -> Result<bool, JsValue>;
+    }
+
+    #[wasm_bindgen_test]
+    async fn sleep_in_fake_worker_scope() {
+        // If we cannot install a fake worker scope in this host (e.g., prototype
+        // changes are blocked), skip the check.
+        let Ok(Ok(installed)) = std::panic::catch_unwind(|| unsafe { install_fake_worker_scope() })
+        else {
+            return;
+        };
+        if !installed {
+            return;
+        }
+        let exec = WebExecutor::new();
+        exec.sleep(Duration::from_millis(1)).await;
+    }
 }

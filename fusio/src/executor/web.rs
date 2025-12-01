@@ -132,7 +132,21 @@ impl Timer for WebExecutor {
                     return;
                 }
 
-                wasm_bindgen::throw_str("Timer requires Window or WorkerGlobalScope");
+                // Fallback: if a setTimeout-like function exists on globalThis
+                // (e.g., Node-style shims), use it; otherwise resolve immediately.
+                if let Some(set_timeout) =
+                    js_sys::Reflect::get(&global, &JsValue::from_str("setTimeout"))
+                        .ok()
+                        .and_then(|v| v.dyn_into::<js_sys::Function>().ok())
+                {
+                    let cb = Closure::once_into_js(move || {
+                        let _ = resolve.call0(&wasm_bindgen::JsValue::UNDEFINED);
+                    });
+                    let _ = set_timeout.call2(&global, cb.as_ref(), &JsValue::from_f64(ms as f64));
+                    return;
+                }
+
+                let _ = resolve.call0(&wasm_bindgen::JsValue::UNDEFINED);
             });
             let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
         })
