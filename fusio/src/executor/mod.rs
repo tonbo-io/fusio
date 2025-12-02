@@ -10,7 +10,7 @@ use std::{
 use async_lock::{RwLock as AsyncRwLock, RwLockReadGuard, RwLockWriteGuard};
 use fusio_core::{MaybeSend, MaybeSendFuture, MaybeSync};
 use futures_executor::block_on;
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", feature = "executor-web"))]
 use js_sys::Date;
 
 pub trait JoinHandle<R> {
@@ -241,11 +241,11 @@ impl Timer for NoopExecutor {
 
 #[inline]
 fn now() -> SystemTime {
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(all(target_arch = "wasm32", feature = "executor-web"))]
     {
-        SystemTime::UNIX_EPOCH + Duration::from_millis(js_sys::Date::now() as u64)
+        SystemTime::UNIX_EPOCH + Duration::from_millis(Date::now() as u64)
     }
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(not(all(target_arch = "wasm32", feature = "executor-web")))]
     {
         SystemTime::now()
     }
