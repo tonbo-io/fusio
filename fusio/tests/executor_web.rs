@@ -20,9 +20,7 @@ pub(crate) mod tests {
             }
         });
 
-        assert!(handle.join().await.is_err());
-
-        exec.sleep(Duration::from_millis(5)).await;
+        handle.join().await.unwrap();
         assert_eq!(*value.read().await, 1);
     }
 
