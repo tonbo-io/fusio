@@ -10,6 +10,8 @@ use std::{
 use async_lock::{RwLock as AsyncRwLock, RwLockReadGuard, RwLockWriteGuard};
 use fusio_core::{MaybeSend, MaybeSendFuture, MaybeSync};
 use futures_executor::block_on;
+#[cfg(target_arch = "wasm32")]
+use js_sys::Date;
 
 pub trait JoinHandle<R> {
     fn join(self) -> impl Future<Output = Result<R, Box<dyn Error>>> + MaybeSend;
@@ -163,7 +165,7 @@ impl Timer for BlockingExecutor {
     }
 
     fn now(&self) -> SystemTime {
-        SystemTime::now()
+        now()
     }
 }
 
@@ -233,6 +235,18 @@ impl Timer for NoopExecutor {
     }
 
     fn now(&self) -> SystemTime {
+        now()
+    }
+}
+
+#[inline]
+fn now() -> SystemTime {
+    #[cfg(target_arch = "wasm32")]
+    {
+        SystemTime::UNIX_EPOCH + Duration::from_millis(js_sys::Date::now() as u64)
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
         SystemTime::now()
     }
 }
