@@ -192,7 +192,7 @@ impl Timer for NoopTimer {
     }
 
     fn now(&self) -> SystemTime {
-        SystemTime::now()
+        now()
     }
 }
 
@@ -240,7 +240,7 @@ impl Timer for NoopExecutor {
 }
 
 #[inline]
-fn now() -> SystemTime {
+pub(super) fn now() -> SystemTime {
     #[cfg(all(target_arch = "wasm32", feature = "executor-web"))]
     {
         SystemTime::UNIX_EPOCH + Duration::from_millis(Date::now() as u64)

@@ -153,6 +153,6 @@ impl Timer for WebExecutor {
     }
 
     fn now(&self) -> SystemTime {
-        SystemTime::now()
+        super::now()
     }
 }
