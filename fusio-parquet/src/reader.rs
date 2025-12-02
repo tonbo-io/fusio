@@ -18,16 +18,16 @@ use parquet::{
 const PREFETCH_FOOTER_SIZE: usize = 512 * 1024;
 
 pub struct AsyncReader {
-    #[cfg(any(feature = "web", feature = "monoio"))]
+    #[cfg(any(feature = "executor-web", feature = "monoio"))]
     inner: Arc<futures::lock::Mutex<Box<dyn DynFile>>>,
-    #[cfg(not(any(feature = "web", feature = "monoio")))]
+    #[cfg(not(any(feature = "executor-web", feature = "monoio")))]
     inner: Box<dyn DynFile>,
     content_length: u64,
     // The prefetch size for fetching file footer.
     prefetch_footer_size: usize,
 }
 
-#[cfg(any(feature = "web", feature = "monoio"))]
+#[cfg(any(feature = "executor-web", feature = "monoio"))]
 unsafe impl Send for AsyncReader {}
 
 fn set_prefetch_footer_size(footer_size: usize, content_size: u64) -> usize {
@@ -40,7 +40,7 @@ impl AsyncReader {
         reader: Box<dyn DynFile>,
         content_length: u64,
     ) -> Result<Self, fusio::error::Error> {
-        #[cfg(any(feature = "web", feature = "monoio"))]
+        #[cfg(any(feature = "executor-web", feature = "monoio"))]
         #[allow(clippy::arc_with_non_send_sync)]
         let reader = Arc::new(futures::lock::Mutex::new(reader));
         Ok(Self {
@@ -60,10 +60,10 @@ impl AsyncReader {
         prefetch_footer_size: usize,
         file: &mut F,
     ) -> Result<ParquetMetaData, ParquetError> {
-        #[cfg_attr(any(feature = "web", feature = "monoio"), allow(unused_mut))]
+        #[cfg_attr(any(feature = "executor-web", feature = "monoio"), allow(unused_mut))]
         let mut buf = vec![0; prefetch_footer_size];
 
-        #[cfg(not(any(feature = "web", feature = "monoio")))]
+        #[cfg(not(any(feature = "executor-web", feature = "monoio")))]
         let buf = &mut buf[..];
 
         let (result, prefetched_footer_content) = file
@@ -125,38 +125,38 @@ impl AsyncReader {
         range: Range<u64>,
     ) -> Result<Bytes, ParquetError> {
         let len = (range.end - range.start) as usize;
-        #[cfg_attr(any(feature = "web", feature = "monoio"), allow(unused_mut))]
+        #[cfg_attr(any(feature = "executor-web", feature = "monoio"), allow(unused_mut))]
         let mut buf = vec![0; len];
 
-        #[cfg(not(any(feature = "web", feature = "monoio")))]
+        #[cfg(not(any(feature = "executor-web", feature = "monoio")))]
         let b = &mut buf[..];
-        #[cfg(any(feature = "web", feature = "monoio"))]
+        #[cfg(any(feature = "executor-web", feature = "monoio"))]
         let b = buf;
 
         let (result, _b) = file.read_exact_at(b, range.start).await;
         result.map_err(|err| ParquetError::External(Box::new(err)))?;
 
-        #[cfg(not(any(feature = "web", feature = "monoio")))]
+        #[cfg(not(any(feature = "executor-web", feature = "monoio")))]
         return Ok(buf.into());
-        #[cfg(any(feature = "web", feature = "monoio"))]
+        #[cfg(any(feature = "executor-web", feature = "monoio"))]
         return Ok(_b.into());
     }
 }
 
 impl AsyncFileReader for AsyncReader {
-    #[cfg(not(any(feature = "web", feature = "monoio")))]
+    #[cfg(not(any(feature = "executor-web", feature = "monoio")))]
     fn get_bytes(&mut self, range: Range<u64>) -> BoxFuture<'_, parquet::errors::Result<Bytes>> {
         Self::load_bytes(&mut self.inner, range).boxed()
     }
 
-    #[cfg(any(feature = "web", feature = "monoio"))]
+    #[cfg(any(feature = "executor-web", feature = "monoio"))]
     fn get_bytes(&mut self, range: Range<u64>) -> BoxFuture<'_, parquet::errors::Result<Bytes>> {
         use futures::channel::oneshot;
 
         let (sender, receiver) = oneshot::channel::<Result<Bytes, ParquetError>>();
         let reader = self.inner.clone();
 
-        #[cfg(all(feature = "web", target_arch = "wasm32"))]
+        #[cfg(all(feature = "executor-web", target_arch = "wasm32"))]
         let spawner = wasm_bindgen_futures::spawn_local;
         #[cfg(feature = "monoio")]
         let spawner = monoio::spawn;
@@ -170,7 +170,7 @@ impl AsyncFileReader for AsyncReader {
         async move { receiver.await.unwrap() }.boxed()
     }
 
-    #[cfg(not(any(feature = "web", feature = "monoio")))]
+    #[cfg(not(any(feature = "executor-web", feature = "monoio")))]
     fn get_metadata(
         &mut self,
         options: Option<&ArrowReaderOptions>,
@@ -202,7 +202,7 @@ impl AsyncFileReader for AsyncReader {
         .boxed()
     }
 
-    #[cfg(any(feature = "web", feature = "monoio"))]
+    #[cfg(any(feature = "executor-web", feature = "monoio"))]
     fn get_metadata(
         &mut self,
         options: Option<&ArrowReaderOptions>,
@@ -216,7 +216,7 @@ impl AsyncFileReader for AsyncReader {
         let (sender, receiver) = oneshot::channel::<Result<ParquetMetaData, ParquetError>>();
         let reader = self.inner.clone();
 
-        #[cfg(all(feature = "web", target_arch = "wasm32"))]
+        #[cfg(all(feature = "executor-web", target_arch = "wasm32"))]
         let spawner = wasm_bindgen_futures::spawn_local;
         #[cfg(feature = "monoio")]
         let spawner = monoio::spawn;
