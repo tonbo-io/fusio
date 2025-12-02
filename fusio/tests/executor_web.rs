@@ -61,19 +61,32 @@ pub(crate) mod tests {
     extern "C" {
         #[wasm_bindgen(catch)]
         fn install_fake_worker_scope() -> Result<bool, JsValue>;
+        #[wasm_bindgen(catch)]
+        fn restore_fake_worker_scope() -> Result<bool, JsValue>;
+    }
+
+    struct FakeWorkerScopeGuard;
+
+    impl Drop for FakeWorkerScopeGuard {
+        fn drop(&mut self) {
+            let _ = std::panic::catch_unwind(|| {
+                let _ = restore_fake_worker_scope();
+            });
+        }
     }
 
     #[wasm_bindgen_test]
     async fn sleep_in_fake_worker_scope() {
         // If we cannot install a fake worker scope in this host (e.g., prototype
         // changes are blocked), skip the check.
-        let Ok(Ok(installed)) = std::panic::catch_unwind(|| unsafe { install_fake_worker_scope() })
-        else {
+        let Ok(Ok(installed)) = std::panic::catch_unwind(|| install_fake_worker_scope()) else {
             return;
         };
         if !installed {
+            let _ = restore_fake_worker_scope();
             return;
         }
+        let _guard = FakeWorkerScopeGuard;
         let exec = WebExecutor::new();
         exec.sleep(Duration::from_millis(1)).await;
     }
