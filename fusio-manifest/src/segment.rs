@@ -274,13 +274,13 @@ fn map_fs_error(err: FsError) -> Error {
     }
 }
 
-#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+#[cfg_attr(not(feature = "tokio"), allow(dead_code))]
 #[derive(Deserialize)]
 struct SegmentTxnOnly {
     txn_id: u64,
 }
 
-#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+#[cfg_attr(not(feature = "tokio"), allow(dead_code))]
 #[derive(Debug)]
 struct SegmentMetadataParseError {
     path: String,
@@ -288,7 +288,7 @@ struct SegmentMetadataParseError {
 }
 
 impl SegmentMetadataParseError {
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    #[cfg_attr(not(feature = "tokio"), allow(dead_code))]
     fn new(path: &Path, source: serde_json::Error) -> Self {
         Self {
             path: path.to_string(),
@@ -309,7 +309,7 @@ impl std::error::Error for SegmentMetadataParseError {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(feature = "tokio")]
 impl ObjectHead for fusio::impls::disk::TokioFs {
     fn head_metadata<'a>(
         &'a self,
@@ -361,7 +361,7 @@ impl ObjectHead for InMemoryFs {
     }
 }
 
-#[cfg(all(test, not(target_arch = "wasm32")))]
+#[cfg(all(test, feature = "tokio"))]
 mod tests {
     use fusio::disk::LocalFs;
     use tempfile::TempDir;

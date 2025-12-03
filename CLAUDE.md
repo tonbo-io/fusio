@@ -70,7 +70,7 @@ cargo check -p fusio-parquet --features tokio
 - **fusio-core**: Core traits (`Read`, `Write`, `IoBuf`) and error types
 - **fusio**: Main crate with filesystem implementations
 - **fusio-dispatch**: Runtime dispatch helper
-- **fusio-log**: Append-only log for WAL/metadata
+- **fusio-manifest**: Backend-agnostic manifest store with serializable isolation, leases, compaction, and GC
 - **fusio-parquet**: Parquet file support
 - **fusio-object-store**: Integration with Apache Arrow's object_store
 - **fusio-opendal**: OpenDAL integration

@@ -25,7 +25,7 @@ use crate::{
     session::{ReadSession, WriteSession},
     snapshot::Snapshot,
     types::Result,
-    BlockingExecutor,
+    DefaultExecutor,
 };
 
 /// Default file name for the manifest head object.
@@ -36,7 +36,7 @@ pub const DEFAULT_HEAD_FILE: &str = "HEAD.json";
 const DEFAULT_CACHE_MAX_BYTES: u64 = 256 * 1024 * 1024;
 
 /// Minimal S3 configuration for a manifest collection under a single prefix.
-pub struct Config<R = DefaultRetention, E = BlockingExecutor>
+pub struct Config<R = DefaultRetention, E = DefaultExecutor>
 where
     R: RetentionPolicy + Clone,
     E: Executor + Timer + Clone + 'static,
@@ -46,7 +46,8 @@ where
     pub opts: Arc<ManifestContext<R, E>>,
 }
 
-impl Config<DefaultRetention, BlockingExecutor> {
+#[cfg(any(feature = "tokio", all(feature = "wasm", target_arch = "wasm32")))]
+impl Config<DefaultRetention, DefaultExecutor> {
     pub fn new(s3: AmazonS3, prefix: impl Into<String>) -> Self {
         #[cfg_attr(not(feature = "cache-moka"), allow(unused_mut))]
         let mut opts = ManifestContext::default();
@@ -94,7 +95,7 @@ where
 
 /// Builder that constructs `AmazonS3` internally for ergonomic initialization.
 #[derive(Debug)]
-pub struct Builder<R = DefaultRetention, E = BlockingExecutor>
+pub struct Builder<R = DefaultRetention, E = DefaultExecutor>
 where
     R: RetentionPolicy + Clone,
     E: Executor + Timer + Clone + 'static,
@@ -109,7 +110,8 @@ where
     opts: Arc<ManifestContext<R, E>>,
 }
 
-impl Builder<DefaultRetention, BlockingExecutor> {
+#[cfg(any(feature = "tokio", all(feature = "wasm", target_arch = "wasm32")))]
+impl Builder<DefaultRetention, DefaultExecutor> {
     /// Create a new builder for a given S3 `bucket` and manifest `prefix`.
     /// `prefix` is trimmed of any trailing slash.
     pub fn new(bucket: impl Into<String>) -> Self {
@@ -275,7 +277,7 @@ type SegmentStore = SegmentStoreImpl<AmazonS3>;
 type CheckpointStore = CheckpointStoreImpl<AmazonS3>;
 type LeaseStore<T> = LeaseStoreImpl<AmazonS3, T>;
 
-pub struct S3Manifest<K, V, E = BlockingExecutor, R = DefaultRetention>
+pub struct S3Manifest<K, V, E = DefaultExecutor, R = DefaultRetention>
 where
     E: Executor + Timer + Clone + 'static,
     R: RetentionPolicy + Clone,
@@ -335,7 +337,7 @@ where
 }
 
 /// Wrapper that hides the GC plan store and exposes ergonomic GC methods.
-pub struct S3Compactor<K, V, E = BlockingExecutor, R = DefaultRetention>
+pub struct S3Compactor<K, V, E = DefaultExecutor, R = DefaultRetention>
 where
     E: Executor + Timer + Clone + 'static,
     R: RetentionPolicy + Clone,

@@ -22,7 +22,7 @@ use crate::{
     snapshot::{ScanRange, Snapshot},
     store::Store,
     types::{Error, Result, TxnId},
-    BlockingExecutor,
+    DefaultExecutor,
 };
 
 /// Operation on a key (crate-internal).
@@ -49,7 +49,7 @@ pub(crate) struct Segment<K, V> {
 
 /// KV database facade over HeadStore + SegmentIo + CheckpointStore.
 #[derive(Clone)]
-pub struct Manifest<K, V, HS, SS, CS, LS, E = BlockingExecutor, R = DefaultRetention>
+pub struct Manifest<K, V, HS, SS, CS, LS, E = DefaultExecutor, R = DefaultRetention>
 where
     HS: HeadStore + 'static,
     SS: SegmentIo + 'static,
@@ -62,6 +62,7 @@ where
     store: Arc<Store<HS, SS, CS, LS, E, R>>,
 }
 
+#[cfg(any(feature = "tokio", all(feature = "wasm", target_arch = "wasm32")))]
 impl<K, V, HS, SS, CS, LS> Manifest<K, V, HS, SS, CS, LS>
 where
     K: PartialOrd + Eq + Hash + Serialize + DeserializeOwned,
@@ -77,7 +78,7 @@ where
             seg,
             ckpt,
             leases,
-            Arc::new(ManifestContext::<DefaultRetention, BlockingExecutor>::default()),
+            Arc::new(ManifestContext::<DefaultRetention, DefaultExecutor>::default()),
         )
     }
 }
@@ -377,7 +378,7 @@ where
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use std::{
         sync::{
@@ -387,17 +388,43 @@ mod tests {
         time::{Duration, SystemTime},
     };
 
-    use fusio::impls::mem::fs::InMemoryFs;
+    use fusio::{executor::NoopExecutor, impls::mem::fs::InMemoryFs};
     use fusio_core::MaybeSendFuture;
     use futures_executor::block_on;
     use rstest::rstest;
 
     use super::*;
     use crate::{
+        checkpoint::CheckpointStoreImpl,
         context::ManifestContext,
         head::{HeadStoreImpl, HeadTag},
+        lease::LeaseStoreImpl,
+        retention::DefaultRetention,
+        segment::SegmentStoreImpl,
         test_utils::{in_memory_stores, InMemoryStores},
     };
+
+    fn test_manifest(
+        stores: &InMemoryStores,
+    ) -> Manifest<
+        String,
+        String,
+        HeadStoreImpl<InMemoryFs>,
+        SegmentStoreImpl<InMemoryFs>,
+        CheckpointStoreImpl<InMemoryFs>,
+        LeaseStoreImpl<InMemoryFs, fusio::executor::BlockingExecutor>,
+        NoopExecutor,
+    > {
+        let opts: ManifestContext<DefaultRetention, NoopExecutor> =
+            ManifestContext::new(NoopExecutor::default());
+        Manifest::new_with_context(
+            stores.head.clone(),
+            stores.segment.clone(),
+            stores.checkpoint.clone(),
+            stores.lease.clone(),
+            Arc::new(opts),
+        )
+    }
 
     fn now_duration() -> Duration {
         Duration::from_millis(
@@ -454,12 +481,7 @@ mod tests {
     #[rstest]
     fn mem_kv_end_to_end_and_conflict(in_memory_stores: InMemoryStores) {
         block_on(async move {
-            let head = in_memory_stores.head;
-            let seg = in_memory_stores.segment;
-            let ck = in_memory_stores.checkpoint;
-            let ls = in_memory_stores.lease;
-            let kv: Manifest<String, String, _, _, _, _> =
-                Manifest::new(head.clone(), seg.clone(), ck.clone(), ls.clone());
+            let kv = test_manifest(&in_memory_stores);
 
             // tx1
             let mut s1 = kv.session_write().await.unwrap();
@@ -482,15 +504,10 @@ mod tests {
             // tx2 and tx3 from same snapshot; tx2 wins, tx3 loses
             let _snap = kv.snapshot().await.unwrap();
             let mut s2 = kv.session_write().await.unwrap();
-            let mut s3 = Manifest::<String, String, _, _, _, _>::new(
-                head.clone(),
-                seg.clone(),
-                ck.clone(),
-                ls.clone(),
-            )
-            .session_write()
-            .await
-            .unwrap();
+            let mut s3 = test_manifest(&in_memory_stores)
+                .session_write()
+                .await
+                .unwrap();
             s2.put("a".into(), "10".into());
             s3.delete("a".into());
             let _ = s2.commit().await.unwrap();
@@ -508,12 +525,7 @@ mod tests {
     #[rstest]
     fn mem_kv_point_get_and_tombstone(in_memory_stores: InMemoryStores) {
         block_on(async move {
-            let head = in_memory_stores.head;
-            let seg = in_memory_stores.segment;
-            let ck = in_memory_stores.checkpoint;
-            let ls = in_memory_stores.lease;
-            let kv: Manifest<String, String, _, _, _, _> =
-                Manifest::new(head.clone(), seg.clone(), ck.clone(), ls.clone());
+            let kv = test_manifest(&in_memory_stores);
 
             // Seed data
             let mut s = kv.session_write().await.unwrap();
@@ -555,12 +567,8 @@ mod tests {
     #[rstest]
     fn mem_session_at_acquires_and_releases_lease(in_memory_stores: InMemoryStores) {
         block_on(async move {
-            let head = in_memory_stores.head;
-            let seg = in_memory_stores.segment;
-            let ck = in_memory_stores.checkpoint;
-            let ls = in_memory_stores.lease;
-            let kv: Manifest<String, String, _, _, _, _> =
-                Manifest::new(head.clone(), seg.clone(), ck.clone(), ls.clone());
+            let ls = in_memory_stores.lease.clone();
+            let kv = test_manifest(&in_memory_stores);
 
             let mut s = kv.session_write().await.unwrap();
             s.put("a".into(), "1".into());
@@ -584,12 +592,7 @@ mod tests {
     #[rstest]
     fn mem_kv_compact_and_read_from_checkpoint(in_memory_stores: InMemoryStores) {
         block_on(async move {
-            let head = in_memory_stores.head;
-            let seg = in_memory_stores.segment;
-            let ck = in_memory_stores.checkpoint;
-            let ls = in_memory_stores.lease;
-            let kv: Manifest<String, String, _, _, _, _> =
-                Manifest::new(head.clone(), seg.clone(), ck.clone(), ls.clone());
+            let kv = test_manifest(&in_memory_stores);
 
             // Two transactions → two segments
             let mut s1 = kv.session_write().await.unwrap();
@@ -625,12 +628,9 @@ mod tests {
     #[rstest]
     fn mem_recover_orphans_no_head_adopts_seq1(in_memory_stores: InMemoryStores) {
         block_on(async move {
-            let head = in_memory_stores.head;
-            let seg = in_memory_stores.segment;
-            let ck = in_memory_stores.checkpoint;
-            let ls = in_memory_stores.lease;
-            let kv: Manifest<String, String, _, _, _, _> =
-                Manifest::new(head.clone(), seg.clone(), ck.clone(), ls.clone());
+            let head = in_memory_stores.head.clone();
+            let seg = in_memory_stores.segment.clone();
+            let kv = test_manifest(&in_memory_stores);
 
             // Manually write an orphan segment at seq=1 with txn_id=1
             let seg_payload: Segment<String, String> = Segment {
@@ -667,12 +667,10 @@ mod tests {
     #[rstest]
     fn mem_recover_orphans_respects_active_leases(in_memory_stores: InMemoryStores) {
         block_on(async move {
-            let head = in_memory_stores.head;
-            let seg = in_memory_stores.segment;
-            let ck = in_memory_stores.checkpoint;
-            let ls = in_memory_stores.lease;
-            let kv: Manifest<String, String, _, _, _, _> =
-                Manifest::new(head.clone(), seg.clone(), ck.clone(), ls.clone());
+            let head = in_memory_stores.head.clone();
+            let seg = in_memory_stores.segment.clone();
+            let ls = in_memory_stores.lease.clone();
+            let kv = test_manifest(&in_memory_stores);
 
             let seg_payload: Segment<String, String> = Segment {
                 txn_id: 1,
@@ -708,12 +706,9 @@ mod tests {
     #[rstest]
     fn mem_recover_orphans_gap_does_not_adopt(in_memory_stores: InMemoryStores) {
         block_on(async move {
-            let head = in_memory_stores.head;
-            let seg = in_memory_stores.segment;
-            let ck = in_memory_stores.checkpoint;
-            let ls = in_memory_stores.lease;
-            let kv: Manifest<String, String, _, _, _, _> =
-                Manifest::new(head.clone(), seg.clone(), ck.clone(), ls.clone());
+            let head = in_memory_stores.head.clone();
+            let seg = in_memory_stores.segment.clone();
+            let kv = test_manifest(&in_memory_stores);
 
             // Write orphan only at seq=2 (gap at 1)
             let seg_payload: Segment<String, String> = Segment {
@@ -739,12 +734,9 @@ mod tests {
     #[rstest]
     fn mem_recover_orphans_advances_over_existing_head(in_memory_stores: InMemoryStores) {
         block_on(async move {
-            let head = in_memory_stores.head;
-            let seg = in_memory_stores.segment;
-            let ck = in_memory_stores.checkpoint;
-            let ls = in_memory_stores.lease;
-            let kv: Manifest<String, String, _, _, _, _> =
-                Manifest::new(head.clone(), seg.clone(), ck.clone(), ls.clone());
+            let head = in_memory_stores.head.clone();
+            let seg = in_memory_stores.segment.clone();
+            let kv = test_manifest(&in_memory_stores);
 
             // Create initial segment and head via normal commit
             {

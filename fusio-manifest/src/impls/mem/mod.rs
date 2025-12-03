@@ -10,7 +10,7 @@ use std::{hash::Hash, sync::Arc};
 
 use serde::{de::DeserializeOwned, Serialize};
 
-use crate::{context::ManifestContext, manifest::Manifest, BlockingExecutor};
+use crate::{context::ManifestContext, manifest::Manifest, DefaultExecutor};
 
 /// Test-only type alias for a Manifest backed by in-memory stores via the shared Fs implementation.
 pub type MemManifest<K, V> = Manifest<
@@ -27,7 +27,7 @@ pub fn new_manifest_with_context<K, V, C>(opts: C) -> MemManifest<K, V>
 where
     K: PartialOrd + Eq + Hash + Serialize + DeserializeOwned,
     V: Serialize + DeserializeOwned,
-    C: Into<Arc<ManifestContext<BlockingExecutor>>>,
+    C: Into<Arc<ManifestContext<DefaultExecutor>>>,
 {
     Manifest::new_with_context(
         head::MemHeadStore::new(),

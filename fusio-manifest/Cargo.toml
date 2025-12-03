@@ -7,12 +7,14 @@ repository.workspace = true
 version.workspace = true
 
 [features]
-default = ["std"]
+default = ["std", "tokio"]
 std = []
+tokio = ["fusio/executor-tokio", "fusio/tokio-http"]
+wasm = ["fusio/opfs", "fusio/wasm-http"]
 cache-moka = ["dep:moka"]
-wasm = ["std", "dep:fusio", "fusio/executor", "fusio/opfs", "fusio/wasm-http", "fusio/aws"]
 
 [dependencies]
+fusio = { path = "../fusio", version = "0.4.1", default-features = false, features = ["executor", "fs", "aws", "dyn"] }
 fusio-core = { path = "../fusio-core", version = "0.4.1", features = ["std"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1" }
@@ -26,20 +28,35 @@ thiserror = "2.0.17"
 tracing = "0.1"
 moka = { version = "0.10", features = ["sync"], optional = true }
 
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-fusio = { path = "../fusio", version = "0.4.1", default-features = false, features = ["executor", "executor-tokio", "fs", "aws", "tokio-http"] }
-
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-fusio = { path = "../fusio", version = "0.4.1", default-features = false, optional = true }
-
 [dev-dependencies]
 futures-executor = { version = "0.3" }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
 rand = "0.8"
 rstest = "0.21"
 loom = "0.7"
 proptest = "1"
 tempfile = "3"
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen-test = "0.3"
+
+[[example]]
+name = "step1_basic"
+required-features = ["tokio"]
+
+[[example]]
+name = "step2_leases"
+required-features = ["tokio"]
+
+[[example]]
+name = "step3_remote_compactor"
+required-features = ["tokio"]
+
+[[example]]
+name = "step4_lease_keeper"
+required-features = ["tokio"]
 
 [package.metadata.docs.rs]
 all-features = true

@@ -1,6 +1,6 @@
 use std::{future::Future, sync::Arc};
 
-use fusio::executor::{BlockingExecutor, Executor, Timer};
+use fusio::executor::{Executor, Timer};
 use fusio_core::MaybeSend;
 
 use crate::{
@@ -8,12 +8,13 @@ use crate::{
     cache::BlobCache,
     retention::{DefaultRetention, RetentionPolicy},
     types::Error,
+    DefaultExecutor,
 };
 
 /// ManifestContext shared across manifest components, parameterised by an executor that also
 /// implements the timer abstraction.
 #[derive(Clone)]
-pub struct ManifestContext<R = DefaultRetention, E = BlockingExecutor>
+pub struct ManifestContext<R = DefaultRetention, E = DefaultExecutor>
 where
     R: RetentionPolicy + Clone,
     E: Executor + Timer + Clone,
