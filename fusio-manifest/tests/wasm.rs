@@ -1,6 +1,7 @@
 //! WASM environment tests for fusio-manifest.
 //!
-//! Run with: `wasm-pack test --chrome --headless fusio-manifest --no-default-features --features wasm`
+//! Run with: `wasm-pack test --chrome --headless fusio-manifest --no-default-features --features
+//! wasm`
 
 #![cfg(all(target_arch = "wasm32", feature = "wasm"))]
 
@@ -8,10 +9,8 @@ use std::sync::Arc;
 
 use fusio::{executor::web::WebExecutor, impls::mem::fs::InMemoryFs};
 use fusio_manifest::{
-    context::ManifestContext,
-    manifest::Manifest,
-    retention::DefaultRetention,
-    BackoffPolicy, CheckpointStoreImpl, HeadStoreImpl, LeaseStoreImpl, SegmentStoreImpl,
+    context::ManifestContext, manifest::Manifest, retention::DefaultRetention, BackoffPolicy,
+    CheckpointStoreImpl, HeadStoreImpl, LeaseStoreImpl, SegmentStoreImpl,
 };
 use wasm_bindgen_test::{wasm_bindgen_test, wasm_bindgen_test_configure};
 

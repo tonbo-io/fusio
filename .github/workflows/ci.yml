@@ -207,7 +207,7 @@ jobs:
         uses: actions-rs/cargo@v1
         with:
           command: build
-          args: --target wasm32-unknown-unknown --package fusio-manifest --features=wasm
+          args: --target wasm32-unknown-unknown --package fusio-manifest --no-default-features --features=wasm
 
       - name: Install Chrome Environment
         run: |

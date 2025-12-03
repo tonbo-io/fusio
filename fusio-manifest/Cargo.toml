@@ -42,5 +42,21 @@ tempfile = "3"
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 wasm-bindgen-test = "0.3"
 
+[[example]]
+name = "step1_basic"
+required-features = ["tokio"]
+
+[[example]]
+name = "step2_leases"
+required-features = ["tokio"]
+
+[[example]]
+name = "step3_remote_compactor"
+required-features = ["tokio"]
+
+[[example]]
+name = "step4_lease_keeper"
+required-features = ["tokio"]
+
 [package.metadata.docs.rs]
 all-features = true
