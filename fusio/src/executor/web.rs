@@ -1,15 +1,14 @@
 //! Web executor for `wasm32` targets.
 //!
-//! This mirrors the previous OPFS executor behavior but can be used without
-//! pulling in OPFS-specific types. Tasks are scheduled via
-//! `wasm_bindgen_futures::spawn_local`, the join handle always returns an
-//! error (the platform offers no way to await the task), and synchronization
-//! relies on `async_lock::RwLock` with `MaybeSend`/`MaybeSync` bounds suited
-//! for single-threaded WASM.
+//! Tasks are scheduled via `wasm_bindgen_futures::spawn_local` and wrapped in
+//! a oneshot so join handles can await completion. Synchronization relies on
+//! `async_lock::RwLock` with `MaybeSend`/`MaybeSync` bounds suited for
+//! single-threaded WASM.
 
 use std::{error::Error, future::Future, sync::Arc, time::SystemTime};
 
 use fusio_core::{MaybeSend, MaybeSendFuture, MaybeSync};
+use futures_channel::oneshot;
 use wasm_bindgen::{prelude::*, JsCast};
 
 use super::{Executor, JoinHandle, RwLock, Timer};
@@ -23,16 +22,16 @@ impl Default for WebExecutor {
     }
 }
 
+#[wasm_bindgen]
 impl WebExecutor {
+    #[wasm_bindgen(constructor)]
     pub fn new() -> Self {
         Self
     }
 }
 
-/// Join handle for web executors; `join` always returns an error because
-/// `spawn_local` does not expose task completion.
 pub struct WebJoinHandle<R> {
-    _phantom: core::marker::PhantomData<R>,
+    receiver: oneshot::Receiver<Result<R, Box<dyn Error>>>,
 }
 
 impl<R> JoinHandle<R> for WebJoinHandle<R>
@@ -40,7 +39,10 @@ where
     R: MaybeSend,
 {
     async fn join(self) -> Result<R, Box<dyn Error>> {
-        Err("Cannot join spawned tasks in WASM".into())
+        match self.receiver.await {
+            Ok(result) => result,
+            Err(_canceled) => Err("Spawned task was canceled before completion".into()),
+        }
     }
 }
 
@@ -83,12 +85,14 @@ impl Executor for WebExecutor {
         F: Future + MaybeSend + 'static,
         F::Output: MaybeSend,
     {
+        let (sender, receiver) = oneshot::channel::<Result<F::Output, Box<dyn Error>>>();
+
         wasm_bindgen_futures::spawn_local(async move {
-            let _ = future.await;
+            let result = future.await;
+            let _ = sender.send(Ok(result));
         });
-        WebJoinHandle {
-            _phantom: core::marker::PhantomData,
-        }
+
+        WebJoinHandle { receiver }
     }
 
     fn rw_lock<T>(value: T) -> Self::RwLock<T>
