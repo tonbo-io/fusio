@@ -457,17 +457,6 @@ impl FsCas for AmazonS3 {
                         .await
                 }
                 CasCondition::IfMatch(tag) => {
-                    #[cfg(target_arch = "wasm32")]
-                    if tag.starts_with("wasm-fallback-etag-") {
-                        // When the backend response hides ETag headers (common in browser
-                        // fetch + CORS), CAS cannot be enforced. Fall back to an
-                        // unconditional write so single-writer wasm callers can proceed.
-                        return self
-                            .put_if_none_match(&key, payload, ct_ref, metadata_ref)
-                            .await
-                            .map(|t| t.0);
-                    }
-
                     let etag = ETag(tag);
                     self.put_if_match(&key, payload, &etag, ct_ref, metadata_ref)
                         .await
