@@ -63,19 +63,29 @@ impl AmazonS3 {
             })));
         }
 
-        let etag = resp
-            .headers()
-            .get(header::ETAG)
-            .and_then(|v| v.to_str().ok())
-            .map(|s| ETag(s.to_string()))
-            .ok_or_else(|| Error::Other("missing ETag header in S3 response".into()))?;
-
+        let headers = resp.headers().clone();
         let body = resp
             .into_body()
             .collect()
             .await
             .map_err(|e| Error::Remote(Box::new(e)))?
             .to_bytes();
+
+        #[cfg(target_arch = "wasm32")]
+        if body.starts_with(b"<?xml") && String::from_utf8_lossy(&body).contains("NoSuchKey") {
+            // Some S3-compatible gateways surface error documents with 200 in browsers when
+            // fetch runs under restrictive modes. Treat these as missing keys so callers can
+            // create fresh manifests.
+            return Ok(None);
+        }
+
+        let etag = headers
+            .get(header::ETAG)
+            .and_then(|v| v.to_str().ok())
+            .map(|s| ETag(s.to_string()))
+            .ok_or_else(|| {
+                Error::Other("missing ETag header in S3 response (ensure CORS exposes ETag)".into())
+            })?;
 
         Ok(Some((body, etag)))
     }
@@ -153,12 +163,14 @@ impl AmazonS3 {
             })));
         }
 
-        let etag = resp
-            .headers()
+        let headers = resp.headers().clone();
+        let etag = headers
             .get(header::ETAG)
             .and_then(|v| v.to_str().ok())
             .map(|s| ETag(s.to_string()))
-            .ok_or_else(|| Error::Other("missing ETag header in S3 response".into()))?;
+            .ok_or_else(|| {
+                Error::Other("missing ETag header in S3 response (ensure CORS exposes ETag)".into())
+            })?;
         Ok(etag)
     }
 
@@ -235,12 +247,14 @@ impl AmazonS3 {
             })));
         }
 
-        let new_etag = resp
-            .headers()
+        let headers = resp.headers().clone();
+        let new_etag = headers
             .get(header::ETAG)
             .and_then(|v| v.to_str().ok())
             .map(|s| ETag(s.to_string()))
-            .ok_or_else(|| Error::Other("missing ETag header in S3 response".into()))?;
+            .ok_or_else(|| {
+                Error::Other("missing ETag header in S3 response (ensure CORS exposes ETag)".into())
+            })?;
         Ok(new_etag)
     }
 }
