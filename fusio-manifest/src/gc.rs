@@ -198,7 +198,7 @@ fn map_fs_error(err: FsError) -> Error {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use fusio::{executor::BlockingExecutor, impls::mem::fs::InMemoryFs};
 

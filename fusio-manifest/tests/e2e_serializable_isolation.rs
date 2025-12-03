@@ -1,3 +1,4 @@
+#![cfg(not(target_arch = "wasm32"))]
 //! End-to-end tests for fusio-manifest that test serializable isolation.
 //!
 //! These tests validate the complete fusio-manifest implementation against S3 or S3-compatible

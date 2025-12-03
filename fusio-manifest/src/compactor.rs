@@ -800,7 +800,7 @@ where
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use core::time::Duration;
     use std::sync::{
@@ -1120,7 +1120,7 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod gc_compute_tests {
     use std::sync::Arc;
 

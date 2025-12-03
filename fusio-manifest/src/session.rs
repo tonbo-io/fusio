@@ -661,7 +661,7 @@ where
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use std::time::Duration;
 
@@ -858,7 +858,7 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod deterministic_tests {
     use std::collections::{BTreeSet, HashMap};
 

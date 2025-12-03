@@ -54,10 +54,10 @@ pub mod types;
 // Ergonomic S3 entrypoint (single config wires all stores).
 pub mod s3;
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 pub(crate) mod test_utils;
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use rstest::rstest;
 
@@ -98,7 +98,7 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod segment_tests {
     use futures_executor::block_on;
     use rstest::rstest;
