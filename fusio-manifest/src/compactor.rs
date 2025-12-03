@@ -26,13 +26,13 @@ use crate::{
     snapshot::Snapshot,
     store::Store,
     types::{Error, Result, TxnId},
-    BlockingExecutor,
+    DefaultExecutor,
 };
 
 /// Headless compactor that orchestrates compaction + GC using the same logic
 /// as `Manifest`, without requiring a long‑lived manifest instance owned by
 /// the caller.
-pub struct Compactor<K, V, HS, SS, CS, LS, E = BlockingExecutor, R = DefaultRetention>
+pub struct Compactor<K, V, HS, SS, CS, LS, E = DefaultExecutor, R = DefaultRetention>
 where
     HS: HeadStore + 'static,
     SS: SegmentIo + 'static,
@@ -808,7 +808,10 @@ mod tests {
         Arc,
     };
 
-    use fusio::impls::mem::fs::InMemoryFs;
+    use fusio::{
+        executor::{BlockingExecutor, NoopExecutor},
+        impls::mem::fs::InMemoryFs,
+    };
     use fusio_core::MaybeSendFuture;
     use futures_executor::block_on;
     use futures_util::Stream;
@@ -821,17 +824,22 @@ mod tests {
         gc::{FsGcPlanStore, GcPlan, SegmentRange},
         head::PutCondition,
         manifest::Manifest,
+        retention::DefaultRetention,
         segment::SegmentMeta,
         test_utils::{self, in_memory_stores, InMemoryStores},
         types::{Error, SegmentId},
     };
 
+    fn test_context() -> Arc<ManifestContext<DefaultRetention, NoopExecutor>> {
+        Arc::new(ManifestContext::new(NoopExecutor::default()))
+    }
+
     #[rstest]
     fn headless_compactor_invokes_manifest_logic(in_memory_stores: InMemoryStores) {
         block_on(async move {
-            let opts = Arc::new(ManifestContext::default());
+            let opts = test_context();
             // Construct a simple Manifest to seed data, then run headless compactor.
-            let m = Manifest::<String, String, _, _, _, _>::new_with_context(
+            let m = Manifest::<String, String, _, _, _, _, NoopExecutor, _>::new_with_context(
                 in_memory_stores.head,
                 in_memory_stores.segment,
                 in_memory_stores.checkpoint,
@@ -844,7 +852,7 @@ mod tests {
             let _ = s.commit().await.unwrap();
 
             let new_in_memory_stores = test_utils::in_memory_stores();
-            let comp = Compactor::<String, String, _, _, _, _>::new(
+            let comp = Compactor::<String, String, _, _, _, _, NoopExecutor, _>::new(
                 new_in_memory_stores.head,
                 new_in_memory_stores.segment,
                 new_in_memory_stores.checkpoint,
@@ -859,9 +867,9 @@ mod tests {
     #[rstest]
     fn gc_delete_and_reset_segment_failure_preserves_plan(in_memory_stores: InMemoryStores) {
         block_on(async move {
-            let opts = Arc::new(ManifestContext::default());
+            let opts = test_context();
             let failing_segment = FailingSegmentStore::new(in_memory_stores.segment);
-            let comp = Compactor::<String, String, _, _, _, _>::new(
+            let comp = Compactor::<String, String, _, _, _, _, NoopExecutor, _>::new(
                 in_memory_stores.head,
                 failing_segment.clone(),
                 in_memory_stores.checkpoint,
@@ -911,9 +919,9 @@ mod tests {
     #[rstest]
     fn gc_delete_and_reset_checkpoint_failure_preserves_plan(in_memory_stores: InMemoryStores) {
         block_on(async move {
-            let opts = Arc::new(ManifestContext::default());
+            let opts = test_context();
             let failing_checkpoint = FailingCheckpointStore::new(in_memory_stores.checkpoint);
-            let comp = Compactor::<String, String, _, _, _, _>::new(
+            let comp = Compactor::<String, String, _, _, _, _, NoopExecutor, _>::new(
                 in_memory_stores.head,
                 in_memory_stores.segment,
                 failing_checkpoint.clone(),
@@ -1114,22 +1122,33 @@ mod tests {
 
 #[cfg(test)]
 mod gc_compute_tests {
-    use fusio::{executor::BlockingExecutor, impls::mem::fs::InMemoryFs};
+    use std::sync::Arc;
+
+    use fusio::{
+        executor::{BlockingExecutor, NoopExecutor},
+        impls::mem::fs::InMemoryFs,
+    };
     use futures_executor::block_on;
     use rstest::rstest;
 
     use super::*;
     use crate::{
         backoff::BackoffPolicy,
+        context::ManifestContext,
         gc::FsGcPlanStore,
+        retention::DefaultRetention,
         test_utils::{in_memory_stores, InMemoryStores},
     };
+
+    fn test_context() -> Arc<ManifestContext<DefaultRetention, NoopExecutor>> {
+        Arc::new(ManifestContext::new(NoopExecutor::default()))
+    }
 
     #[rstest]
     fn compute_plan_no_head_or_no_leases_yields_none(in_memory_stores: InMemoryStores) {
         block_on(async move {
-            let opts = Arc::new(ManifestContext::default());
-            let comp = Compactor::<String, String, _, _, _, _>::new(
+            let opts = test_context();
+            let comp = Compactor::<String, String, _, _, _, _, NoopExecutor, _>::new(
                 in_memory_stores.head,
                 in_memory_stores.segment,
                 in_memory_stores.checkpoint,

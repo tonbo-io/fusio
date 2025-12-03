@@ -7,8 +7,10 @@ use std::{
     time::SystemTime,
 };
 
+#[cfg(not(target_arch = "wasm32"))]
 use async_lock::{RwLock as AsyncRwLock, RwLockReadGuard, RwLockWriteGuard};
 use fusio_core::{MaybeSend, MaybeSendFuture, MaybeSync};
+#[cfg(not(target_arch = "wasm32"))]
 use futures_executor::block_on;
 #[cfg(all(target_arch = "wasm32", feature = "executor-web"))]
 use js_sys::Date;
@@ -84,9 +86,11 @@ pub mod opfs;
 #[cfg(feature = "executor-tokio")]
 pub mod tokio;
 
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Debug, Clone)]
 pub struct BlockingJoinHandle<R>(Option<R>);
 
+#[cfg(not(target_arch = "wasm32"))]
 impl<R> JoinHandle<R> for BlockingJoinHandle<R>
 where
     R: MaybeSend,
@@ -100,9 +104,11 @@ where
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Debug)]
 pub struct BlockingRwLock<T>(AsyncRwLock<T>);
 
+#[cfg(not(target_arch = "wasm32"))]
 impl<T> RwLock<T> for BlockingRwLock<T>
 where
     T: MaybeSend + MaybeSync,
@@ -129,9 +135,11 @@ where
 }
 
 /// Executes futures synchronously on the current thread and offers blocking timers.
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Debug, Clone, Default, Copy)]
 pub struct BlockingExecutor;
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Executor for BlockingExecutor {
     type JoinHandle<R>
         = BlockingJoinHandle<R>
@@ -159,6 +167,7 @@ impl Executor for BlockingExecutor {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Timer for BlockingExecutor {
     fn sleep(&self, dur: Duration) -> Pin<Box<dyn MaybeSendFuture<Output = ()>>> {
         Box::pin(async move { std::thread::sleep(dur) })
@@ -197,11 +206,13 @@ impl Timer for NoopTimer {
 }
 
 /// Executor that runs tasks synchronously and uses `NoopTimer` for scheduling.
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Debug, Clone, Default)]
 pub struct NoopExecutor {
     inner: BlockingExecutor,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Executor for NoopExecutor {
     type JoinHandle<R>
         = <BlockingExecutor as Executor>::JoinHandle<R>
@@ -229,6 +240,7 @@ impl Executor for NoopExecutor {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Timer for NoopExecutor {
     fn sleep(&self, _dur: Duration) -> Pin<Box<dyn MaybeSendFuture<Output = ()>>> {
         Box::pin(async move {})

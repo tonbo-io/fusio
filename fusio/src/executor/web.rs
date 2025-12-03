@@ -14,6 +14,7 @@ use wasm_bindgen::{prelude::*, JsCast};
 use super::{Executor, JoinHandle, RwLock, Timer};
 
 #[wasm_bindgen]
+#[derive(Clone, Copy)]
 pub struct WebExecutor;
 
 impl Default for WebExecutor {

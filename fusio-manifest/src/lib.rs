@@ -26,7 +26,22 @@ pub(crate) mod backoff;
 pub use backoff::BackoffPolicy;
 pub mod context;
 pub use context::ManifestContext;
+#[cfg(feature = "tokio")]
+pub use fusio::executor::tokio::TokioExecutor;
+#[cfg(all(feature = "wasm", target_arch = "wasm32"))]
+pub use fusio::executor::web::WebExecutor;
+#[cfg(feature = "tokio")]
 pub use fusio::executor::BlockingExecutor;
+
+/// Default executor type based on enabled features.
+/// - With `tokio` feature: `TokioExecutor`
+/// - With `wasm` feature on wasm32: `WebExecutor`
+#[cfg(feature = "tokio")]
+pub type DefaultExecutor = TokioExecutor;
+
+#[cfg(all(feature = "wasm", target_arch = "wasm32", not(feature = "tokio")))]
+pub type DefaultExecutor = WebExecutor;
+
 pub(crate) mod cache;
 pub mod retention;
 pub(crate) mod segment;

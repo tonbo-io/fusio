@@ -121,6 +121,7 @@ async fn write_and_commit_data(
 // ============================================================================
 
 #[tokio::test]
+#[ignore = "requires S3 credentials (FUSIO_MANIFEST_BUCKET)"]
 async fn test_basic_write_read() -> Result<()> {
     // 1. Create manifest
     let manifest = create_test_manifest_without_result("test_basic_write_read");
@@ -160,6 +161,7 @@ async fn test_basic_write_read() -> Result<()> {
 
 // Scenario 1.1 - Concurrent Writer Conflicts - Same Key Conflict
 #[tokio::test]
+#[ignore = "requires S3 credentials (FUSIO_MANIFEST_BUCKET)"]
 async fn test_concurrent_writers_same_key_conflict() -> Result<()> {
     // 1. Create manifest
     let manifest = create_test_manifest_without_result("test_concurrent_writers_same_key_conflict");
@@ -205,6 +207,7 @@ async fn test_concurrent_writers_same_key_conflict() -> Result<()> {
 
 // Scenario 1.2 - Write Skew Test
 #[tokio::test]
+#[ignore = "requires S3 credentials (FUSIO_MANIFEST_BUCKET)"]
 async fn test_write_skew_prevention() -> Result<()> {
     let manifest = create_test_manifest_without_result("test_write_skew_prevention");
 
@@ -241,6 +244,7 @@ async fn test_write_skew_prevention() -> Result<()> {
 
 // Scenario 1.3 - Multi-Writer Chain
 #[tokio::test]
+#[ignore = "requires S3 credentials (FUSIO_MANIFEST_BUCKET)"]
 async fn test_multi_writer_chain() -> Result<()> {
     let manifest = create_test_manifest_without_result("test_multi_writer_chain");
 
@@ -279,6 +283,7 @@ async fn test_multi_writer_chain() -> Result<()> {
 
 // Scenario 1.4 - Reader During Concurrent Writes
 #[tokio::test]
+#[ignore = "requires S3 credentials (FUSIO_MANIFEST_BUCKET)"]
 async fn test_reader_during_concurrent_writes() -> Result<()> {
     let manifest = create_test_manifest_without_result("test_reader_during_concurrent_writes");
 
@@ -314,6 +319,7 @@ async fn test_reader_during_concurrent_writes() -> Result<()> {
 
 // Scenario 1.5 - High Contention (10 Concurrent Writers)
 #[tokio::test]
+#[ignore = "requires S3 credentials (FUSIO_MANIFEST_BUCKET)"]
 async fn test_high_contention_writers() -> Result<()> {
     let manifest = create_test_manifest_without_result("test_high_contention");
 
@@ -358,6 +364,7 @@ async fn test_high_contention_writers() -> Result<()> {
 
 // Scenario 1.6 - Tombstone write skew test
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires S3 credentials (FUSIO_MANIFEST_BUCKET)"]
 async fn test_tombstone_write_skew() -> Result<()> {
     let manifest = create_test_manifest("tombstone_write_skew")?;
 
@@ -413,6 +420,7 @@ async fn test_tombstone_write_skew() -> Result<()> {
 
 // Scenario 1.7 - retry succeed with new session write
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires S3 credentials (FUSIO_MANIFEST_BUCKET)"]
 async fn test_writer_retry_eventually_serializes() -> Result<()> {
     let manifest = create_test_manifest("writer_retry_eventually_serializes")?;
     let key = "counter".to_string();
@@ -458,6 +466,7 @@ async fn test_writer_retry_eventually_serializes() -> Result<()> {
 
 // Scenario 1.8 - range scan isolation
 #[tokio::test]
+#[ignore = "requires S3 credentials (FUSIO_MANIFEST_BUCKET)"]
 async fn test_range_scan_isolation() -> Result<()> {
     let manifest = create_test_manifest("range_scan_isolation")?;
 
@@ -489,6 +498,7 @@ async fn test_range_scan_isolation() -> Result<()> {
 
 // Scenario 1.9 - read modify write
 #[tokio::test]
+#[ignore = "requires S3 credentials (FUSIO_MANIFEST_BUCKET)"]
 async fn test_read_modify_write_isolation() -> Result<()> {
     let manifest = create_test_manifest("read_modify_write")?;
 

@@ -14,10 +14,10 @@ use crate::{
     snapshot::{ScanRange, Snapshot},
     store::Store,
     types::{Error, Result},
-    BlockingExecutor, DynTimer,
+    DefaultExecutor, DynTimer,
 };
 
-struct SessionInner<K, V, HS, SS, CS, LS, E = BlockingExecutor, R = DefaultRetention>
+struct SessionInner<K, V, HS, SS, CS, LS, E = DefaultExecutor, R = DefaultRetention>
 where
     K: PartialOrd + Eq + Hash + Serialize + DeserializeOwned,
     V: Serialize + DeserializeOwned,
@@ -290,7 +290,7 @@ type ArcTimer = Arc<DynTimer>;
 
 /// Read-only pinned session.
 #[must_use = "Sessions hold a lease; call end().await before dropping"]
-pub struct ReadSession<K, V, HS, SS, CS, LS, E = BlockingExecutor, R = DefaultRetention>
+pub struct ReadSession<K, V, HS, SS, CS, LS, E = DefaultExecutor, R = DefaultRetention>
 where
     K: PartialOrd + Eq + Hash + Serialize + DeserializeOwned,
     V: Serialize + DeserializeOwned,
@@ -361,7 +361,7 @@ where
 
 /// Writable session with staged operations.
 #[must_use = "Sessions hold a lease; call commit().await or end().await before dropping"]
-pub struct WriteSession<K, V, HS, SS, CS, LS, E = BlockingExecutor, R = DefaultRetention>
+pub struct WriteSession<K, V, HS, SS, CS, LS, E = DefaultExecutor, R = DefaultRetention>
 where
     K: PartialOrd + Eq + Hash + Serialize + DeserializeOwned,
     V: Serialize + DeserializeOwned,
@@ -679,6 +679,7 @@ mod tests {
         segment::SegmentStoreImpl,
         test_utils::{self, in_memory_stores, InMemoryStores},
         types::Error,
+        BlockingExecutor,
     };
 
     type StringManifest = Manifest<
