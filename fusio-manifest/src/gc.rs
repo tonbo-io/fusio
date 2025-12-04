@@ -200,7 +200,7 @@ fn map_fs_error(err: FsError) -> Error {
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
-    use fusio::{executor::BlockingExecutor, impls::mem::fs::InMemoryFs};
+    use fusio::{executor::NoopExecutor, impls::mem::fs::InMemoryFs};
 
     use super::*;
 
@@ -215,7 +215,7 @@ mod tests {
     #[test]
     fn mem_gc_plan_store_semantics() {
         use futures_executor::block_on;
-        let timer = BlockingExecutor::default();
+        let timer = NoopExecutor::default();
         let store = FsGcPlanStore::new(InMemoryFs::new(), "", BackoffPolicy::default(), timer);
         // load none
         assert!(block_on(store.load()).unwrap().is_none());

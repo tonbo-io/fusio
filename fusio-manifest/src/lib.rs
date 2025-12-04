@@ -1,4 +1,5 @@
 #![cfg_attr(docsrs, feature(doc_cfg))]
+#![cfg_attr(target_arch = "wasm32", allow(clippy::arc_with_non_send_sync))]
 
 use fusio::executor::Timer;
 
@@ -28,18 +29,18 @@ pub mod context;
 pub use context::ManifestContext;
 #[cfg(feature = "tokio")]
 pub use fusio::executor::tokio::TokioExecutor;
-#[cfg(all(feature = "wasm", target_arch = "wasm32"))]
+#[cfg(all(feature = "web", target_arch = "wasm32"))]
 pub use fusio::executor::web::WebExecutor;
 #[cfg(feature = "tokio")]
-pub use fusio::executor::BlockingExecutor;
+pub use fusio::executor::NoopExecutor;
 
 /// Default executor type based on enabled features.
 /// - With `tokio` feature: `TokioExecutor`
-/// - With `wasm` feature on wasm32: `WebExecutor`
+/// - With `web` feature on wasm32: `WebExecutor`
 #[cfg(feature = "tokio")]
 pub type DefaultExecutor = TokioExecutor;
 
-#[cfg(all(feature = "wasm", target_arch = "wasm32", not(feature = "tokio")))]
+#[cfg(all(feature = "web", target_arch = "wasm32", not(feature = "tokio")))]
 pub type DefaultExecutor = WebExecutor;
 
 pub(crate) mod cache;

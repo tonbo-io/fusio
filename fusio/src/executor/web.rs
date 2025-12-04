@@ -11,7 +11,7 @@ use fusio_core::{MaybeSend, MaybeSendFuture, MaybeSync};
 use futures_channel::oneshot;
 use wasm_bindgen::{prelude::*, JsCast};
 
-use super::{Executor, JoinHandle, RwLock, Timer};
+use super::{Executor, JoinHandle, Mutex, RwLock, Timer};
 
 #[wasm_bindgen]
 #[derive(Clone, Copy)]
@@ -32,18 +32,32 @@ impl WebExecutor {
 }
 
 pub struct WebJoinHandle<R> {
-    receiver: oneshot::Receiver<Result<R, Box<dyn Error>>>,
+    receiver: oneshot::Receiver<R>,
 }
 
 impl<R> JoinHandle<R> for WebJoinHandle<R>
 where
     R: MaybeSend,
 {
-    async fn join(self) -> Result<R, Box<dyn Error>> {
+    async fn join(self) -> Result<R, Box<dyn Error + Send + Sync>> {
         match self.receiver.await {
-            Ok(result) => result,
+            Ok(result) => Ok(result),
             Err(_canceled) => Err("Spawned task was canceled before completion".into()),
         }
+    }
+}
+
+impl<T> Mutex<T> for Arc<async_lock::Mutex<T>>
+where
+    T: MaybeSend + MaybeSync,
+{
+    type Guard<'a>
+        = async_lock::MutexGuard<'a, T>
+    where
+        Self: 'a;
+
+    async fn lock(&self) -> Self::Guard<'_> {
+        async_lock::Mutex::lock(self).await
     }
 }
 
@@ -76,6 +90,11 @@ impl Executor for WebExecutor {
     where
         R: MaybeSend;
 
+    type Mutex<T>
+        = Arc<async_lock::Mutex<T>>
+    where
+        T: MaybeSend + MaybeSync;
+
     type RwLock<T>
         = Arc<async_lock::RwLock<T>>
     where
@@ -86,14 +105,21 @@ impl Executor for WebExecutor {
         F: Future + MaybeSend + 'static,
         F::Output: MaybeSend,
     {
-        let (sender, receiver) = oneshot::channel::<Result<F::Output, Box<dyn Error>>>();
+        let (sender, receiver) = oneshot::channel();
 
         wasm_bindgen_futures::spawn_local(async move {
             let result = future.await;
-            let _ = sender.send(Ok(result));
+            let _ = sender.send(result);
         });
 
         WebJoinHandle { receiver }
+    }
+
+    fn mutex<T>(value: T) -> Self::Mutex<T>
+    where
+        T: MaybeSend + MaybeSync,
+    {
+        Arc::new(async_lock::Mutex::new(value))
     }
 
     fn rw_lock<T>(value: T) -> Self::RwLock<T>

@@ -7,7 +7,7 @@ use arrow::{
     array::{ArrayRef, Int64Array},
     record_batch::RecordBatch,
 };
-use fusio::{fs::OpenOptions, impls::mem::fs::InMemoryFs, path::Path, Fs, Read};
+use fusio::{fs::OpenOptions, impls::mem::fs::InMemoryFs, path::Path, Fs, Read, WebExecutor};
 use fusio_parquet::{reader::AsyncReader, writer::AsyncWriter};
 use futures::StreamExt;
 use parquet::{
@@ -24,7 +24,11 @@ async fn parquet_roundtrip_with_web_executor() {
     let path = Path::parse("/parquet/web/roundtrip").unwrap();
     let options = OpenOptions::default().create(true).write(true);
 
-    let writer = AsyncWriter::new(Box::new(fs.open_options(&path, options).await.unwrap()));
+    let executor = WebExecutor;
+    let writer = AsyncWriter::new(
+        Box::new(fs.open_options(&path, options).await.unwrap()),
+        executor,
+    );
 
     let col = Arc::new(Int64Array::from_iter_values([1, 2, 3, 4])) as ArrayRef;
     let to_write = RecordBatch::try_from_iter([("col", col)]).unwrap();
@@ -39,7 +43,9 @@ async fn parquet_roundtrip_with_web_executor() {
         .unwrap();
     let size = file.size().await.unwrap();
 
-    let reader = AsyncReader::new(Box::new(file), size).await.unwrap();
+    let reader = AsyncReader::new(Box::new(file), size, executor)
+        .await
+        .unwrap();
     let mut stream = ParquetRecordBatchStreamBuilder::new(reader)
         .await
         .unwrap()

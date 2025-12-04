@@ -214,7 +214,7 @@ async fn main() -> Result<()> {
 
 Feature flags:
 - Default: `std`, `mem`.
-- S3 / Fusio FS backends are always available; additional runtime-specific knobs now live in `fusio` (e.g., choose `tokio-http` vs. `wasm-http`).
+- S3 / Fusio FS backends are always available; additional runtime-specific knobs now live in `fusio` (e.g., choose `tokio-http` vs. `web-http`).
 
 ## Observability
 

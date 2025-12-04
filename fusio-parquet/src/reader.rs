@@ -1,8 +1,12 @@
 use std::{cmp, ops::Range, sync::Arc};
 
 use bytes::{Bytes, BytesMut};
-use fusio::{dynamic::DynFile, Read};
-use futures::{future::BoxFuture, FutureExt};
+use fusio::{
+    dynamic::DynFile,
+    executor::{Executor, Mutex},
+    Read,
+};
+use futures::{channel::oneshot, future::BoxFuture, FutureExt};
 use parquet::{
     arrow::{
         arrow_reader::ArrowReaderOptions,
@@ -17,36 +21,39 @@ use parquet::{
 
 const PREFETCH_FOOTER_SIZE: usize = 512 * 1024;
 
-pub struct AsyncReader {
-    #[cfg(any(feature = "executor-web", feature = "monoio"))]
-    inner: Arc<futures::lock::Mutex<Box<dyn DynFile>>>,
-    #[cfg(not(any(feature = "executor-web", feature = "monoio")))]
-    inner: Box<dyn DynFile>,
+/// Async parquet file reader that works across different async runtimes.
+///
+/// Requires an executor to spawn I/O tasks. The executor handles runtime-specific
+/// task spawning, making this reader work uniformly across tokio, monoio,
+/// tokio-uring, and web/WASM environments.
+pub struct AsyncReader<E: Executor> {
+    #[allow(clippy::arc_with_non_send_sync)]
+    inner: Arc<E::Mutex<Box<dyn DynFile>>>,
     content_length: u64,
-    // The prefetch size for fetching file footer.
     prefetch_footer_size: usize,
+    executor: E,
 }
 
-#[cfg(any(feature = "executor-web", feature = "monoio"))]
-unsafe impl Send for AsyncReader {}
+unsafe impl<E: Executor> Send for AsyncReader<E> {}
 
 fn set_prefetch_footer_size(footer_size: usize, content_size: u64) -> usize {
     let footer_size = cmp::max(footer_size, FOOTER_SIZE);
     cmp::min(footer_size as u64, content_size) as usize
 }
 
-impl AsyncReader {
+impl<E: Executor> AsyncReader<E> {
+    /// Create a new async reader with the specified executor.
+    #[allow(clippy::arc_with_non_send_sync)]
     pub async fn new(
         reader: Box<dyn DynFile>,
         content_length: u64,
+        executor: E,
     ) -> Result<Self, fusio::error::Error> {
-        #[cfg(any(feature = "executor-web", feature = "monoio"))]
-        #[allow(clippy::arc_with_non_send_sync)]
-        let reader = Arc::new(futures::lock::Mutex::new(reader));
         Ok(Self {
-            inner: reader,
+            inner: Arc::new(E::mutex(reader)),
             content_length,
             prefetch_footer_size: set_prefetch_footer_size(PREFETCH_FOOTER_SIZE, content_length),
+            executor,
         })
     }
 
@@ -60,11 +67,7 @@ impl AsyncReader {
         prefetch_footer_size: usize,
         file: &mut F,
     ) -> Result<ParquetMetaData, ParquetError> {
-        #[cfg_attr(any(feature = "executor-web", feature = "monoio"), allow(unused_mut))]
-        let mut buf = vec![0; prefetch_footer_size];
-
-        #[cfg(not(any(feature = "executor-web", feature = "monoio")))]
-        let buf = &mut buf[..];
+        let buf = vec![0; prefetch_footer_size];
 
         let (result, prefetched_footer_content) = file
             .read_exact_at(buf, content_length - prefetch_footer_size as u64)
@@ -74,7 +77,6 @@ impl AsyncReader {
         let prefetched_footer_slice = &prefetched_footer_content[..];
         let prefetched_footer_length = prefetched_footer_slice.len();
 
-        // Decode the metadata length from the last 8 bytes of the file.
         let metadata_length = {
             let buf = &prefetched_footer_slice
                 [(prefetched_footer_length - FOOTER_SIZE)..prefetched_footer_length];
@@ -86,8 +88,6 @@ impl AsyncReader {
             .metadata_length()
         };
 
-        // Try to read the metadata from the `prefetched_footer_content`.
-        // Otherwise, fetch exact metadata from the remote.
         if prefetched_footer_length >= metadata_length + FOOTER_SIZE {
             let buf =
                 &prefetched_footer_slice[(prefetched_footer_length - metadata_length - FOOTER_SIZE)
@@ -125,114 +125,58 @@ impl AsyncReader {
         range: Range<u64>,
     ) -> Result<Bytes, ParquetError> {
         let len = (range.end - range.start) as usize;
-        #[cfg_attr(any(feature = "executor-web", feature = "monoio"), allow(unused_mut))]
-        let mut buf = vec![0; len];
+        let buf = vec![0; len];
 
-        #[cfg(not(any(feature = "executor-web", feature = "monoio")))]
-        let b = &mut buf[..];
-        #[cfg(any(feature = "executor-web", feature = "monoio"))]
-        let b = buf;
-
-        let (result, _b) = file.read_exact_at(b, range.start).await;
+        let (result, buf) = file.read_exact_at(buf, range.start).await;
         result.map_err(|err| ParquetError::External(Box::new(err)))?;
 
-        #[cfg(not(any(feature = "executor-web", feature = "monoio")))]
-        return Ok(buf.into());
-        #[cfg(any(feature = "executor-web", feature = "monoio"))]
-        return Ok(_b.into());
+        Ok(buf.into())
     }
 }
 
-impl AsyncFileReader for AsyncReader {
-    #[cfg(not(any(feature = "executor-web", feature = "monoio")))]
+impl<E: Executor + Clone + 'static> AsyncFileReader for AsyncReader<E> {
     fn get_bytes(&mut self, range: Range<u64>) -> BoxFuture<'_, parquet::errors::Result<Bytes>> {
-        Self::load_bytes(&mut self.inner, range).boxed()
-    }
-
-    #[cfg(any(feature = "executor-web", feature = "monoio"))]
-    fn get_bytes(&mut self, range: Range<u64>) -> BoxFuture<'_, parquet::errors::Result<Bytes>> {
-        use futures::channel::oneshot;
-
-        let (sender, receiver) = oneshot::channel::<Result<Bytes, ParquetError>>();
         let reader = self.inner.clone();
+        let (tx, rx) = oneshot::channel();
 
-        #[cfg(all(feature = "executor-web", target_arch = "wasm32"))]
-        let spawner = wasm_bindgen_futures::spawn_local;
-        #[cfg(feature = "monoio")]
-        let spawner = monoio::spawn;
-
-        spawner(async move {
+        self.executor.spawn(async move {
             let mut guard = reader.lock().await;
             let result = Self::load_bytes(&mut *guard, range).await;
-            let _ = sender.send(result);
+            let _ = tx.send(result);
         });
 
-        async move { receiver.await.unwrap() }.boxed()
-    }
-
-    #[cfg(not(any(feature = "executor-web", feature = "monoio")))]
-    fn get_metadata(
-        &mut self,
-        options: Option<&ArrowReaderOptions>,
-    ) -> BoxFuture<'_, parquet::errors::Result<Arc<ParquetMetaData>>> {
-        if self.content_length == 0 {
-            return async { Err(ParquetError::EOF("file empty".to_string())) }.boxed();
-        }
-
-        let page_index = options.map(|options| options.page_index()).unwrap_or(false);
-
         async move {
-            let metadata = Self::load_metadata(
-                self.content_length,
-                self.prefetch_footer_size,
-                &mut self.inner,
-            )
-            .await
-            .map_err(|err| ParquetError::External(Box::new(err)))?;
-
-            if page_index {
-                Self::load_page_indexes(metadata, self)
-                    .await
-                    .map(Arc::from)
-                    .map_err(|err| ParquetError::External(Box::new(err)))
-            } else {
-                Ok(Arc::new(metadata))
-            }
+            rx.await
+                .map_err(|_| ParquetError::General("task canceled".to_string()))?
         }
         .boxed()
     }
 
-    #[cfg(any(feature = "executor-web", feature = "monoio"))]
     fn get_metadata(
         &mut self,
         options: Option<&ArrowReaderOptions>,
     ) -> BoxFuture<'_, parquet::errors::Result<Arc<ParquetMetaData>>> {
-        use futures::channel::oneshot;
-
         if self.content_length == 0 {
             return async { Err(ParquetError::EOF("file empty".to_string())) }.boxed();
         }
 
-        let (sender, receiver) = oneshot::channel::<Result<ParquetMetaData, ParquetError>>();
         let reader = self.inner.clone();
-
-        #[cfg(all(feature = "executor-web", target_arch = "wasm32"))]
-        let spawner = wasm_bindgen_futures::spawn_local;
-        #[cfg(feature = "monoio")]
-        let spawner = monoio::spawn;
-
         let content_length = self.content_length;
         let prefetch_footer_size = self.prefetch_footer_size;
-        spawner(async move {
+        let (tx, rx) = oneshot::channel();
+
+        self.executor.spawn(async move {
             let mut guard = reader.lock().await;
             let result =
                 Self::load_metadata(content_length, prefetch_footer_size, &mut *guard).await;
-            let _ = sender.send(result);
+            let _ = tx.send(result);
         });
 
         let page_index = options.map(|options| options.page_index()).unwrap_or(false);
         async move {
-            let metadata = receiver.await.unwrap()?;
+            let metadata = rx
+                .await
+                .map_err(|_| ParquetError::General("task canceled".to_string()))??;
             if page_index {
                 Self::load_page_indexes(metadata, self)
                     .await
@@ -249,10 +193,10 @@ impl AsyncFileReader for AsyncReader {
 #[cfg(test)]
 #[cfg(any(feature = "monoio", feature = "tokio"))]
 mod tests {
-    use std::sync::Arc;
+    use std::{marker::Unpin, sync::Arc};
 
     use arrow::array::{ArrayRef, Int64Array, RecordBatch};
-    use fusio::{disk::LocalFs, fs::OpenOptions, path::Path, DynFs};
+    use fusio::{disk::LocalFs, executor::Executor, fs::OpenOptions, path::Path, DynFs};
     use futures::StreamExt;
     use parquet::{
         arrow::{AsyncArrowWriter, ParquetRecordBatchStreamBuilder},
@@ -267,20 +211,23 @@ mod tests {
         writer::AsyncWriter,
     };
 
-    async fn async_reader_with_prefetch_footer_size() {
+    async fn async_reader_with_prefetch_footer_size<E: Executor + Clone + Copy + 'static>(
+        executor: E,
+    ) {
         let tmp_dir = tempdir().unwrap();
         let fs = LocalFs {};
         let path = Path::from_filesystem_path(tmp_dir.path())
             .unwrap()
             .child("reader");
-        // let options = OpenOptions::default().create(true).write(true);
         {
             let file = fs
                 .open_options(&path, OpenOptions::default().create(true))
                 .await
                 .unwrap();
 
-            let reader = AsyncReader::new(Box::new(file), 1024).await.unwrap();
+            let reader = AsyncReader::new(Box::new(file), 1024, executor)
+                .await
+                .unwrap();
             assert_eq!(reader.prefetch_footer_size, 1024);
             assert_eq!(reader.content_length, 1024);
         }
@@ -291,7 +238,9 @@ mod tests {
                 .await
                 .unwrap();
 
-            let reader = AsyncReader::new(Box::new(file), 1024 * 1024).await.unwrap();
+            let reader = AsyncReader::new(Box::new(file), 1024 * 1024, executor)
+                .await
+                .unwrap();
             assert_eq!(reader.prefetch_footer_size, PREFETCH_FOOTER_SIZE);
             assert_eq!(reader.content_length, 1024 * 1024);
         }
@@ -302,7 +251,7 @@ mod tests {
                 .await
                 .unwrap();
 
-            let reader = AsyncReader::new(Box::new(file), 1024 * 1024)
+            let reader = AsyncReader::new(Box::new(file), 1024 * 1024, executor)
                 .await
                 .unwrap()
                 .with_prefetch_footer_size(2048 * 1024);
@@ -316,7 +265,7 @@ mod tests {
                 .await
                 .unwrap();
 
-            let reader = AsyncReader::new(Box::new(file), 1024 * 1024)
+            let reader = AsyncReader::new(Box::new(file), 1024 * 1024, executor)
                 .await
                 .unwrap()
                 .with_prefetch_footer_size(1);
@@ -338,7 +287,9 @@ mod tests {
             .collect()
     }
 
-    async fn async_reader_with_large_metadata() {
+    async fn async_reader_with_large_metadata<E: Executor + Clone + Copy + Unpin + 'static>(
+        executor: E,
+    ) {
         for case in [
             TestCase {
                 metadata_size: 256 * 1024,
@@ -364,7 +315,10 @@ mod tests {
                 .child("reader");
             let options = OpenOptions::default().create(true).write(true);
 
-            let writer = AsyncWriter::new(Box::new(fs.open_options(&path, options).await.unwrap()));
+            let writer = AsyncWriter::new(
+                Box::new(fs.open_options(&path, options).await.unwrap()),
+                executor,
+            );
 
             let col = Arc::new(Int64Array::from_iter_values([1, 2, 3])) as ArrayRef;
             let to_write = RecordBatch::try_from_iter([("col", col)]).unwrap();
@@ -391,7 +345,9 @@ mod tests {
                 .unwrap();
             let size = file.size().await.unwrap();
 
-            let mut reader = AsyncReader::new(Box::new(file), size).await.unwrap();
+            let mut reader = AsyncReader::new(Box::new(file), size, executor)
+                .await
+                .unwrap();
             if let Some(footer_size) = case.prefetch {
                 reader = reader.with_prefetch_footer_size(footer_size);
             }
@@ -409,34 +365,40 @@ mod tests {
     #[cfg(feature = "monoio")]
     #[monoio::test]
     async fn test_monoio_async_reader_with_prefetch_footer_size() {
-        async_reader_with_prefetch_footer_size().await;
+        use fusio::MonoioExecutor;
+        async_reader_with_prefetch_footer_size(MonoioExecutor).await;
     }
 
     #[cfg(feature = "tokio")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_tokio_async_reader_with_prefetch_footer_size() {
-        async_reader_with_prefetch_footer_size().await;
+        use fusio::executor::NoopExecutor;
+        async_reader_with_prefetch_footer_size(NoopExecutor).await;
     }
 
     #[cfg(feature = "monoio")]
     #[monoio::test]
     async fn test_monoio_async_reader_with_large_metadata() {
-        async_reader_with_large_metadata().await;
+        use fusio::MonoioExecutor;
+        async_reader_with_large_metadata(MonoioExecutor).await;
     }
 
     #[cfg(feature = "tokio")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_tokio_async_reader_with_large_metadata() {
-        async_reader_with_large_metadata().await;
+        use fusio::executor::NoopExecutor;
+        async_reader_with_large_metadata(NoopExecutor).await;
     }
 
     #[cfg(feature = "tokio")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_async_reader_metadata_with_page_index() {
+        use fusio::executor::NoopExecutor;
         use parquet::{
             arrow::arrow_reader::ArrowReaderOptions, file::properties::EnabledStatistics,
         };
 
+        let executor = NoopExecutor;
         let tmp_dir = tempdir().unwrap();
         let fs = LocalFs {};
         let path = Path::from_filesystem_path(tmp_dir.path())
@@ -444,7 +406,10 @@ mod tests {
             .child("reader");
         let options = OpenOptions::default().create(true).write(true);
 
-        let writer = AsyncWriter::new(Box::new(fs.open_options(&path, options).await.unwrap()));
+        let writer = AsyncWriter::new(
+            Box::new(fs.open_options(&path, options).await.unwrap()),
+            executor,
+        );
 
         let col = Arc::new(Int64Array::from_iter_values([1, 2, 3])) as ArrayRef;
         let to_write = RecordBatch::try_from_iter([("col", col)]).unwrap();
@@ -472,7 +437,9 @@ mod tests {
                 .await
                 .unwrap();
             let size = file.size().await.unwrap();
-            let reader = AsyncReader::new(Box::new(file), size).await.unwrap();
+            let reader = AsyncReader::new(Box::new(file), size, executor)
+                .await
+                .unwrap();
 
             let builder = ParquetRecordBatchStreamBuilder::new_with_options(
                 reader,

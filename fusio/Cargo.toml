@@ -70,7 +70,9 @@ sync = ["opfs"]
 tokio = ["async-stream", "dep:tokio"]
 tokio-http = ["dep:reqwest", "http", "tokio"]
 tokio-uring = ["async-stream", "completion-based", "dep:tokio-uring", "no-send"]
-wasm-http = ["dep:reqwest", "http"]
+web-http = ["dep:reqwest", "http"]
+# Backward-compatible alias for the web HTTP client (previously named "wasm-http").
+wasm-http = ["web-http"]
 
 [[bench]]
 harness = false

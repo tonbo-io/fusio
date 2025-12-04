@@ -679,7 +679,6 @@ mod tests {
         segment::SegmentStoreImpl,
         test_utils::{self, in_memory_stores, InMemoryStores},
         types::Error,
-        BlockingExecutor,
     };
 
     type StringManifest = Manifest<
@@ -688,7 +687,7 @@ mod tests {
         HeadStoreImpl<InMemoryFs>,
         SegmentStoreImpl<InMemoryFs>,
         CheckpointStoreImpl<InMemoryFs>,
-        LeaseStoreImpl<InMemoryFs, BlockingExecutor>,
+        LeaseStoreImpl<InMemoryFs, NoopExecutor>,
         NoopExecutor,
     >;
 

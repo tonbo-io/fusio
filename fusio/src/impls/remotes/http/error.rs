@@ -12,7 +12,7 @@ pub enum HttpError {
     },
     #[error(transparent)]
     Http(#[from] http::Error),
-    #[cfg(any(feature = "tokio-http", feature = "wasm-http"))]
+    #[cfg(any(feature = "tokio-http", feature = "web-http"))]
     #[error(transparent)]
     Reqwest(#[from] reqwest::Error),
     #[error(transparent)]

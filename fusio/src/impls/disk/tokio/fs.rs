@@ -161,7 +161,7 @@ async fn windows_replace_file(tmp_path: &StdPath, final_path: &StdPath) -> io::R
 
     spawn_blocking(move || replace_file_with_swap(replacement, destination))
         .await
-        .map_err(|join_err| io::Error::new(ErrorKind::Other, join_err.to_string()))?
+        .map_err(|join_err| io::Error::other(join_err.to_string()))?
 }
 
 #[cfg(windows)]

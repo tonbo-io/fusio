@@ -68,12 +68,12 @@ Opening an object with `OpenOptions::write(true).truncate(false)` now keeps the 
 ### WASM executors
 
 - `executor-web`: browser/web executor for `wasm32` (no OPFS dependency). `JoinHandle::join` always returns an error because `spawn_local` tasks are not awaitable; use other signaling for completion.
-- `opfs`: back-compat alias of the same executor when OPFS is enabled. OPFS and S3/`wasm-http` are typically used separately.
+- `opfs`: back-compat alias of the same executor when OPFS is enabled. OPFS and S3/`web-http` are typically used separately.
 
 Feature combos:
 
-- `cargo build -p fusio --target wasm32-unknown-unknown --no-default-features --features "executor-web,aws,wasm-http"`
-- `cargo build -p fusio --target wasm32-unknown-unknown --no-default-features --features "executor-web,opfs,wasm-http"`
+- `cargo build -p fusio --target wasm32-unknown-unknown --no-default-features --features "executor-web,aws,web-http"`
+- `cargo build -p fusio --target wasm32-unknown-unknown --no-default-features --features "executor-web,opfs,web-http"`
 
 See `examples/opfs` for OPFS usage.
 

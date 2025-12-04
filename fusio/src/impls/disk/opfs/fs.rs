@@ -64,9 +64,9 @@ impl Fs for OPFS {
 
         cfg_if::cfg_if! {
             if #[cfg(feature = "sync")] {
-                Ok(Self::File::new(file_handle, options).await?)
+                Self::File::new(file_handle, options).await
             } else {
-                Ok(OPFSFile::new(file_handle, options).await?)
+                OPFSFile::new(file_handle, options).await
             }
         }
     }
