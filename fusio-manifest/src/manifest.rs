@@ -62,7 +62,7 @@ where
     store: Arc<Store<HS, SS, CS, LS, E, R>>,
 }
 
-#[cfg(any(feature = "tokio", all(feature = "wasm", target_arch = "wasm32")))]
+#[cfg(any(feature = "tokio", all(feature = "web", target_arch = "wasm32")))]
 impl<K, V, HS, SS, CS, LS> Manifest<K, V, HS, SS, CS, LS>
 where
     K: PartialOrd + Eq + Hash + Serialize + DeserializeOwned,
@@ -412,7 +412,7 @@ mod tests {
         HeadStoreImpl<InMemoryFs>,
         SegmentStoreImpl<InMemoryFs>,
         CheckpointStoreImpl<InMemoryFs>,
-        LeaseStoreImpl<InMemoryFs, fusio::executor::BlockingExecutor>,
+        LeaseStoreImpl<InMemoryFs, fusio::executor::NoopExecutor>,
         NoopExecutor,
     > {
         let opts: ManifestContext<DefaultRetention, NoopExecutor> =

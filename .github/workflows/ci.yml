@@ -95,6 +95,57 @@ jobs:
           command: build
           args: --package fusio-manifest
 
+      - name: Run cargo clippy on tokio
+        uses: actions-rs/cargo@v1
+        with:
+          command: clippy
+          args: --package fusio --features=tokio,aws,tokio-http -- -D warnings
+
+      - name: Run cargo clippy on monoio
+        if: runner.os != 'Windows'
+        uses: actions-rs/cargo@v1
+        with:
+          command: clippy
+          args: --package fusio --features=monoio -- -D warnings
+
+      - name: Run cargo clippy on tokio-uring
+        if: runner.os == 'Linux'
+        uses: actions-rs/cargo@v1
+        with:
+          command: clippy
+          args: --package fusio --features=tokio-uring -- -D warnings
+
+      - name: Run cargo clippy on fusio-object-store
+        uses: actions-rs/cargo@v1
+        with:
+          command: clippy
+          args: --package fusio-object-store -- -D warnings
+
+      - name: Run cargo clippy on fusio-opendal
+        uses: actions-rs/cargo@v1
+        with:
+          command: clippy
+          args: --package fusio-opendal -- -D warnings
+
+      - name: Run cargo clippy on fusio-parquet tokio
+        uses: actions-rs/cargo@v1
+        with:
+          command: clippy
+          args: --package fusio-parquet --features=tokio -- -D warnings
+
+      - name: Run cargo clippy on fusio-parquet monoio
+        if: runner.os != 'Windows'
+        uses: actions-rs/cargo@v1
+        with:
+          command: clippy
+          args: --package fusio-parquet --features=monoio -- -D warnings
+
+      - name: Run cargo clippy on fusio-manifest
+        uses: actions-rs/cargo@v1
+        with:
+          command: clippy
+          args: --package fusio-manifest -- -D warnings
+
       # - name: Configure aws credentials
       #   if: ${{ (github.event_name == 'push' && github.ref_name == 'main') || startsWith(github.ref, 'refs/tags/') }}
       #   uses: aws-actions/configure-aws-credentials@v4
@@ -189,13 +240,13 @@ jobs:
         uses: actions-rs/cargo@v1
         with:
           command: build
-          args: --target wasm32-unknown-unknown --package fusio --no-default-features --features=executor-web,aws,wasm-http
+          args: --target wasm32-unknown-unknown --package fusio --no-default-features --features=executor-web,aws,web-http
 
       - name: Run cargo build on fusio (opfs back-compat)
         uses: actions-rs/cargo@v1
         with:
           command: build
-          args: --target wasm32-unknown-unknown --package fusio --no-default-features --features=executor-web,opfs,aws,wasm-http
+          args: --target wasm32-unknown-unknown --package fusio --no-default-features --features=executor-web,opfs,aws,web-http
 
       - name: Run cargo build on fusio-parquet
         uses: actions-rs/cargo@v1
@@ -207,7 +258,31 @@ jobs:
         uses: actions-rs/cargo@v1
         with:
           command: build
-          args: --target wasm32-unknown-unknown --package fusio-manifest --no-default-features --features=wasm
+          args: --target wasm32-unknown-unknown --package fusio-manifest --no-default-features --features=web
+
+      - name: Run cargo clippy on fusio (wasm)
+        uses: actions-rs/cargo@v1
+        with:
+          command: clippy
+          args: --target wasm32-unknown-unknown --package fusio --no-default-features --features=executor-web,aws,web-http -- -D warnings
+
+      - name: Run cargo clippy on fusio (wasm opfs)
+        uses: actions-rs/cargo@v1
+        with:
+          command: clippy
+          args: --target wasm32-unknown-unknown --package fusio --no-default-features --features=executor-web,opfs,aws,web-http -- -D warnings
+
+      - name: Run cargo clippy on fusio-parquet (wasm)
+        uses: actions-rs/cargo@v1
+        with:
+          command: clippy
+          args: --target wasm32-unknown-unknown --package fusio-parquet --features=web -- -D warnings
+
+      - name: Run cargo clippy on fusio-manifest (wasm)
+        uses: actions-rs/cargo@v1
+        with:
+          command: clippy
+          args: --target wasm32-unknown-unknown --package fusio-manifest --no-default-features --features=web -- -D warnings
 
       - name: Install Chrome Environment
         run: |
@@ -237,12 +312,12 @@ jobs:
       - name: Run wasm-pack test on fusio (web executor)
         run: |
           export PATH=$PATH:/tmp/chrome/chrome-linux64/:/tmp/chrome/chromedriver-linux64/
-          wasm-pack test --chrome --headless fusio --no-default-features --features executor-web,wasm-http
+          wasm-pack test --chrome --headless fusio --no-default-features --features executor-web,web-http
 
       - name: Run wasm-pack test on fusio (back-compat opfs)
         run: |
           export PATH=$PATH:/tmp/chrome/chrome-linux64/:/tmp/chrome/chromedriver-linux64/
-          wasm-pack test --chrome --headless fusio --no-default-features --features executor-web,opfs,wasm-http
+          wasm-pack test --chrome --headless fusio --no-default-features --features executor-web,opfs,web-http
 
       - name: Run wasm-pack test on fusion-parquet
         run: |
@@ -252,4 +327,4 @@ jobs:
       - name: Run wasm-pack test on fusio-manifest
         run: |
           export PATH=$PATH:/tmp/chrome/chrome-linux64/:/tmp/chrome/chromedriver-linux64/
-          wasm-pack test --chrome --headless fusio-manifest --no-default-features --features wasm
+          wasm-pack test --chrome --headless fusio-manifest --no-default-features --features web

@@ -12,7 +12,7 @@ pub(crate) mod tests {
         disk::LocalFs,
         fs::{Fs, OpenOptions},
         path::Path,
-        Read,
+        Read, WebExecutor,
     };
     use fusio_parquet::{reader::AsyncReader, writer::AsyncWriter};
     use futures::StreamExt;
@@ -31,7 +31,11 @@ pub(crate) mod tests {
         let fs = LocalFs {};
         let path = Path::from_opfs_path("basic_write_file").unwrap();
         let options = OpenOptions::default().create(true).write(true);
-        let mut writer = AsyncWriter::new(Box::new(fs.open_options(&path, options).await.unwrap()));
+        let executor = WebExecutor;
+        let mut writer = AsyncWriter::new(
+            Box::new(fs.open_options(&path, options).await.unwrap()),
+            executor,
+        );
 
         let bytes = Bytes::from_static(b"Hello ");
         writer.write(bytes).await.unwrap();
@@ -58,7 +62,11 @@ pub(crate) mod tests {
         let path = Path::from_opfs_path("async_writer_file").unwrap();
 
         let options = OpenOptions::default().create(true).write(true);
-        let writer = AsyncWriter::new(Box::new(fs.open_options(&path, options).await.unwrap()));
+        let executor = WebExecutor;
+        let writer = AsyncWriter::new(
+            Box::new(fs.open_options(&path, options).await.unwrap()),
+            executor,
+        );
 
         let col = Arc::new(Int64Array::from_iter_values([1, 2, 3])) as ArrayRef;
         let to_write = RecordBatch::try_from_iter([("col", col)]).unwrap();
@@ -98,6 +106,7 @@ pub(crate) mod tests {
 
     #[wasm_bindgen_test]
     async fn test_opfs_async_reader_with_prefetch_footer_size() {
+        let executor = WebExecutor;
         for case in [
             TestCase {
                 metadata_size: 256 * 1024,
@@ -120,7 +129,10 @@ pub(crate) mod tests {
             let path = Path::from_opfs_path("async_reader_file").unwrap();
 
             let options = OpenOptions::default().create(true).write(true);
-            let writer = AsyncWriter::new(Box::new(fs.open_options(&path, options).await.unwrap()));
+            let writer = AsyncWriter::new(
+                Box::new(fs.open_options(&path, options).await.unwrap()),
+                executor,
+            );
 
             let col = Arc::new(Int64Array::from_iter_values([1, 2, 3])) as ArrayRef;
             let to_write = RecordBatch::try_from_iter([("col", col)]).unwrap();
@@ -147,7 +159,9 @@ pub(crate) mod tests {
                 .unwrap();
             let size = file.size().await.unwrap();
 
-            let mut reader = AsyncReader::new(Box::new(file), size).await.unwrap();
+            let mut reader = AsyncReader::new(Box::new(file), size, executor)
+                .await
+                .unwrap();
             if let Some(footer_size) = case.prefetch {
                 reader = reader.with_prefetch_footer_size(footer_size);
             }

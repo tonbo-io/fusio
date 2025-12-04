@@ -416,7 +416,7 @@ mod tests {
     fn lease_first_attempt_success_no_retry_suffix() {
         block_on(async move {
             let fs = FailingFs::new(0);
-            let timer = fusio::executor::BlockingExecutor::default();
+            let timer = fusio::executor::NoopExecutor::default();
             let policy = BackoffPolicy::default();
             let store = LeaseStoreImpl::new(fs, "", policy, timer);
             let ttl = Duration::from_secs(60);
@@ -452,7 +452,7 @@ mod tests {
     fn lease_retry_on_transient_errors() {
         block_on(async move {
             let fs = FailingFs::new(2);
-            let timer = fusio::executor::BlockingExecutor::default();
+            let timer = fusio::executor::NoopExecutor::default();
             let policy = BackoffPolicy {
                 base_ms: 1,
                 max_ms: 10,
@@ -485,7 +485,7 @@ mod tests {
     fn lease_retry_exhaustion() {
         block_on(async move {
             let fs = FailingFs::new(100);
-            let timer = fusio::executor::BlockingExecutor::default();
+            let timer = fusio::executor::NoopExecutor::default();
             let policy = BackoffPolicy {
                 base_ms: 1,
                 max_ms: 10,

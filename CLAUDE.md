@@ -37,7 +37,7 @@ export AWS_REGION=ap-southeast-1
 cargo test -p fusio --features "tokio aws"
 
 # Run WASM tests
-wasm-pack test --chrome --headless fusio --features "aws opfs wasm-http"
+wasm-pack test --chrome --headless fusio --features "aws opfs web-http"
 ```
 
 ### Development Commands

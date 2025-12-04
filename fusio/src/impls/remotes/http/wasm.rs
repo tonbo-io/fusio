@@ -59,7 +59,7 @@ impl HttpClient for WasmClient {
     }
 }
 
-#[cfg(feature = "wasm-http")]
+#[cfg(feature = "web-http")]
 #[cfg(test)]
 mod tests {
     wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
@@ -82,7 +82,7 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
     }
 
-    #[cfg(all(feature = "wasm-http", feature = "aws"))]
+    #[cfg(all(feature = "web-http", feature = "aws"))]
     #[wasm_bindgen_test]
     async fn list_and_remove_wasm() {
         use std::pin::pin;

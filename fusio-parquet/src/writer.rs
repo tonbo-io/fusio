@@ -1,135 +1,83 @@
+use std::sync::Arc;
+
 use bytes::Bytes;
-#[allow(unused)]
-use fusio::{dynamic::DynFile, Write};
-#[allow(unused_imports)]
-use futures::{future::BoxFuture, FutureExt};
+use fusio::{
+    dynamic::DynFile,
+    executor::{Executor, Mutex},
+    Write,
+};
+use futures::{channel::oneshot, future::BoxFuture, FutureExt};
 use parquet::{arrow::async_writer::AsyncFileWriter, errors::ParquetError};
 
-pub struct AsyncWriter {
-    #[cfg(any(feature = "executor-web", feature = "monoio"))]
+/// Async parquet file writer that works across different async runtimes.
+///
+/// Requires an executor to spawn I/O tasks. The executor handles runtime-specific
+/// task spawning, making this writer work uniformly across tokio, monoio,
+/// tokio-uring, and web/WASM environments.
+pub struct AsyncWriter<E: Executor> {
     #[allow(clippy::arc_with_non_send_sync)]
-    inner: Option<std::sync::Arc<futures::lock::Mutex<Box<dyn DynFile>>>>,
-    #[cfg(not(any(feature = "executor-web", feature = "monoio")))]
-    inner: Option<Box<dyn DynFile>>,
+    inner: Option<Arc<E::Mutex<Box<dyn DynFile>>>>,
+    executor: E,
 }
 
-#[cfg(any(feature = "executor-web", feature = "monoio"))]
-unsafe impl Send for AsyncWriter {}
-impl AsyncWriter {
-    pub fn new(writer: Box<dyn DynFile>) -> Self {
-        #[cfg(any(feature = "executor-web", feature = "monoio"))]
-        #[allow(clippy::arc_with_non_send_sync)]
-        let writer = std::sync::Arc::new(futures::lock::Mutex::new(writer));
-        {
-            Self {
-                inner: Some(writer),
-            }
+unsafe impl<E: Executor> Send for AsyncWriter<E> {}
+
+impl<E: Executor> AsyncWriter<E> {
+    /// Create a new async writer with the specified executor.
+    #[allow(clippy::arc_with_non_send_sync)]
+    pub fn new(writer: Box<dyn DynFile>, executor: E) -> Self {
+        Self {
+            inner: Some(Arc::new(E::mutex(writer))),
+            executor,
         }
     }
 }
 
-impl AsyncFileWriter for AsyncWriter {
+impl<E: Executor + Clone + 'static> AsyncFileWriter for AsyncWriter<E> {
     fn write(&mut self, bs: Bytes) -> BoxFuture<'_, parquet::errors::Result<()>> {
-        cfg_if::cfg_if! {
-            if #[cfg(all(feature = "executor-web", target_arch = "wasm32"))] {
-                match self.inner.as_mut() {
-                    Some(writer) => {
-                        let (sender, receiver) = futures::channel::oneshot::channel::<Result<(), ParquetError>>();
-                        let writer = writer.clone();
-                        wasm_bindgen_futures::spawn_local(async move {
-                            let result = {
-                                let mut guard = writer.lock().await;
-                                let (result, _) = guard.write_all(bs).await;
-                                result
-                            };
+        match self.inner.as_mut() {
+            Some(writer) => {
+                let writer = writer.clone();
+                let (tx, rx) = oneshot::channel();
 
-                            let _ = sender.send(result
-                                .map_err(|err| ParquetError::External(Box::new(err))));
-                        });
+                self.executor.spawn(async move {
+                    let mut guard = writer.lock().await;
+                    let (result, _) = guard.write_all(bs).await;
+                    let _ = tx.send(result.map_err(|err| ParquetError::External(Box::new(err))));
+                });
 
-                        Box::pin(async move {
-                            receiver.await.unwrap()?;
-                            Ok(())
-                        })
-                    },
-                    None => Box::pin(async move {
-                        Ok(())
-                    })
-                }
-            } else if #[cfg(feature = "monoio")] {
-                match self.inner.as_mut() {
-                    Some(writer) => {
-                        let writer = writer.clone();
-                        monoio::spawn(async move  {
-                            let mut guard = writer.lock().await;
-                            let (result, _) = guard.write_all(bs).await;
-                            result
-                                .map_err(|err| ParquetError::External(Box::new(err)))
-                        }).boxed()
-                    },
-                    None => Box::pin(async move {
-                        Ok(())
-                    })
-                }
-            } else {
-                Box::pin(async move {
-                    if let Some(writer) = self.inner.as_mut() {
-                        let (result, _) = writer.write_all(bs).await;
-                        result.map_err(|err| ParquetError::External(Box::new(err)))?;
-                    }
+                async move {
+                    rx.await
+                        .map_err(|_| ParquetError::General("task canceled".to_string()))??;
                     Ok(())
-                })
+                }
+                .boxed()
             }
+            None => async move { Ok(()) }.boxed(),
         }
     }
 
     fn complete(&mut self) -> BoxFuture<'_, parquet::errors::Result<()>> {
-        cfg_if::cfg_if! {
-            if #[cfg(all(feature = "executor-web", target_arch = "wasm32"))] {
-                 match self.inner.take() {
-                    Some(writer) => {
-                        let (sender, receiver) = futures::channel::oneshot::channel::<Result<(), ParquetError>>();
-                        wasm_bindgen_futures::spawn_local(async move {
-                            let result = {
-                                let mut guard = writer.lock().await;
-                                guard.close().await
-                            };
-                            let _ = sender.send(result
-                                .map_err(|err| ParquetError::External(Box::new(err))));
-                        });
-                        Box::pin(async move {
-                            receiver.await.unwrap()
-                        })
-                    }
-                    None => Box::pin(async move {
-                        Ok(())
-                    })
-                }
-            } else if #[cfg(feature = "monoio")] {
-                match self.inner.take() {
-                    Some(writer) => {
-                        monoio::spawn(async move {
-                            let mut guard = writer.lock().await;
-                            guard.close().await
-                            .map_err(|err| ParquetError::External(Box::new(err)))
-                        }).boxed()
-                    }
-                    None => Box::pin(async move {
-                        Ok(())
-                    })
-                }
-            } else {
-                Box::pin(async move {
-                    if let Some(mut writer) = self.inner.take() {
-                        writer
-                            .close()
-                            .await
-                            .map_err(|err| ParquetError::External(Box::new(err)))?;
-                    }
+        match self.inner.take() {
+            Some(writer) => {
+                let (tx, rx) = oneshot::channel();
 
-                    Ok(())
-                })
+                self.executor.spawn(async move {
+                    let mut guard = writer.lock().await;
+                    let result = guard
+                        .close()
+                        .await
+                        .map_err(|err| ParquetError::External(Box::new(err)));
+                    let _ = tx.send(result);
+                });
+
+                async move {
+                    rx.await
+                        .map_err(|_| ParquetError::General("task canceled".to_string()))?
+                }
+                .boxed()
             }
+            None => async move { Ok(()) }.boxed(),
         }
     }
 }
@@ -143,6 +91,7 @@ mod tests {
     use bytes::Bytes;
     use fusio::{
         disk::LocalFs,
+        executor::Executor,
         fs::{Fs, OpenOptions},
         path::Path,
         DynRead,
@@ -155,7 +104,7 @@ mod tests {
 
     use crate::writer::AsyncWriter;
 
-    async fn basic_write() {
+    async fn basic_write<E: Executor + Clone + Copy + 'static>(executor: E) {
         let tmp_dir = tempdir().unwrap();
         let fs = LocalFs {};
         let file_path = Path::from_filesystem_path(tmp_dir.path())
@@ -163,9 +112,10 @@ mod tests {
             .child("basic");
         let options = OpenOptions::default().create(true).write(true);
 
-        let mut writer = AsyncWriter::new(Box::new(
-            fs.open_options(&file_path, options).await.unwrap(),
-        ));
+        let mut writer = AsyncWriter::new(
+            Box::new(fs.open_options(&file_path, options).await.unwrap()),
+            executor,
+        );
         let bytes = Bytes::from_static(b"Hello, world!");
         writer.write(bytes).await.unwrap();
         let bytes = Bytes::from_static(b"Hello, Fusio!");
@@ -183,7 +133,7 @@ mod tests {
         assert_eq!(buf.as_slice(), b"Hello, world!Hello, Fusio!");
     }
 
-    async fn async_writer() {
+    async fn async_writer<E: Executor + Clone + Copy + 'static>(executor: E) {
         let tmp_dir = tempdir().unwrap();
         let fs = LocalFs {};
         let file_path = Path::from_filesystem_path(tmp_dir.path())
@@ -191,9 +141,10 @@ mod tests {
             .child("writer");
         let options = OpenOptions::default().create(true).write(true);
 
-        let writer = AsyncWriter::new(Box::new(
-            fs.open_options(&file_path, options).await.unwrap(),
-        ));
+        let writer = AsyncWriter::new(
+            Box::new(fs.open_options(&file_path, options).await.unwrap()),
+            executor,
+        );
 
         let col = Arc::new(Int64Array::from_iter_values([1, 2, 3])) as ArrayRef;
         let to_write = RecordBatch::try_from_iter([("col", col)]).unwrap();
@@ -219,24 +170,28 @@ mod tests {
     #[cfg(feature = "monoio")]
     #[monoio::test]
     async fn test_monoio_basic_write() {
-        basic_write().await;
+        use fusio::MonoioExecutor;
+        basic_write(MonoioExecutor).await;
     }
 
     #[cfg(feature = "tokio")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_tokio_basic_write() {
-        basic_write().await;
+        use fusio::executor::NoopExecutor;
+        basic_write(NoopExecutor).await;
     }
 
     #[cfg(feature = "monoio")]
     #[monoio::test]
     async fn test_monoio_async_writer() {
-        async_writer().await;
+        use fusio::MonoioExecutor;
+        async_writer(MonoioExecutor).await;
     }
 
     #[cfg(feature = "tokio")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_tokio_async_writer() {
-        async_writer().await;
+        use fusio::executor::NoopExecutor;
+        async_writer(NoopExecutor).await;
     }
 }

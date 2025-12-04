@@ -47,7 +47,7 @@ impl AmazonS3Builder {
         cfg_if::cfg_if! {
             if #[cfg(all(feature = "tokio-http", not(feature = "completion-based")))] {
                 client = Box::new(crate::remotes::http::tokio::TokioClient::new());
-            } else if #[cfg(all(feature = "wasm-http", not(feature = "completion-based")))]{
+            } else if #[cfg(all(feature = "web-http", not(feature = "completion-based")))]{
                 client = Box::new(crate::remotes::http::wasm::WasmClient::new());
             } else if #[cfg(all(feature = "monoio-http", feature = "completion-based"))]{
                 client = Box::new(crate::remotes::http::monoio::MonoioClient::new());

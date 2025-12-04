@@ -61,6 +61,8 @@ pub mod path;
 pub use durability::{DirSync, DurabilityLevel, FileCommit, FileSync};
 #[cfg(all(feature = "dyn", feature = "fs"))]
 pub use dynamic::fs::DynFs;
+#[cfg(feature = "monoio")]
+pub use executor::monoio::MonoioExecutor;
 #[cfg(all(feature = "executor-web", target_arch = "wasm32"))]
 pub use executor::web::WebExecutor;
 #[cfg(feature = "fs")]

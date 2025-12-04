@@ -1,9 +1,9 @@
-//! WASM environment tests for fusio-manifest.
+//! Web environment tests for fusio-manifest.
 //!
 //! Run with: `wasm-pack test --chrome --headless fusio-manifest --no-default-features --features
-//! wasm`
+//! web`
 
-#![cfg(all(target_arch = "wasm32", feature = "wasm"))]
+#![cfg(all(target_arch = "wasm32", feature = "web"))]
 
 use std::sync::Arc;
 

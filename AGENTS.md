@@ -36,7 +36,7 @@
 - Enable tracked hooks once per clone: `git config core.hooksPath .githooks`.
 - Hook runs the full local suite and requires the nightly toolchain (`rustup toolchain install nightly`): `cargo +nightly fmt --all -- --check`, `cargo check --workspace --all-targets`, `cargo check -p fusio-manifest --no-default-features --features std`, the clippy matrix (`fusio-core`, `fusio` with tokio + monoio features, `fusio-manifest` with default features *and* `--no-default-features --features std`, `fusio-parquet`, `fusio-opendal`, `fusio-object-store`), and `cargo test -p fusio --features tokio,aws,tokio-http`, `cargo test -p fusio-parquet --features tokio`, plus `cargo test -p fusio-manifest --lib --no-default-features --features std`.
 - If rustfmt rewrites files, re-stage and re-commit after running `cargo fmt`; clippy is lint-only.
-- Add a wasm sanity check: `cargo build --target wasm32-unknown-unknown -p fusio --no-default-features --features "aws,opfs,wasm-http"`; the hook will install `wasm32-unknown-unknown` via rustup if it's missing.
+- Add a wasm sanity check: `cargo build --target wasm32-unknown-unknown -p fusio --no-default-features --features "aws,opfs,web-http"`; the hook will install `wasm32-unknown-unknown` via rustup if it's missing.
 
 ## Style Expectations
 - Rust 2021 with rustfmt (max width 100); grouped imports.

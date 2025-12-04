@@ -7,11 +7,23 @@ use tokio::runtime::Handle;
 
 #[cfg(not(feature = "no-send"))]
 use super::Executor;
-use super::{JoinHandle, RwLock, Timer};
+use super::{JoinHandle, Mutex, RwLock, Timer};
 
 impl<R: MaybeSend> JoinHandle<R> for tokio::task::JoinHandle<R> {
-    async fn join(self) -> Result<R, Box<dyn Error>> {
-        self.await.map_err(|e| Box::new(e) as Box<dyn Error>)
+    async fn join(self) -> Result<R, Box<dyn Error + Send + Sync>> {
+        self.await
+            .map_err(|e| Box::new(e) as Box<dyn Error + Send + Sync>)
+    }
+}
+
+impl<T: MaybeSend + MaybeSync> Mutex<T> for tokio::sync::Mutex<T> {
+    type Guard<'a>
+        = tokio::sync::MutexGuard<'a, T>
+    where
+        T: 'a;
+
+    async fn lock(&self) -> Self::Guard<'_> {
+        ::tokio::sync::Mutex::lock(self).await
     }
 }
 
@@ -55,6 +67,11 @@ impl Executor for TokioExecutor {
     where
         R: MaybeSend;
 
+    type Mutex<T>
+        = tokio::sync::Mutex<T>
+    where
+        T: MaybeSend + MaybeSync;
+
     type RwLock<T>
         = tokio::sync::RwLock<T>
     where
@@ -66,6 +83,13 @@ impl Executor for TokioExecutor {
         F::Output: MaybeSend,
     {
         self.handle.spawn(future)
+    }
+
+    fn mutex<T>(value: T) -> Self::Mutex<T>
+    where
+        T: MaybeSend + MaybeSync,
+    {
+        tokio::sync::Mutex::new(value)
     }
 
     fn rw_lock<T>(value: T) -> Self::RwLock<T>

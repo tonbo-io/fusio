@@ -2,10 +2,7 @@
 
 use std::sync::Arc;
 
-use fusio::{
-    executor::{BlockingExecutor, NoopExecutor},
-    impls::mem::fs::InMemoryFs,
-};
+use fusio::{executor::NoopExecutor, impls::mem::fs::InMemoryFs};
 use rstest::fixture;
 
 use crate::{
@@ -19,7 +16,7 @@ pub(crate) struct InMemoryStores {
     pub head: HeadStoreImpl<InMemoryFs>,
     pub segment: SegmentStoreImpl<InMemoryFs>,
     pub checkpoint: CheckpointStoreImpl<InMemoryFs>,
-    pub lease: LeaseStoreImpl<InMemoryFs, BlockingExecutor>,
+    pub lease: LeaseStoreImpl<InMemoryFs, NoopExecutor>,
 }
 
 #[fixture]
@@ -28,7 +25,7 @@ pub(crate) fn in_memory_stores() -> InMemoryStores {
     let head = HeadStoreImpl::new(fs.clone(), "HEAD.json");
     let segment = SegmentStoreImpl::new(fs.clone(), "segments");
     let checkpoint = CheckpointStoreImpl::new(fs.clone(), "");
-    let timer = BlockingExecutor::default();
+    let timer = NoopExecutor::default();
     let lease = LeaseStoreImpl::new(fs, "", BackoffPolicy::default(), timer);
     InMemoryStores {
         head,
@@ -47,7 +44,7 @@ pub(crate) fn string_in_memory_manifest(
     HeadStoreImpl<InMemoryFs>,
     SegmentStoreImpl<InMemoryFs>,
     CheckpointStoreImpl<InMemoryFs>,
-    LeaseStoreImpl<InMemoryFs, BlockingExecutor>,
+    LeaseStoreImpl<InMemoryFs, NoopExecutor>,
     NoopExecutor,
 > {
     let opts: ManifestContext<DefaultRetention, NoopExecutor> =

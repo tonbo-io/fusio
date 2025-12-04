@@ -76,7 +76,7 @@ impl OPFSFile {
         let file_handle = self.file_handle.as_ref().expect("read file after closed.");
         let file = promise::<File>(file_handle.get_file()).await?;
 
-        if (file.size().round() as u64) < pos + buf_len as u64 {
+        if (file.size().round() as u64) < pos + buf_len {
             return Err(Error::Io(io::Error::new(
                 io::ErrorKind::UnexpectedEof,
                 "Read unexpected eof",

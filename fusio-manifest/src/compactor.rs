@@ -808,10 +808,7 @@ mod tests {
         Arc,
     };
 
-    use fusio::{
-        executor::{BlockingExecutor, NoopExecutor},
-        impls::mem::fs::InMemoryFs,
-    };
+    use fusio::{executor::NoopExecutor, impls::mem::fs::InMemoryFs};
     use fusio_core::MaybeSendFuture;
     use futures_executor::block_on;
     use futures_util::Stream;
@@ -881,7 +878,7 @@ mod tests {
                 InMemoryFs::new(),
                 "",
                 BackoffPolicy::default(),
-                BlockingExecutor::default(),
+                NoopExecutor::default(),
             );
             let plan = GcPlan {
                 against_head_tag: Some("etag".into()),
@@ -933,7 +930,7 @@ mod tests {
                 InMemoryFs::new(),
                 "",
                 BackoffPolicy::default(),
-                BlockingExecutor::default(),
+                NoopExecutor::default(),
             );
             let checkpoint_id = CheckpointId::new(42);
             let plan = GcPlan {
@@ -1124,10 +1121,7 @@ mod tests {
 mod gc_compute_tests {
     use std::sync::Arc;
 
-    use fusio::{
-        executor::{BlockingExecutor, NoopExecutor},
-        impls::mem::fs::InMemoryFs,
-    };
+    use fusio::{executor::NoopExecutor, impls::mem::fs::InMemoryFs};
     use futures_executor::block_on;
     use rstest::rstest;
 
@@ -1155,7 +1149,7 @@ mod gc_compute_tests {
                 in_memory_stores.lease,
                 opts,
             );
-            let timer = BlockingExecutor::default();
+            let timer = NoopExecutor::default();
             let store = FsGcPlanStore::new(InMemoryFs::new(), "", BackoffPolicy::default(), timer);
             // No head yet → None
             let t = comp.gc_compute(&store).await.unwrap();

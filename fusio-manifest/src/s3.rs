@@ -46,7 +46,7 @@ where
     pub opts: Arc<ManifestContext<R, E>>,
 }
 
-#[cfg(any(feature = "tokio", all(feature = "wasm", target_arch = "wasm32")))]
+#[cfg(any(feature = "tokio", all(feature = "web", target_arch = "wasm32")))]
 impl Config<DefaultRetention, DefaultExecutor> {
     pub fn new(s3: AmazonS3, prefix: impl Into<String>) -> Self {
         #[cfg_attr(not(feature = "cache-moka"), allow(unused_mut))]
@@ -110,7 +110,7 @@ where
     opts: Arc<ManifestContext<R, E>>,
 }
 
-#[cfg(any(feature = "tokio", all(feature = "wasm", target_arch = "wasm32")))]
+#[cfg(any(feature = "tokio", all(feature = "web", target_arch = "wasm32")))]
 impl Builder<DefaultRetention, DefaultExecutor> {
     /// Create a new builder for a given S3 `bucket` and manifest `prefix`.
     /// `prefix` is trimmed of any trailing slash.

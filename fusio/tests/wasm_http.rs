@@ -1,4 +1,4 @@
-#[cfg(all(feature = "wasm-http", target_arch = "wasm32", test))]
+#[cfg(all(feature = "web-http", target_arch = "wasm32", test))]
 pub(crate) mod tests {
 
     wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
