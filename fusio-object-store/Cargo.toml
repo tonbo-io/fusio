@@ -7,23 +7,25 @@ repository.workspace = true
 version.workspace = true
 
 [dependencies]
-async-stream = { version = "0.3" }
-fusio = { version = "0.4.1", path = "../fusio", features = [
+async-stream = { workspace = true }
+fusio = { workspace = true, features = [
     "bytes",
     "dyn",
+    "executor",
+    "fs",
     "object_store",
     "tokio",
 ] }
 futures-core = { workspace = true }
 futures-util = { workspace = true }
-object_store = { version = "0.12" }
+object_store = { workspace = true }
 parquet = { workspace = true, default-features = false, features = [
     "arrow",
     "async",
     "object_store",
 ] }
-tokio = { version = "1", features = ["full"] }
+tokio = { workspace = true, features = ["full"] }
 
 [dev-dependencies]
 bytes = { workspace = true }
-object_store = { version = "0.12", features = ["aws"] }
+object_store = { workspace = true, features = ["aws"] }

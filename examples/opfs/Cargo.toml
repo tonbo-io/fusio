@@ -8,17 +8,17 @@ version = "0.1.0"
 crate-type = ["cdylib", "rlib"]
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-arrow = "56"
-futures = { version = "0.3" }
+arrow = { workspace = true }
+futures = { workspace = true }
 parquet = { workspace = true, default-features = false, features = [
     "arrow",
     "async",
 ] }
-wasm-bindgen = "0.2.95"
-wasm-bindgen-futures = { version = "0.4.45" }
-web-sys = { version = "0.3", features = ["console"] }
-fusio = { path = "../../fusio", features = ["opfs"] }
-fusio-parquet = { path = "../../fusio-parquet", features = ["web"] }
+wasm-bindgen = { workspace = true }
+wasm-bindgen-futures = { workspace = true }
+web-sys = { workspace = true, features = ["console"] }
+fusio = { workspace = true, features = ["opfs"] }
+fusio-parquet = { workspace = true, features = ["web"] }
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
-wasm-bindgen-test = "0.3.34"
+wasm-bindgen-test = { workspace = true }

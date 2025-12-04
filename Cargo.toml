@@ -4,10 +4,10 @@ members = [
     "examples/opfs",
     "fusio",
     "fusio-core",
+    "fusio-manifest",
     "fusio-object-store",
     "fusio-opendal",
     "fusio-parquet",
-    "fusio-manifest",
 ]
 resolver = "2"
 
@@ -18,13 +18,40 @@ repository = "https://github.com/tonbo-io/fusio"
 version = "0.4.3"
 
 [workspace.dependencies]
-bytes = { version = "1.7" }
-futures-core = { version = "0.3" }
-futures-util = { version = "0.3" }
-parquet = { version = "56", default-features = false }
+# Internal crates
+fusio = { version = "0.4.3", path = "fusio", default-features = false }
+fusio-core = { version = "0.4.3", path = "fusio-core" }
+fusio-opendal = { version = "0.4.3", path = "fusio-opendal" }
+fusio-parquet = { version = "0.4.3", path = "fusio-parquet" }
+
+# External dependencies
 arrow = { version = "56" }
+async-stream = { version = "0.3" }
+bytes = { version = "1.7", default-features = false }
+cfg-if = { version = "1.0.0" }
+criterion = { version = "0.5", features = ["async_tokio", "html_reports"] }
+futures = { version = "0.3" }
+futures-channel = { version = "0.3" }
+futures-core = { version = "0.3" }
+futures-executor = { version = "0.3" }
+futures-util = { version = "0.3" }
+js-sys = { version = "0.3.72" }
+monoio = { version = "0.2" }
+object_store = { version = "0.12" }
+opendal = { version = "0.50.1", default-features = false }
+parquet = { version = "56", default-features = false }
+rand = { version = "0.8" }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1" }
+tempfile = { version = "3" }
+thiserror = { version = "2" }
+tokio = { version = "1", default-features = false }
+wasm-bindgen = { version = "0.2.95" }
+wasm-bindgen-futures = { version = "0.4.45" }
+wasm-bindgen-test = { version = "0.3.9" }
+web-sys = { version = "0.3" }
 
 [profile.bench]
 codegen-units = 1
-lto = "thin"
 debug = true
+lto = "thin"
