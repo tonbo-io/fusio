@@ -67,9 +67,14 @@ impl Fs for MonoIoFs {
         Ok(stream! {
             for entry in dir {
                 let entry = entry?;
+                let metadata = match entry.metadata() {
+                    Ok(metadata) => metadata,
+                    Err(err) if err.kind() == ErrorKind::NotFound => continue,
+                    Err(err) => Err(err)?,
+                };
                 yield Ok(FileMeta {
                     path: Path::from_filesystem_path(entry.path()).map_err(|err| Error::Path(err.into()))?,
-                    size: entry.metadata()?.len()
+                    size: metadata.len()
                 });
             }
         })
