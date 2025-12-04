@@ -7,7 +7,7 @@ repository.workspace = true
 version.workspace = true
 
 [dependencies]
-fusio = { version = "0.4.1", path = "../fusio", features = ["bytes"] }
+fusio = { workspace = true, features = ["bytes", "dyn", "executor", "fs"] }
 futures-core = { workspace = true }
 futures-util = { workspace = true }
-opendal = { version = "0.50.1", default-features = false }
+opendal = { workspace = true }

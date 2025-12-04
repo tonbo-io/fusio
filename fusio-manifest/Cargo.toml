@@ -14,38 +14,40 @@ tokio = ["fusio/executor-tokio", "fusio/tokio-http"]
 web = ["fusio/opfs", "fusio/web-http"]
 
 [dependencies]
-async-stream = { version = "0.3" }
+async-stream = { workspace = true }
 backon = "1.4"
-bytes = { version = "1" }
-fusio = { path = "../fusio", version = "0.4.1", default-features = false, features = [
+bytes = { workspace = true }
+fusio.workspace = true
+fusio.default-features = false
+fusio.features = [
     "aws",
     "dyn",
     "executor",
     "fs",
-] }
-fusio-core = { path = "../fusio-core", version = "0.4.1", features = ["std"] }
-futures-channel = "0.3"
+]
+fusio-core = { workspace = true, features = ["std"] }
+futures-channel = { workspace = true }
 futures-util = { workspace = true }
 moka = { version = "0.10", features = ["sync"], optional = true }
-serde = { version = "1", features = ["derive"] }
-serde_json = { version = "1" }
+serde = { workspace = true }
+serde_json = { workspace = true }
 sha2 = { version = "0.10" }
-thiserror = "2.0.17"
+thiserror = { workspace = true }
 tracing = "0.1"
 
 [dev-dependencies]
-futures-executor = { version = "0.3" }
+futures-executor = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 loom = "0.7"
 proptest = "1"
-rand = "0.8"
+rand = { workspace = true }
 rstest = "0.21"
-tempfile = "3"
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
-wasm-bindgen-test = "0.3"
+wasm-bindgen-test = { workspace = true }
 
 [[example]]
 name = "step1_basic"

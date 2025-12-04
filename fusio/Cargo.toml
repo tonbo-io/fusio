@@ -87,28 +87,28 @@ path = "../benches/monoio.rs"
 required-features = ["monoio"]
 
 [dependencies]
-async-stream = { version = "0.3", optional = true }
+async-stream = { workspace = true, optional = true }
 bytes = { workspace = true, optional = true }
-cfg-if = "1.0.0"
+cfg-if = { workspace = true }
 chrono = { version = "0.4", optional = true, default-features = false, features = [
     "now",
     "std",
     "wasmbind",
 ] }
-fusio-core = { path = "../fusio-core", version = "0.4.1", features = ["std"] }
+fusio-core = { workspace = true, features = ["std"] }
 futures-core = { workspace = true }
 futures-util = { workspace = true }
-futures-executor = { version = "0.3" }
-futures-channel = "0.3"
+futures-executor = { workspace = true }
+futures-channel = { workspace = true }
 async-lock = "3"
 http = { version = "1", optional = true, default-features = false }
 http-body = { version = "1", optional = true }
 http-body-util = { version = "0.1", optional = true, default-features = false }
 itertools = { version = "0.13" }
-monoio = { version = "0.2", optional = true, features = ["sync"] }
+monoio = { workspace = true, optional = true, features = ["sync"] }
 monoio-http-client = { version = "0.3.3", optional = true }
 monoio-http = { version = "0.3", optional = true }
-object_store = { version = "0.12", optional = true, features = ["aws"] }
+object_store = { workspace = true, optional = true, features = ["aws"] }
 percent-encoding = { version = "2", default-features = false }
 quick-xml = { version = "0.36", features = [
     "overlapped-lists",
@@ -118,11 +118,11 @@ reqwest = { version = "0.12.8", optional = true }
 hex = { version = "0.4", optional = true }
 reqsign-aws-v4 = { version = "1", optional = true }
 reqsign-core = { version = "1", optional = true }
-serde = { version = "1", optional = true, features = ["derive"] }
-serde_json = { version = "1", optional = true }
+serde = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
 serde_urlencoded = { version = "0.7", optional = true }
-thiserror = "2.0.12"
-tokio = { version = "1", optional = true, default-features = false, features = [
+thiserror = { workspace = true }
+tokio = { workspace = true, optional = true, features = [
     "io-util",
     "rt-multi-thread",
 ] }
@@ -130,11 +130,11 @@ url = { version = "2.5.3", default-features = false, features = ["std"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { version = "0.2", features = ["js"] }
-js-sys = { version = "0.3.72", optional = true }
-wasm-bindgen-futures = { version = "0.4.45", optional = true, features = [
+js-sys = { workspace = true, optional = true }
+wasm-bindgen-futures = { workspace = true, optional = true, features = [
     "futures-core-03-stream",
 ] }
-web-sys = { version = "0.3", optional = true, features = [
+web-sys = { workspace = true, optional = true, features = [
     "Blob",
     "File",
     "FileSystemCreateWritableOptions",
@@ -158,7 +158,7 @@ web-sys = { version = "0.3", optional = true, features = [
 
 ] }
 async-lock = { version = "3", optional = true }
-wasm-bindgen = { version = "0.2.95", optional = true }
+wasm-bindgen = { workspace = true, optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 tokio-uring = { version = "0.5", default-features = false, optional = true }
@@ -167,20 +167,20 @@ tokio-uring = { version = "0.5", default-features = false, optional = true }
 windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Storage_FileSystem"] }
 
 [dev-dependencies]
-rand = "0.8"
-tempfile = "3"
+rand = { workspace = true }
+tempfile = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
-criterion = { version = "0.5", features = ["async_tokio", "html_reports"] }
-futures-util = { version = "0.3" }
+criterion = { workspace = true }
+futures-util = { workspace = true }
 hyper = { version = "1", features = ["full"] }
 hyper-util = { version = "0.1", features = ["full"] }
-monoio = { version = "0.2" }
-tokio = { version = "1", features = ["full"] }
+monoio = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 tokio-uring = { version = "0.5" }
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
-wasm-bindgen = "0.2.95"
-wasm-bindgen-test = "0.3.9"
+wasm-bindgen = { workspace = true }
+wasm-bindgen-test = { workspace = true }
