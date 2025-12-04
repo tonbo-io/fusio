@@ -249,6 +249,19 @@ async fn acquire_lock(path: &StdPath) -> Result<LockFileGuard, Error> {
 #[derive(Clone, Copy, Default, Debug)]
 pub struct TokioFs;
 
+fn file_meta_from_entry(entry: std::fs::DirEntry) -> Result<Option<FileMeta>, Error> {
+    let metadata = match entry.metadata() {
+        Ok(metadata) => metadata,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(err.into()),
+    };
+
+    Ok(Some(FileMeta {
+        path: Path::from_filesystem_path(entry.path()).map_err(|err| Error::Path(Box::new(err)))?,
+        size: metadata.len(),
+    }))
+}
+
 impl Fs for TokioFs {
     type File = TokioFile;
 
@@ -304,10 +317,9 @@ impl Fs for TokioFs {
             Ok::<_, Error>(stream! {
                 for entry in entries {
                     let entry = entry?;
-                    yield Ok(FileMeta {
-                        path: Path::from_filesystem_path(entry.path()).map_err(|err| Error::Path(Box::new(err)))?,
-                        size: entry.metadata()?.len()
-                    });
+                    if let Some(meta) = file_meta_from_entry(entry)? {
+                        yield Ok(meta);
+                    }
                 }
             })
         })
@@ -511,6 +523,67 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, Error::PreconditionFailed));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn list_skips_entries_that_disappear_before_metadata() {
+        use futures_util::TryStreamExt;
+
+        let fs = TokioFs;
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = Path::from_absolute_path(tmp.path()).unwrap();
+
+        let present_path = tmp.path().join("present.txt");
+        tokio::fs::write(&present_path, b"ok").await.unwrap();
+
+        let vanished_path = tmp.path().join("vanished.txt");
+        tokio::fs::write(&vanished_path, b"bye").await.unwrap();
+
+        let entries: Vec<std::fs::DirEntry> = tmp
+            .path()
+            .read_dir()
+            .unwrap()
+            .map(|res| res.unwrap())
+            .collect();
+
+        std::fs::remove_file(&vanished_path).unwrap();
+
+        let mut metas = Vec::new();
+        for entry in entries {
+            if let Some(meta) = file_meta_from_entry(entry).unwrap() {
+                metas.push(meta);
+            }
+        }
+
+        let mut listed: Vec<String> = metas
+            .into_iter()
+            .map(|meta| meta.path.to_string())
+            .collect();
+        listed.sort();
+
+        let mut expected = vec![Path::from_absolute_path(&present_path).unwrap().to_string()];
+        expected.sort();
+
+        assert_eq!(listed, expected);
+
+        let mut entries = fs
+            .list(&dir)
+            .await
+            .unwrap()
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap();
+
+        entries.sort_by(|a, b| a.path.to_string().cmp(&b.path.to_string()));
+
+        assert_eq!(
+            entries
+                .into_iter()
+                .map(|meta| meta.path.to_string())
+                .collect::<Vec<_>>(),
+            expected
+        );
     }
 
     #[cfg(target_os = "windows")]
