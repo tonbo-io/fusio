@@ -189,7 +189,7 @@ where
             lsn: snap.txn_id.0,
             key_count: entries_len,
             byte_size: payload.len(),
-            created_at_ms: system_time_to_ms(self.store.opts.timer().now()),
+            created_at_ms: system_time_to_ms(self.store.opts.timer().system_time()),
             format: "application/json".into(),
             last_segment_seq_at_ckpt: snap.last_segment_seq.unwrap_or(0),
         };
@@ -284,7 +284,7 @@ where
             _ => {}
         }
 
-        let now = Duration::from_millis(system_time_to_ms(self.store.opts.timer().now()));
+        let now = Duration::from_millis(system_time_to_ms(self.store.opts.timer().system_time()));
         let leases = self.store.leases.list_active(now).await?;
         let watermark = leases
             .iter()
@@ -308,7 +308,7 @@ where
             .checkpoints_min_ttl()
             .as_millis()
             .min(u128::from(u64::MAX)) as u64;
-        let now_ms2 = system_time_to_ms(self.store.opts.timer().now());
+        let now_ms2 = system_time_to_ms(self.store.opts.timer().system_time());
         let mut list = match self.store.checkpoint.list().await {
             Ok(stream) => stream.try_collect::<Vec<_>>().await.unwrap_or_default(),
             Err(_) => Vec::new(),
@@ -380,7 +380,7 @@ where
                 Some(v) => v,
             };
             // Determine watermark from active leases
-            let now_ms = system_time_to_ms(self.store.opts.timer().now());
+            let now_ms = system_time_to_ms(self.store.opts.timer().system_time());
             let now = Duration::from_millis(now_ms);
             let leases = match self.store.leases.list_active(now).await {
                 Ok(ls) => ls,
@@ -752,7 +752,7 @@ where
         }
 
         // Time guard
-        let now = Duration::from_millis(system_time_to_ms(self.store.opts.timer().now()));
+        let now = Duration::from_millis(system_time_to_ms(self.store.opts.timer().system_time()));
         if now < plan.not_before {
             // Not yet — leave plan as-is
             return Ok(());

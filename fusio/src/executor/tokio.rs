@@ -110,7 +110,11 @@ impl Timer for TokioExecutor {
         })
     }
 
-    fn now(&self) -> std::time::SystemTime {
+    fn now(&self) -> std::time::Instant {
+        std::time::Instant::now()
+    }
+
+    fn system_time(&self) -> std::time::SystemTime {
         std::time::SystemTime::now()
     }
 }

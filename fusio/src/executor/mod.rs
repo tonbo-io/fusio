@@ -1,4 +1,6 @@
 use core::{pin::Pin, time::Duration};
+#[cfg(not(target_arch = "wasm32"))]
+pub use std::time::Instant;
 use std::{
     error::Error,
     future::Future,
@@ -16,6 +18,8 @@ use fusio_core::{MaybeSend, MaybeSendFuture, MaybeSync};
 use futures_executor::block_on;
 #[cfg(all(target_arch = "wasm32", feature = "executor-web"))]
 use js_sys::Date;
+#[cfg(target_arch = "wasm32")]
+pub use web_time::Instant;
 
 pub trait JoinHandle<R> {
     fn join(self) -> impl Future<Output = Result<R, Box<dyn Error + Send + Sync>>> + MaybeSend;
@@ -75,8 +79,11 @@ pub trait Timer: MaybeSend + MaybeSync + 'static {
     /// Sleep for the given duration and yield back to the runtime.
     fn sleep(&self, dur: Duration) -> Pin<Box<dyn MaybeSendFuture<Output = ()>>>;
 
-    /// Return the current wall-clock time according to the executor.
-    fn now(&self) -> SystemTime;
+    /// Return a monotonic instant suitable for measuring elapsed time.
+    fn now(&self) -> Instant;
+
+    /// Return the current wall-clock time.
+    fn system_time(&self) -> SystemTime;
 }
 
 #[cfg(all(feature = "executor-web", target_arch = "wasm32"))]
@@ -176,8 +183,12 @@ where
         (**self).sleep(dur)
     }
 
-    fn now(&self) -> SystemTime {
+    fn now(&self) -> Instant {
         (**self).now()
+    }
+
+    fn system_time(&self) -> SystemTime {
+        (**self).system_time()
     }
 }
 
@@ -244,8 +255,18 @@ impl Timer for NoopExecutor {
         Box::pin(async move {})
     }
 
-    fn now(&self) -> SystemTime {
-        now()
+    fn now(&self) -> Instant {
+        Instant::now()
+    }
+
+    #[cfg(all(target_arch = "wasm32", feature = "executor-web"))]
+    fn system_time(&self) -> SystemTime {
+        SystemTime::UNIX_EPOCH + Duration::from_millis(Date::now() as u64)
+    }
+
+    #[cfg(not(all(target_arch = "wasm32", feature = "executor-web")))]
+    fn system_time(&self) -> SystemTime {
+        SystemTime::now()
     }
 }
 
@@ -275,7 +296,11 @@ impl Timer for BlockingSleeper {
         Box::pin(async move { std::thread::sleep(dur) })
     }
 
-    fn now(&self) -> SystemTime {
+    fn now(&self) -> Instant {
+        Instant::now()
+    }
+
+    fn system_time(&self) -> SystemTime {
         SystemTime::now()
     }
 }
@@ -289,19 +314,17 @@ impl Timer for NoopTimer {
         Box::pin(async move {})
     }
 
-    fn now(&self) -> SystemTime {
-        now()
+    fn now(&self) -> Instant {
+        Instant::now()
     }
-}
 
-#[inline]
-pub(super) fn now() -> SystemTime {
     #[cfg(all(target_arch = "wasm32", feature = "executor-web"))]
-    {
+    fn system_time(&self) -> SystemTime {
         SystemTime::UNIX_EPOCH + Duration::from_millis(Date::now() as u64)
     }
+
     #[cfg(not(all(target_arch = "wasm32", feature = "executor-web")))]
-    {
+    fn system_time(&self) -> SystemTime {
         SystemTime::now()
     }
 }

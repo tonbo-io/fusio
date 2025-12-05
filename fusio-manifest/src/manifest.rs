@@ -136,7 +136,7 @@ where
 
         loop {
             let now_ms = timer
-                .now()
+                .system_time()
                 .duration_since(SystemTime::UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_millis()
