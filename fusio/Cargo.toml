@@ -131,6 +131,7 @@ url = { version = "2.5.3", default-features = false, features = ["std"] }
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { version = "0.2", features = ["js"] }
 js-sys = { workspace = true, optional = true }
+web-time = "1"
 wasm-bindgen-futures = { workspace = true, optional = true, features = [
     "futures-core-03-stream",
 ] }

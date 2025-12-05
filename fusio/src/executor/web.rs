@@ -183,7 +183,11 @@ impl Timer for WebExecutor {
         })
     }
 
-    fn now(&self) -> SystemTime {
-        super::now()
+    fn now(&self) -> super::Instant {
+        super::Instant::now()
+    }
+
+    fn system_time(&self) -> SystemTime {
+        SystemTime::UNIX_EPOCH + core::time::Duration::from_millis(js_sys::Date::now() as u64)
     }
 }

@@ -563,8 +563,7 @@ where
                         RetryClass::RetryTransient => {
                             // Check total elapsed time (user-facing operation)
                             if backoff_policy.max_elapsed_ms > 0 {
-                                let elapsed =
-                                    timer.now().duration_since(start_time).unwrap_or_default();
+                                let elapsed = start_time.elapsed();
                                 if elapsed >= max_elapsed {
                                     self.inner.release_lease_silent().await;
                                     return Err(e);
@@ -621,8 +620,7 @@ where
                     RetryClass::RetryTransient => {
                         // Check total elapsed time (user-facing operation)
                         if backoff_policy.max_elapsed_ms > 0 {
-                            let elapsed =
-                                timer.now().duration_since(start_time).unwrap_or_default();
+                            let elapsed = start_time.elapsed();
                             if elapsed >= max_elapsed {
                                 self.inner.release_lease_silent().await;
                                 return Err(e);

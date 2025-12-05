@@ -100,7 +100,7 @@ where
 
     fn wall_clock_now_ms(&self) -> u64 {
         self.timer
-            .now()
+            .system_time()
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap_or_default()
             .as_millis()
