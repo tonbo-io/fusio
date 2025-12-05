@@ -21,7 +21,7 @@ pub use crate::{
     checkpoint::{CheckpointStore, CheckpointStoreImpl},
     head::{HeadStore, HeadStoreImpl},
     lease::{LeaseStore, LeaseStoreImpl},
-    segment::{SegmentIo, SegmentStoreImpl},
+    segment::{ObjectHead, SegmentIo, SegmentStoreImpl},
 };
 pub(crate) mod backoff;
 pub use backoff::BackoffPolicy;

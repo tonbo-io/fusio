@@ -68,7 +68,8 @@ pub struct SegmentStoreImpl<FS> {
 
 const TXN_ID_HEADER: &str = "x-amz-meta-fusio-txn-id";
 
-trait ObjectHead {
+/// Capability for fetching object metadata without downloading the payload.
+pub trait ObjectHead {
     fn head_metadata<'a>(
         &'a self,
         path: &'a Path,
