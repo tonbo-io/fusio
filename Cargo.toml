@@ -15,14 +15,14 @@ resolver = "2"
 edition = "2021"
 license = "Apache-2.0"
 repository = "https://github.com/tonbo-io/fusio"
-version = "0.4.3"
+version = "0.5.0-a0"
 
 [workspace.dependencies]
 # Internal crates
-fusio = { version = "0.4.3", path = "fusio", default-features = false }
-fusio-core = { version = "0.4.3", path = "fusio-core" }
-fusio-opendal = { version = "0.4.3", path = "fusio-opendal" }
-fusio-parquet = { version = "0.4.3", path = "fusio-parquet" }
+fusio = { version = "0.5.0-a0", path = "fusio", default-features = false }
+fusio-core = { version = "0.5.0-a0", path = "fusio-core" }
+fusio-opendal = { version = "0.5.0-a0", path = "fusio-opendal" }
+fusio-parquet = { version = "0.5.0-a0", path = "fusio-parquet" }
 
 # External dependencies
 arrow = { version = "56" }
