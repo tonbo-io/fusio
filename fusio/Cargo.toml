@@ -137,6 +137,7 @@ wasm-bindgen-futures = { workspace = true, optional = true, features = [
 ] }
 web-sys = { workspace = true, optional = true, features = [
     "Blob",
+    "DomException",
     "File",
     "FileSystemCreateWritableOptions",
     "FileSystemDirectoryHandle",

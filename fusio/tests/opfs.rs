@@ -4,7 +4,12 @@ pub(crate) mod tests {
 
     wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 
-    use fusio::{disk::OPFS, fs::OpenOptions, path::Path, DynFs, Read, Write};
+    use fusio::{
+        disk::OPFS,
+        fs::{CasCondition, FsCas, OpenOptions},
+        path::Path,
+        DynFs, Read, Write,
+    };
     use futures_util::StreamExt;
     use wasm_bindgen_test::wasm_bindgen_test;
 
@@ -192,5 +197,47 @@ pub(crate) mod tests {
         assert!(result.is_err());
         assert_eq!(data, [0]);
         remove_all(&fs, &["file"]).await;
+    }
+
+    #[wasm_bindgen_test]
+    async fn test_opfs_cas_semantics() {
+        let fs = OPFS;
+        let path = Path::from_opfs_path("cas/head.json").unwrap();
+
+        let _ = fs.remove(&path).await;
+
+        let first = fs
+            .put_conditional(&path, b"one", None, None, CasCondition::IfNotExists)
+            .await
+            .unwrap();
+
+        assert!(fs
+            .put_conditional(&path, b"again", None, None, CasCondition::IfNotExists)
+            .await
+            .is_err());
+
+        let second = fs
+            .put_conditional(
+                &path,
+                b"two",
+                None,
+                None,
+                CasCondition::IfMatch(first.clone()),
+            )
+            .await
+            .unwrap();
+        assert_ne!(first, second);
+
+        assert!(fs
+            .put_conditional(&path, b"stale", None, None, CasCondition::IfMatch(first))
+            .await
+            .is_err());
+
+        let (bytes, tag) = fs.load_with_tag(&path).await.unwrap().unwrap();
+        assert_eq!(bytes, b"two");
+        assert_eq!(tag, second);
+
+        let _ = fs.remove(&path).await;
+        let _ = fs.remove(&Path::from_opfs_path("cas").unwrap()).await;
     }
 }

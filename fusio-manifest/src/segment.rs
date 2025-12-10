@@ -1,5 +1,7 @@
 use std::{collections::HashMap, fmt, io::ErrorKind, pin::Pin};
 
+#[cfg(all(feature = "web", target_arch = "wasm32"))]
+use fusio::impls::disk::OPFS;
 use fusio::{
     fs::{CasCondition, Fs, FsCas},
     impls::{mem::fs::InMemoryFs, remotes::aws::fs::AmazonS3},
@@ -312,6 +314,32 @@ impl std::error::Error for SegmentMetadataParseError {
 
 #[cfg(feature = "tokio")]
 impl ObjectHead for fusio::impls::disk::TokioFs {
+    fn head_metadata<'a>(
+        &'a self,
+        path: &'a Path,
+    ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<Option<HashMap<String, String>>, FsError>> + 'a>>
+    {
+        Box::pin(async move {
+            let path_clone = path.clone();
+            let ext = path_clone.extension().map(str::to_owned);
+            match FsCas::load_with_tag(self, &path_clone).await? {
+                Some((bytes, _)) if matches!(ext.as_deref(), Some("json")) => {
+                    let header: SegmentTxnOnly = serde_json::from_slice(&bytes).map_err(|err| {
+                        FsError::Other(Box::new(SegmentMetadataParseError::new(&path_clone, err)))
+                    })?;
+                    let mut meta = HashMap::with_capacity(1);
+                    meta.insert(TXN_ID_HEADER.to_string(), header.txn_id.to_string());
+                    Ok(Some(meta))
+                }
+                Some(_) => Ok(None),
+                None => Ok(None),
+            }
+        })
+    }
+}
+
+#[cfg(all(feature = "web", target_arch = "wasm32"))]
+impl ObjectHead for OPFS {
     fn head_metadata<'a>(
         &'a self,
         path: &'a Path,
