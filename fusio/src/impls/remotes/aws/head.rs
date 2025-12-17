@@ -30,7 +30,6 @@ impl AmazonS3 {
         let mut req = Request::builder()
             .method(Method::GET)
             .uri(url.as_str())
-            .header(CONTENT_LENGTH, 0)
             .body(Empty::<Bytes>::new())
             .map_err(|e| Error::Remote(Box::new(HttpError::from(e))))?;
 
