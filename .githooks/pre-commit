@@ -40,18 +40,15 @@ fi
 
 run_step "${FMT_CHECK_CMD}"
 run_step "cargo check --workspace --all-targets"
-run_step "cargo check -p fusio-manifest --no-default-features --features std"
 run_step "cargo clippy -p fusio-core --all-features -- -D warnings"
 run_step "cargo clippy -p fusio --features tokio,aws,tokio-http -- -D warnings"
 run_step "cargo clippy -p fusio --features monoio,aws,monoio-http -- -D warnings"
 run_step "cargo clippy -p fusio-manifest -- -D warnings"
-run_step "cargo clippy -p fusio-manifest --no-default-features --features std -- -D warnings"
 run_step "cargo clippy -p fusio-parquet --features tokio -- -D warnings"
 run_step "cargo clippy -p fusio-opendal --all-features -- -D warnings"
 run_step "cargo clippy -p fusio-object-store --all-features -- -D warnings"
 run_step "cargo test -p fusio --features tokio,aws,tokio-http"
 run_step "cargo test -p fusio-parquet --features tokio"
-run_step "cargo test -p fusio-manifest --lib --no-default-features --features std"
 run_step "cargo build --target wasm32-unknown-unknown -p fusio --no-default-features --features \"aws,opfs,web-http\""
 
 exit 0

@@ -30,7 +30,11 @@ impl HttpClient for WasmClient {
         B::Error: Into<BoxedError>,
     {
         let uri = request.uri().clone();
-        let (parts, body) = request.into_parts();
+        let (mut parts, body) = request.into_parts();
+
+        // Remove content-length header - browser's fetch API manages this automatically
+        // and including it can cause signature mismatches in WASM environment
+        parts.headers.remove(http::header::CONTENT_LENGTH);
 
         let url = reqwest::Url::from_str(&uri.to_string())?;
         let body = http_body_util::combinators::UnsyncBoxBody::new(body);
@@ -43,11 +47,14 @@ impl HttpClient for WasmClient {
                 builder = builder.body(reqwest::Body::from(body.to_bytes()));
                 let response = builder.send().await?;
 
-                let mut resp_builder = Response::builder();
+                let status = response.status();
+                let mut resp_builder = Response::builder().status(status.as_u16());
                 let mut headers = resp_builder.headers_mut();
+
                 for (name, value) in response.headers().iter() {
                     headers.as_mut().unwrap().append(name, value.clone());
                 }
+
                 let bytes = response.bytes().await?;
 
                 resp_builder

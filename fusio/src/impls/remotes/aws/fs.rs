@@ -7,7 +7,7 @@ use chrono::{DateTime, Utc};
 use fusio_core::MaybeSendFuture;
 use futures_core::Stream;
 use http::{
-    header::{self, CONTENT_LENGTH},
+    header::{self},
     Method, Request, StatusCode,
 };
 use http_body_util::{BodyExt, Empty};
@@ -167,7 +167,6 @@ impl AmazonS3 {
         let mut request = Request::builder()
             .method(Method::HEAD)
             .uri(url.as_str())
-            .header(CONTENT_LENGTH, 0)
             .body(Empty::<Bytes>::new())
             .map_err(|e| Error::Remote(HttpError::from(e).into()))?;
         request
@@ -301,7 +300,6 @@ impl Fs for AmazonS3 {
                 let mut request = Request::builder()
                     .method(Method::GET)
                     .uri(url.as_str())
-                    .header(CONTENT_LENGTH, 0)
                     .body(Empty::<Bytes>::new())
                     .map_err(|e| S3Error::from(HttpError::from(e)))
                     .map_err(|err| Error::Remote(Box::new(err)))?;
@@ -361,7 +359,6 @@ impl Fs for AmazonS3 {
         let mut request = Request::builder()
             .method(Method::DELETE)
             .uri(url.as_str())
-            .header(CONTENT_LENGTH, 0)
             .body(Empty::<Bytes>::new())
             .map_err(|e| Error::Remote(HttpError::from(e).into()))?;
         request

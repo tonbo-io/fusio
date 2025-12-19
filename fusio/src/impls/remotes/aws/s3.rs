@@ -137,7 +137,6 @@ impl Read for S3File {
                 RANGE,
                 format!("bytes={}-{}", pos, pos + buf.as_slice().len() as u64 - 1),
             )
-            .header(CONTENT_LENGTH, 0)
             .body(Empty::new())
             .map_err(|e| S3Error::from(HttpError::from(e)));
 
@@ -203,7 +202,6 @@ impl Read for S3File {
         let mut request = match self
             .build_request(Method::GET)
             .header(RANGE, format!("bytes={}-", pos))
-            .header(CONTENT_LENGTH, 0)
             .body(Empty::new())
             .map_err(|e| S3Error::from(HttpError::from(e)))
         {
@@ -263,7 +261,6 @@ impl Read for S3File {
     async fn size(&self) -> Result<u64, Error> {
         let mut request = self
             .build_request(Method::HEAD)
-            .header(CONTENT_LENGTH, 0)
             .body(Empty::new())
             .map_err(|e| Error::Remote(Box::new(HttpError::from(e))))?;
         request

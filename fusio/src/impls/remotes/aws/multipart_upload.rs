@@ -138,10 +138,7 @@ impl MultipartUpload {
             endpoint,
             utf8_percent_encode(self.path.as_ref(), &STRICT_PATH_ENCODE_SET)
         );
-        let mut builder = Request::builder()
-            .uri(url)
-            .method(Method::POST)
-            .header(CONTENT_LENGTH, 0);
+        let mut builder = Request::builder().uri(url).method(Method::POST);
         if let Some(headers) = headers {
             if let Some(dest) = builder.headers_mut() {
                 for (name, value) in headers.iter() {
@@ -230,7 +227,6 @@ impl MultipartUpload {
         let mut builder = Request::builder()
             .uri(url)
             .method(Method::PUT)
-            .header(CONTENT_LENGTH, 0)
             .header("x-amz-copy-source", source)
             .header(
                 "x-amz-copy-source-range",
