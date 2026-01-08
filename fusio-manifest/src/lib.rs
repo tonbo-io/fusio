@@ -31,7 +31,6 @@ pub use context::ManifestContext;
 pub use fusio::executor::tokio::TokioExecutor;
 #[cfg(all(feature = "web", target_arch = "wasm32"))]
 pub use fusio::executor::web::WebExecutor;
-#[cfg(feature = "tokio")]
 pub use fusio::executor::NoopExecutor;
 
 /// Default executor type based on enabled features.
@@ -42,6 +41,13 @@ pub type DefaultExecutor = TokioExecutor;
 
 #[cfg(all(feature = "web", target_arch = "wasm32", not(feature = "tokio")))]
 pub type DefaultExecutor = WebExecutor;
+
+#[cfg(all(
+    feature = "std",
+    not(feature = "tokio"),
+    not(all(feature = "web", target_arch = "wasm32"))
+))]
+pub type DefaultExecutor = NoopExecutor;
 
 pub(crate) mod cache;
 pub mod retention;
