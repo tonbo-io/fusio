@@ -14,7 +14,7 @@ use parquet::{
     },
     errors::ParquetError,
     file::{
-        metadata::{PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader},
+        metadata::{FooterTail, PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader},
         FOOTER_SIZE,
     },
 };
@@ -81,11 +81,7 @@ impl<E: Executor> AsyncReader<E> {
             let buf = &prefetched_footer_slice
                 [(prefetched_footer_length - FOOTER_SIZE)..prefetched_footer_length];
             debug_assert!(buf.len() == FOOTER_SIZE);
-            ParquetMetaDataReader::decode_footer_tail(
-                buf.try_into()
-                    .expect("it must convert footer buffer to fixed-size array"),
-            )?
-            .metadata_length()
+            FooterTail::try_from(buf)?.metadata_length()
         };
 
         if prefetched_footer_length >= metadata_length + FOOTER_SIZE {
@@ -200,8 +196,7 @@ mod tests {
     use futures::StreamExt;
     use parquet::{
         arrow::{AsyncArrowWriter, ParquetRecordBatchStreamBuilder},
-        file::properties::WriterProperties,
-        format::KeyValue,
+        file::{metadata::KeyValue, properties::WriterProperties},
     };
     use rand::{distributions::Alphanumeric, Rng};
     use tempfile::tempdir;

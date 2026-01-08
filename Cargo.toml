@@ -15,17 +15,17 @@ resolver = "2"
 edition = "2021"
 license = "Apache-2.0"
 repository = "https://github.com/tonbo-io/fusio"
-version = "0.5.0"
+version = "0.6.0"
 
 [workspace.dependencies]
 # Internal crates
-fusio = { version = "0.5.0", path = "fusio", default-features = false }
-fusio-core = { version = "0.5.0", path = "fusio-core" }
-fusio-opendal = { version = "0.5.0", path = "fusio-opendal" }
-fusio-parquet = { version = "0.5.0", path = "fusio-parquet" }
+fusio = { version = "0.6.0", path = "fusio", default-features = false }
+fusio-core = { version = "0.6.0", path = "fusio-core" }
+fusio-opendal = { version = "0.6.0", path = "fusio-opendal" }
+fusio-parquet = { version = "0.6.0", path = "fusio-parquet" }
 
 # External dependencies
-arrow = { version = "56" }
+arrow = { version = "57" }
 async-stream = { version = "0.3" }
 bytes = { version = "1.7", default-features = false }
 cfg-if = { version = "1.0.0" }
@@ -39,7 +39,7 @@ js-sys = { version = "0.3.72" }
 monoio = { version = "0.2" }
 object_store = { version = "0.12" }
 opendal = { version = "0.50.1", default-features = false }
-parquet = { version = "56", default-features = false }
+parquet = { version = "57", default-features = false }
 rand = { version = "0.8" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1" }
