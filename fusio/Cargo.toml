@@ -171,6 +171,7 @@ windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Storage
 [dev-dependencies]
 rand = { workspace = true }
 tempfile = { workspace = true }
+serde_json = { workspace = true}
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 criterion = { workspace = true }
