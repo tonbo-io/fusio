@@ -106,6 +106,13 @@ impl Fs for TokioUringFs {
 
         Ok(())
     }
+
+    async fn exists(&self, path: &Path) -> Result<bool, Error> {
+        let path = path_to_local(path).map_err(|err| Error::Path(err.into()))?;
+        let existence = tokio_uring::fs::File::open(path).await.is_ok();
+
+        Ok(existence)
+    }
 }
 
 impl DirSync for TokioUringFs {

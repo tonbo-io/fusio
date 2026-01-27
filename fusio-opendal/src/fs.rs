@@ -74,4 +74,11 @@ impl Fs for OpendalFs {
             message: "opendal does not support link file".to_string(),
         })
     }
+
+    async fn exists(&self, path: &Path) -> Result<bool, Error> {
+        self.op
+            .exists(path.as_ref())
+            .await
+            .map_err(parse_opendal_error)
+    }
 }

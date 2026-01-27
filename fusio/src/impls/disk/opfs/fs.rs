@@ -134,6 +134,11 @@ impl Fs for OPFS {
             message: "opfs does not support link file".to_string(),
         })
     }
+
+    async fn exists(&self, path: &Path) -> Result<bool, Error> {
+        let (dirs, file) = split_path(&path)?;
+        get_file_handle(&dirs, &file, false, false).await
+    }
 }
 
 fn is_not_found_error(err: &JsValue) -> bool {

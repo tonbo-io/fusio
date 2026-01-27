@@ -103,6 +103,14 @@ impl Fs for MonoIoFs {
 
         Ok(())
     }
+
+    async fn exists(&self, path: &Path) -> Result<bool, Error> {
+        let path = path_to_local(path).map_err(|err| Error::Path(err.into()))?;
+
+        let exists = monoio::fs::File::open(path).await.is_ok();
+
+        Ok(exists)
+    }
 }
 
 impl DirSync for MonoIoFs {
