@@ -47,6 +47,82 @@ pub struct Path {
     raw: String,
 }
 
+#[cfg(feature = "serde")]
+impl serde::Serialize for Path {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct as _;
+
+        let mut s = serializer.serialize_struct("Path", 1)?;
+        s.serialize_field("raw", &self.raw)?;
+        s.end()
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de> serde::Deserialize<'de> for Path {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct PathVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for PathVisitor {
+            type Value = Path;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("a struct Path that can be represented as { raw: string }")
+            }
+
+            fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(Path { raw: v.to_owned() })
+            }
+
+            fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+            where
+                A: serde::de::SeqAccess<'de>,
+            {
+                let raw = seq
+                    .next_element()?
+                    .ok_or_else(|| serde::de::Error::invalid_length(0, &self))?;
+
+                Ok(Path { raw })
+            }
+
+            fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+            where
+                A: serde::de::MapAccess<'de>,
+            {
+                let mut raw = None;
+
+                while let Some(key) = map.next_key()? {
+                    match key {
+                        "raw" => {
+                            if raw.is_some() {
+                                return Err(serde::de::Error::duplicate_field("raw"));
+                            }
+                            raw = Some(map.next_value()?);
+                        }
+                        _ => {
+                            return Err(serde::de::Error::unknown_field(key, &["raw"]));
+                        }
+                    }
+                }
+
+                let raw = raw.ok_or_else(|| serde::de::Error::missing_field("raw"))?;
+
+                Ok(Path { raw })
+            }
+        }
+        deserializer.deserialize_any(PathVisitor)
+    }
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 impl Path {
     pub fn from_filesystem_path(path: impl AsRef<std::path::Path>) -> Result<Self, Error> {
@@ -521,5 +597,41 @@ mod tests {
         assert_eq!(b.extension(), Some("baz"));
         assert_eq!(c.extension(), None);
         assert_eq!(d.extension(), Some("qux"));
+    }
+
+    #[test]
+    #[cfg(feature = "serde")]
+    fn serialize_deserialize_roundtrip() {
+        let original = Path::from("foo/bar/baz.json");
+
+        let json = serde_json::to_string(&original).expect("serialization failed");
+        let deserialized: Path = serde_json::from_str(&json).expect("deserialization failed");
+
+        assert_eq!(original, deserialized);
+        assert_eq!(deserialized.as_ref(), "foo/bar/baz.json");
+    }
+
+    #[test]
+    #[cfg(feature = "serde")]
+    fn serialize_deserialize_empty_path() {
+        let original = Path::default();
+
+        let json = serde_json::to_string(&original).expect("serialization failed");
+        let deserialized: Path = serde_json::from_str(&json).expect("deserialization failed");
+
+        assert_eq!(original, deserialized);
+        assert_eq!(deserialized.as_ref(), "");
+    }
+
+    #[test]
+    #[cfg(feature = "serde")]
+    fn serialize_deserialize_path_with_special_chars() {
+        let original = Path::from("foobar/baz test/qux.txt".to_string());
+
+        let json = serde_json::to_string(&original).expect("serialization failed");
+        let deserialized: Path = serde_json::from_str(&json).expect("deserialization failed");
+
+        assert_eq!(original, deserialized);
+        assert_eq!(deserialized.as_ref(), "foobar/baz test/qux.txt");
     }
 }
