@@ -137,7 +137,10 @@ impl Fs for OPFS {
 
     async fn exists(&self, path: &Path) -> Result<bool, Error> {
         let (dirs, file) = split_path(&path)?;
-        get_file_handle(&dirs, &file, false, false).await
+
+        get_file_handle(&dirs, &file, false, false)
+            .await
+            .map(|res| res.is_some())
     }
 }
 
