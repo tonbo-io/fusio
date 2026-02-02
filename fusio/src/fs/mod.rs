@@ -56,6 +56,8 @@ pub trait Fs: MaybeSend + MaybeSync {
     fn copy(&self, from: &Path, to: &Path) -> impl Future<Output = Result<(), Error>> + MaybeSend;
 
     fn link(&self, from: &Path, to: &Path) -> impl Future<Output = Result<(), Error>> + MaybeSend;
+
+    fn exists(&self, path: &Path) -> impl Future<Output = Result<bool, Error>> + MaybeSend;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

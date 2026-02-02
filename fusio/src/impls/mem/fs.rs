@@ -299,6 +299,11 @@ impl Fs for InMemoryFs {
             message: "in-memory fs does not support hard links".into(),
         })
     }
+
+    async fn exists(&self, path: &Path) -> Result<bool, Error> {
+        let key = Self::path_key(path);
+        Ok(self.get_entry(&key).is_some())
+    }
 }
 
 impl FsCas for InMemoryFs {

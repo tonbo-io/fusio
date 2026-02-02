@@ -351,6 +351,14 @@ impl Fs for TokioFs {
 
         Ok(())
     }
+
+    async fn exists(&self, path: &Path) -> Result<bool, Error> {
+        let path = path_to_local(path).map_err(|err| Error::Path(Box::new(err)))?;
+
+        tokio::fs::try_exists(path)
+            .await
+            .map_err(|err| Error::Path(Box::new(err)))
+    }
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -584,6 +592,42 @@ mod tests {
                 .collect::<Vec<_>>(),
             expected
         );
+    }
+
+    #[tokio::test]
+    async fn exists_returns_true_for_existing_file() {
+        let fs = TokioFs;
+        let tmp = tempfile::tempdir().unwrap();
+
+        let file_path = tmp.path().join("test.txt");
+        tokio::fs::write(&file_path, b"test content").await.unwrap();
+
+        let path = Path::from_absolute_path(&file_path).unwrap();
+
+        assert!(fs.exists(&path).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn exists_returns_false_for_nonexistent_file() {
+        let fs = TokioFs;
+        let tmp = tempfile::tempdir().unwrap();
+        let file_path = tmp.path().join("nonexistent.txt");
+
+        let path = Path::from_absolute_path(&file_path).unwrap();
+
+        assert!(!fs.exists(&path).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn exists_returns_true_for_existing_directory() {
+        let fs = TokioFs;
+        let tmp = tempfile::tempdir().unwrap();
+        let dir_path = tmp.path().join("subdir");
+        tokio::fs::create_dir(&dir_path).await.unwrap();
+
+        let path = Path::from_absolute_path(&dir_path).unwrap();
+
+        assert!(fs.exists(&path).await.unwrap());
     }
 
     #[cfg(target_os = "windows")]

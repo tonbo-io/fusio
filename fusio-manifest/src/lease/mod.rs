@@ -350,6 +350,10 @@ mod tests {
         async fn link(&self, from: &Path, to: &Path) -> Result<(), FsError> {
             self.inner.link(from, to).await
         }
+
+        async fn exists(&self, path: &Path) -> Result<bool, FsError> {
+            self.inner.exists(path).await
+        }
     }
 
     impl FsCas for FailingFs {

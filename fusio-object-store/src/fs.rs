@@ -89,4 +89,14 @@ impl<O: ObjectStore> Fs for S3Store<O> {
             message: "s3 does not support link file".to_string(),
         })
     }
+
+    async fn exists(&self, path: &Path) -> Result<bool, Error> {
+        let path = path.clone().into();
+
+        match self.inner.head(&path).await {
+            Ok(_) => Ok(true),
+            Err(object_store::Error::NotFound { .. }) => Ok(false),
+            Err(err) => Err(Error::Remote(BoxedError::from(err))),
+        }
+    }
 }

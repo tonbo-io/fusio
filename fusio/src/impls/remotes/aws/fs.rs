@@ -413,6 +413,43 @@ impl Fs for AmazonS3 {
             message: "s3 does not support link file".to_string(),
         })
     }
+
+    async fn exists(&self, path: &Path) -> Result<bool, Error> {
+        let mut url = Url::from_str(self.as_ref().options.endpoint.as_str())
+            .map_err(|e| S3Error::from(HttpError::from(e)))
+            .map_err(|e| Error::Remote(Box::new(e)))?;
+        url = url
+            .join(path.as_ref())
+            .map_err(|e| Error::Remote(HttpError::from(e).into()))?;
+
+        let mut request = Request::builder()
+            .method(Method::HEAD)
+            .uri(url.as_str())
+            .body(Empty::<Bytes>::new())
+            .map_err(|e| Error::Remote(HttpError::from(e).into()))?;
+
+        request
+            .sign(&self.as_ref().options)
+            .await
+            .map_err(|err| Error::Remote(err.into()))?;
+
+        let response = self
+            .as_ref()
+            .client
+            .send_request(request)
+            .await
+            .map_err(|err| Error::Remote(err.into()))?;
+
+        let is_not_found = response.status() == StatusCode::NOT_FOUND;
+
+        let _ = response
+            .into_body()
+            .collect()
+            .await
+            .map_err(|e| Error::Remote(e.into()))?;
+
+        Ok(is_not_found)
+    }
 }
 
 impl FsCas for AmazonS3 {
