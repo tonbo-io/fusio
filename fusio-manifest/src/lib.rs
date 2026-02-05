@@ -15,7 +15,7 @@ pub mod manifest;
 pub mod session;
 pub mod snapshot; // Snapshot types and snapshot-bound reader // Unified read/write session API
                   // Re-export lease handle type for public read-lease APIs
-pub use lease::{keeper::LeaseKeeper, LeaseHandle};
+pub use lease::{keeper::LeaseKeeper, ActiveLease, LeaseHandle, LeaseKind};
 
 pub use crate::{
     checkpoint::{CheckpointStore, CheckpointStoreImpl},
