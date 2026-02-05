@@ -20,16 +20,29 @@ pub mod keeper;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LeaseId(pub String);
 
+/// Lease intent to distinguish read snapshots from active write transactions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum LeaseKind {
+    #[default]
+    Read,
+    Write,
+}
+
 #[derive(Debug, Clone)]
 pub struct LeaseHandle {
     pub id: LeaseId,
     pub snapshot_txn_id: u64,
+    pub active_txn_id: Option<u64>,
+    pub kind: LeaseKind,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ActiveLease {
     pub id: LeaseId,
     pub snapshot_txn_id: u64,
+    pub active_txn_id: Option<u64>,
+    pub kind: LeaseKind,
     pub expires_at: Duration,
 }
 
@@ -37,7 +50,9 @@ pub trait LeaseStore: MaybeSend + MaybeSync + Clone {
     fn create(
         &self,
         snapshot_txn_id: u64,
+        active_txn_id: Option<u64>,
         head_tag: Option<HeadTag>,
+        kind: LeaseKind,
         ttl: Duration,
     ) -> impl MaybeSendFuture<Output = Result<LeaseHandle>> + '_;
 
@@ -59,6 +74,10 @@ pub trait LeaseStore: MaybeSend + MaybeSync + Clone {
 struct LeaseDoc {
     id: String,
     snapshot_txn_id: u64,
+    #[serde(default)]
+    active_txn_id: Option<u64>,
+    #[serde(default)]
+    kind: LeaseKind,
     expires_at_ms: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     head_tag: Option<String>,
@@ -106,6 +125,91 @@ where
             .as_millis()
             .min(u128::from(u64::MAX)) as u64
     }
+
+    async fn create_impl(
+        &self,
+        snapshot_txn_id: u64,
+        active_txn_id: Option<u64>,
+        head_tag: Option<HeadTag>,
+        kind: LeaseKind,
+        ttl: Duration,
+    ) -> Result<LeaseHandle, Error>
+    where
+        FS: Fs + FsCas + Clone + MaybeSend + MaybeSync + 'static,
+        T: Timer + Clone + 'static,
+    {
+        match kind {
+            LeaseKind::Read if active_txn_id.is_some() => {
+                return Err(Error::Corrupt(
+                    "read lease must not include active_txn_id".into(),
+                ));
+            }
+            LeaseKind::Write if active_txn_id.is_none() => {
+                return Err(Error::Corrupt("write lease requires active_txn_id".into()));
+            }
+            _ => {}
+        }
+        let ttl_ms = ttl.as_millis().min(u128::from(u64::MAX)) as u64;
+        let mut attempt: u32 = 0;
+        let mut backoff_iter = self.backoff.build_backoff();
+
+        loop {
+            let now = self.wall_clock_now_ms();
+            let expires_at_ms = now.saturating_add(ttl_ms);
+            let id = if attempt == 0 {
+                format!("lease-{}", now)
+            } else {
+                format!("lease-{}-{}", now, attempt)
+            };
+            let key = self.key_for(&id);
+            let doc = LeaseDoc {
+                id: id.clone(),
+                snapshot_txn_id,
+                active_txn_id,
+                kind,
+                expires_at_ms,
+                head_tag: head_tag.as_ref().map(|t| t.0.clone()),
+            };
+            let body = serde_json::to_vec(&doc)
+                .map_err(|e| Error::Corrupt(format!("lease encode: {e}")))?;
+            let path = Path::parse(&key).map_err(Error::other)?;
+            match self
+                .fs
+                .put_conditional(
+                    &path,
+                    &body,
+                    Some("application/json"),
+                    None,
+                    CasCondition::IfNotExists,
+                )
+                .await
+            {
+                Ok(_) => {
+                    return Ok(LeaseHandle {
+                        id: LeaseId(id),
+                        snapshot_txn_id,
+                        active_txn_id,
+                        kind,
+                    });
+                }
+                Err(e) => {
+                    let err = Error::Io(e);
+                    match classify_error(&err) {
+                        RetryClass::RetryTransient => {
+                            if let Some(delay) = backoff_iter.next() {
+                                attempt += 1;
+                                self.timer.sleep(delay).await;
+                                continue;
+                            } else {
+                                return Err(err);
+                            }
+                        }
+                        _ => return Err(err),
+                    }
+                }
+            }
+        }
+    }
 }
 
 impl<FS, T> LeaseStore for LeaseStoreImpl<FS, T>
@@ -116,66 +220,14 @@ where
     fn create(
         &self,
         snapshot_txn_id: u64,
+        active_txn_id: Option<u64>,
         head_tag: Option<HeadTag>,
+        kind: LeaseKind,
         ttl: Duration,
     ) -> impl MaybeSendFuture<Output = Result<LeaseHandle, Error>> + '_ {
         async move {
-            let ttl_ms = ttl.as_millis().min(u128::from(u64::MAX)) as u64;
-            let mut attempt: u32 = 0;
-            let mut backoff_iter = self.backoff.build_backoff();
-
-            loop {
-                let now = self.wall_clock_now_ms();
-                let expires_at_ms = now.saturating_add(ttl_ms);
-                let id = if attempt == 0 {
-                    format!("lease-{}", now)
-                } else {
-                    format!("lease-{}-{}", now, attempt)
-                };
-                let key = self.key_for(&id);
-                let doc = LeaseDoc {
-                    id: id.clone(),
-                    snapshot_txn_id,
-                    expires_at_ms,
-                    head_tag: head_tag.as_ref().map(|t| t.0.clone()),
-                };
-                let body = serde_json::to_vec(&doc)
-                    .map_err(|e| Error::Corrupt(format!("lease encode: {e}")))?;
-                let path = Path::parse(&key).map_err(Error::other)?;
-                match self
-                    .fs
-                    .put_conditional(
-                        &path,
-                        &body,
-                        Some("application/json"),
-                        None,
-                        CasCondition::IfNotExists,
-                    )
-                    .await
-                {
-                    Ok(_) => {
-                        return Ok(LeaseHandle {
-                            id: LeaseId(id),
-                            snapshot_txn_id,
-                        });
-                    }
-                    Err(e) => {
-                        let err: Error = e.into();
-                        match classify_error(&err) {
-                            RetryClass::RetryTransient => {
-                                if let Some(delay) = backoff_iter.next() {
-                                    attempt += 1;
-                                    self.timer.sleep(delay).await;
-                                    continue;
-                                } else {
-                                    return Err(err);
-                                }
-                            }
-                            _ => return Err(err),
-                        }
-                    }
-                }
-            }
+            self.create_impl(snapshot_txn_id, active_txn_id, head_tag, kind, ttl)
+                .await
         }
     }
 
@@ -253,6 +305,8 @@ where
                         out.push(ActiveLease {
                             id: LeaseId(doc.id),
                             snapshot_txn_id: doc.snapshot_txn_id,
+                            active_txn_id: doc.active_txn_id,
+                            kind: doc.kind,
                             expires_at: Duration::from_millis(doc.expires_at_ms),
                         });
                     }
@@ -393,8 +447,14 @@ mod tests {
             let store = in_memory_stores.lease;
             // Create two leases at different snapshot txn_ids
             let ttl = Duration::from_secs(60);
-            let l1 = store.create(100, None, ttl).await.unwrap();
-            let l2 = store.create(50, None, ttl).await.unwrap();
+            let l1 = store
+                .create(100, None, None, LeaseKind::Read, ttl)
+                .await
+                .unwrap();
+            let l2 = store
+                .create(50, None, None, LeaseKind::Read, ttl)
+                .await
+                .unwrap();
 
             // Now = 0 should show both as active if we pass a very small now (simulate immediate
             // check)
@@ -402,6 +462,8 @@ mod tests {
             assert_eq!(active.len(), 2);
             let min = active.iter().map(|l| l.snapshot_txn_id).min().unwrap();
             assert_eq!(min, 50);
+            assert!(active.iter().all(|l| l.active_txn_id.is_none()));
+            assert!(active.iter().all(|l| l.kind == LeaseKind::Read));
 
             // Heartbeat l1 and ensure it extends expiry without affecting txn id
             store.heartbeat(&l1, ttl).await.unwrap();
@@ -416,6 +478,28 @@ mod tests {
         })
     }
 
+    #[rstest]
+    fn mem_lease_kind_and_active_txn_persisted(in_memory_stores: InMemoryStores) {
+        block_on(async move {
+            let store = in_memory_stores.lease;
+            let ttl = Duration::from_secs(60);
+            let lease = store
+                .create(10, Some(11), None, LeaseKind::Write, ttl)
+                .await
+                .unwrap();
+            assert_eq!(lease.snapshot_txn_id, 10);
+            assert_eq!(lease.active_txn_id, Some(11));
+            assert_eq!(lease.kind, LeaseKind::Write);
+
+            let active = store.list_active(Duration::from_millis(0)).await.unwrap();
+            assert_eq!(active.len(), 1);
+            let got = &active[0];
+            assert_eq!(got.snapshot_txn_id, 10);
+            assert_eq!(got.active_txn_id, Some(11));
+            assert_eq!(got.kind, LeaseKind::Write);
+        })
+    }
+
     #[test]
     fn lease_first_attempt_success_no_retry_suffix() {
         block_on(async move {
@@ -425,7 +509,10 @@ mod tests {
             let store = LeaseStoreImpl::new(fs, "", policy, timer);
             let ttl = Duration::from_secs(60);
 
-            let lease = store.create(100, None, ttl).await.unwrap();
+            let lease = store
+                .create(100, None, None, LeaseKind::Read, ttl)
+                .await
+                .unwrap();
 
             assert!(
                 lease.id.0.starts_with("lease-"),
@@ -449,6 +536,8 @@ mod tests {
                 after_prefix
             );
             assert_eq!(lease.snapshot_txn_id, 100);
+            assert!(lease.active_txn_id.is_none());
+            assert_eq!(lease.kind, LeaseKind::Read);
         })
     }
 
@@ -469,7 +558,10 @@ mod tests {
             let store = LeaseStoreImpl::new(fs, "", policy, timer);
             let ttl = Duration::from_secs(60);
 
-            let lease = store.create(100, None, ttl).await.unwrap();
+            let lease = store
+                .create(100, None, None, LeaseKind::Read, ttl)
+                .await
+                .unwrap();
 
             assert!(
                 lease.id.0.starts_with("lease-"),
@@ -482,6 +574,8 @@ mod tests {
                 lease.id.0
             );
             assert_eq!(lease.snapshot_txn_id, 100);
+            assert!(lease.active_txn_id.is_none());
+            assert_eq!(lease.kind, LeaseKind::Read);
         })
     }
 
@@ -502,7 +596,7 @@ mod tests {
             let store = LeaseStoreImpl::new(fs, "", policy, timer);
             let ttl = Duration::from_secs(60);
 
-            let result = store.create(100, None, ttl).await;
+            let result = store.create(100, None, None, LeaseKind::Read, ttl).await;
 
             assert!(result.is_err());
             let err = result.unwrap_err();

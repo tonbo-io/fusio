@@ -15,7 +15,7 @@ use crate::{
     compactor::Compactor,
     context::ManifestContext,
     head::{HeadJson, HeadStore, PutCondition},
-    lease::LeaseStore,
+    lease::{LeaseKind, LeaseStore},
     retention::{DefaultRetention, RetentionPolicy},
     segment::SegmentIo,
     session::{ReadSession, WriteSession},
@@ -143,7 +143,15 @@ where
                 .min(u128::from(u64::MAX)) as u64;
             let now = Duration::from_millis(now_ms);
             let active_txns: HashSet<u64> = match self.store.leases.list_active(now).await {
-                Ok(leases) => leases.into_iter().map(|l| l.snapshot_txn_id).collect(),
+                Ok(leases) => {
+                    if leases
+                        .iter()
+                        .any(|l| matches!(l.kind, LeaseKind::Write) && l.active_txn_id.is_none())
+                    {
+                        return Err(Error::Corrupt("write lease missing active_txn_id".into()));
+                    }
+                    leases.into_iter().filter_map(|l| l.active_txn_id).collect()
+                }
                 Err(e) => match classify_error(&e) {
                     RetryClass::RetryTransient => {
                         if let Some(delay) = backoff_iter.next() {
@@ -289,7 +297,13 @@ where
         let lease = self
             .store
             .leases
-            .create(next_txn, snap.head_tag.clone(), ttl)
+            .create(
+                snap.txn_id.0,
+                Some(next_txn),
+                snap.head_tag.clone(),
+                LeaseKind::Write,
+                ttl,
+            )
             .await?;
         Ok(WriteSession::new(
             self.store.clone(),
@@ -310,7 +324,13 @@ where
         let lease = self
             .store
             .leases
-            .create(snapshot.txn_id.0, snapshot.head_tag.clone(), ttl)
+            .create(
+                snapshot.txn_id.0,
+                None,
+                snapshot.head_tag.clone(),
+                LeaseKind::Read,
+                ttl,
+            )
             .await?;
         Ok(ReadSession::new(
             self.store.clone(),
@@ -398,7 +418,7 @@ mod tests {
         checkpoint::CheckpointStoreImpl,
         context::ManifestContext,
         head::{HeadStoreImpl, HeadTag},
-        lease::LeaseStoreImpl,
+        lease::{LeaseKind, LeaseStoreImpl},
         retention::DefaultRetention,
         segment::SegmentStoreImpl,
         test_utils::{in_memory_stores, InMemoryStores},
@@ -590,6 +610,31 @@ mod tests {
     }
 
     #[rstest]
+    fn mem_write_session_lease_tracks_snapshot_and_active(in_memory_stores: InMemoryStores) {
+        block_on(async move {
+            let ls = in_memory_stores.lease.clone();
+            let kv = test_manifest(&in_memory_stores);
+
+            let mut s = kv.session_write().await.unwrap();
+            s.put("a".into(), "1".into());
+            s.commit().await.unwrap();
+
+            let snap = kv.snapshot().await.unwrap();
+            let writer = kv.session_write().await.unwrap();
+
+            let active = ls.list_active(now_duration()).await.unwrap();
+            assert_eq!(active.len(), 1);
+            let lease = &active[0];
+            assert_eq!(lease.kind, LeaseKind::Write);
+            assert_eq!(lease.snapshot_txn_id, snap.txn_id.0);
+            assert_eq!(lease.active_txn_id, Some(snap.txn_id.0.saturating_add(1)));
+
+            writer.end().await.unwrap();
+            assert!(ls.list_active(now_duration()).await.unwrap().is_empty());
+        })
+    }
+
+    #[rstest]
     fn mem_kv_compact_and_read_from_checkpoint(in_memory_stores: InMemoryStores) {
         block_on(async move {
             let kv = test_manifest(&in_memory_stores);
@@ -687,7 +732,10 @@ mod tests {
                 .unwrap();
 
             // Writer lease still alive for txn_id=1 → adoption should defer.
-            let lease = ls.create(1, None, Duration::from_secs(60)).await.unwrap();
+            let lease = ls
+                .create(0, Some(1), None, LeaseKind::Write, Duration::from_secs(60))
+                .await
+                .unwrap();
 
             let adopted = kv.recover_orphans().await.unwrap();
             assert_eq!(adopted, 0);
