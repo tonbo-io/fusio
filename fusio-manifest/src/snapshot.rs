@@ -10,6 +10,8 @@ pub struct Snapshot {
     pub checkpoint_seq: Option<u64>,
     /// The checkpoint id published in HEAD, if any.
     pub checkpoint_id: Option<CheckpointId>,
+    /// Merge-tree run ids for L1..=Lmax (`None` means empty level).
+    pub level_runs: Vec<Option<CheckpointId>>,
 }
 
 /// Range helper for scans.

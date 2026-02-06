@@ -22,6 +22,7 @@ use crate::{
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CacheKind {
     Checkpoint,
+    CheckpointIndex,
     Segment,
 }
 
@@ -145,11 +146,35 @@ impl SegmentCacheEntry {
     }
 }
 
+#[derive(Clone)]
+pub struct RunIndexCacheEntry {
+    payload: CachedPayload,
+    etag: Option<Box<str>>,
+}
+
+impl RunIndexCacheEntry {
+    pub fn new(payload: Vec<u8>, etag: Option<String>) -> Self {
+        Self {
+            payload: CachedPayload::new(payload),
+            etag: etag.map(|e| e.into_boxed_str()),
+        }
+    }
+
+    pub fn payload(&self) -> &CachedPayload {
+        &self.payload
+    }
+
+    pub fn etag(&self) -> Option<&str> {
+        self.etag.as_deref()
+    }
+}
+
 /// Unified cache value enum so we can share the underlying LRU for segments and checkpoints.
 #[derive(Clone)]
 pub enum CacheValue {
     Segment(SegmentCacheEntry),
     Checkpoint(CheckpointCacheEntry),
+    CheckpointIndex(RunIndexCacheEntry),
 }
 
 /// Basic cache statistics exposed to callers for observability.
@@ -225,6 +250,7 @@ pub struct CachedSegmentStore<S> {
     cache: Option<Arc<dyn BlobCache>>,
     namespace: Arc<str>,
     etags: Arc<Mutex<HashMap<String, Option<String>>>>,
+    meta_cache: Arc<Mutex<HashMap<u64, crate::segment::SegmentMeta>>>,
 }
 
 impl<S> CachedSegmentStore<S> {
@@ -239,6 +265,7 @@ impl<S> CachedSegmentStore<S> {
             cache,
             namespace,
             etags: Arc::new(Mutex::new(HashMap::new())),
+            meta_cache: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -266,7 +293,18 @@ where
         payload: &'s [u8],
         content_type: &str,
     ) -> impl MaybeSendFuture<Output = Result<SegmentId>> + 's {
-        self.inner.put_next(seq, txn_id, payload, content_type)
+        let inner = self.inner.clone();
+        let meta_cache = self.meta_cache.clone();
+        let content_type_owned = content_type.to_owned();
+        async move {
+            let id = inner
+                .put_next(seq, txn_id, payload, content_type_owned.as_str())
+                .await?;
+            if let Ok(mut map) = meta_cache.lock() {
+                map.remove(&id.seq);
+            }
+            Ok(id)
+        }
     }
 
     fn get<'a>(&'a self, id: &'a SegmentId) -> impl MaybeSendFuture<Output = Result<Vec<u8>>> + 'a {
@@ -363,7 +401,21 @@ where
         &self,
         id: &SegmentId,
     ) -> impl MaybeSendFuture<Output = Result<crate::segment::SegmentMeta>> + '_ {
-        self.inner.load_meta(id)
+        let inner = self.inner.clone();
+        let meta_cache = self.meta_cache.clone();
+        let seg_id = *id;
+        async move {
+            if let Ok(map) = meta_cache.lock() {
+                if let Some(meta) = map.get(&seg_id.seq) {
+                    return Ok(meta.clone());
+                }
+            }
+            let meta = inner.load_meta(&seg_id).await?;
+            if let Ok(mut map) = meta_cache.lock() {
+                map.insert(seg_id.seq, meta.clone());
+            }
+            Ok(meta)
+        }
     }
 
     fn list_from(
@@ -378,6 +430,7 @@ where
         let cache = self.cache.clone();
         let inner = self.inner.clone();
         let etags = self.etags.clone();
+        let meta_cache = self.meta_cache.clone();
         let namespace = self.namespace.clone();
         async move {
             inner.delete_upto(upto_seq).await?;
@@ -407,6 +460,12 @@ where
                 }
             }
 
+            if let Ok(mut map) = meta_cache.lock() {
+                for seq in 0..=upto_seq {
+                    map.remove(&seq);
+                }
+            }
+
             Ok(())
         }
     }
@@ -418,6 +477,7 @@ pub struct CachedCheckpointStore<S> {
     cache: Option<Arc<dyn BlobCache>>,
     namespace: Arc<str>,
     etags: Arc<Mutex<HashMap<String, Option<String>>>>,
+    index_etags: Arc<Mutex<HashMap<String, Option<String>>>>,
 }
 
 impl<S> CachedCheckpointStore<S> {
@@ -432,6 +492,7 @@ impl<S> CachedCheckpointStore<S> {
             cache,
             namespace,
             etags: Arc::new(Mutex::new(HashMap::new())),
+            index_etags: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -445,7 +506,23 @@ impl<S> CachedCheckpointStore<S> {
         CacheKey::new(CacheKind::Checkpoint, scoped, etag.map(|e| e.to_owned()))
     }
 
+    fn cache_key_index(namespace: &Arc<str>, id: &CheckpointId, etag: Option<&str>) -> CacheKey {
+        let mut scoped = String::with_capacity(namespace.len() + 1 + id.as_str().len());
+        scoped.push_str(namespace);
+        scoped.push(':');
+        scoped.push_str(id.as_str());
+        CacheKey::new(
+            CacheKind::CheckpointIndex,
+            scoped,
+            etag.map(|e| e.to_owned()),
+        )
+    }
+
     fn identifier(id: &CheckpointId) -> String {
+        id.as_str().to_owned()
+    }
+
+    fn index_identifier(id: &CheckpointId) -> String {
         id.as_str().to_owned()
     }
 
@@ -471,13 +548,14 @@ where
         let inner = self.inner.clone();
         let content_type_owned = content_type.to_owned();
         let etags = self.etags.clone();
+        let index_etags = self.index_etags.clone();
         let namespace = self.namespace.clone();
         async move {
             let id = inner
                 .put_checkpoint(&meta_clone, &payload_owned, &content_type_owned)
                 .await?;
             let key = CachedCheckpointStore::<S>::cache_key(&namespace, &id, None);
-            if let Some(cache) = cache {
+            if let Some(cache) = cache.as_ref() {
                 cache.insert(
                     key,
                     CacheValue::Checkpoint(CheckpointCacheEntry::new(
@@ -489,6 +567,22 @@ where
             }
             if let Ok(mut map) = etags.lock() {
                 map.insert(CachedCheckpointStore::<S>::identifier(&id), None);
+            }
+            if let Ok(mut map) = index_etags.lock() {
+                if let Some(tag) = map.remove(&CachedCheckpointStore::<S>::index_identifier(&id)) {
+                    if let (Some(cache), Some(tag)) = (cache.as_ref(), tag) {
+                        cache.invalidate(&CachedCheckpointStore::<S>::cache_key_index(
+                            &namespace,
+                            &id,
+                            Some(tag.as_str()),
+                        ));
+                    }
+                }
+            }
+            if let Some(cache) = cache.as_ref() {
+                cache.invalidate(&CachedCheckpointStore::<S>::cache_key_index(
+                    &namespace, &id, None,
+                ));
             }
             Ok(id)
         }
@@ -628,6 +722,233 @@ where
         }
     }
 
+    fn get_checkpoint_range<'a>(
+        &'a self,
+        id: &'a CheckpointId,
+        offset: u64,
+        len: usize,
+    ) -> impl MaybeSendFuture<Output = Result<(CheckpointMeta, Vec<u8>)>> + 'a {
+        let cache = self.cache.clone();
+        let inner = self.inner.clone();
+        let namespace = self.namespace.clone();
+        let identifier = CachedCheckpointStore::<S>::identifier(id);
+        let known_etag = {
+            self.etags
+                .lock()
+                .ok()
+                .and_then(|map| map.get(&identifier).cloned())
+                .flatten()
+        };
+        let ckpt_id = id.clone();
+        async move {
+            if len == 0 {
+                let meta = inner.get_checkpoint_meta(&ckpt_id).await?;
+                return Ok((meta, Vec::new()));
+            }
+
+            if let Some(cache) = cache.as_ref() {
+                let primary = CachedCheckpointStore::<S>::cache_key(
+                    &namespace,
+                    &ckpt_id,
+                    known_etag.as_deref(),
+                );
+                if let Some(CacheValue::Checkpoint(entry)) = cache.get(&primary) {
+                    let start = usize::try_from(offset).map_err(|_| {
+                        crate::types::Error::Corrupt(format!(
+                            "checkpoint range overflow: offset={offset}"
+                        ))
+                    })?;
+                    if start >= entry.payload.len() {
+                        return Ok(((*entry.meta).clone(), Vec::new()));
+                    }
+                    let end = start.saturating_add(len).min(entry.payload.len());
+                    return Ok((
+                        (*entry.meta).clone(),
+                        entry.payload.as_slice()[start..end].to_vec(),
+                    ));
+                }
+            }
+
+            inner.get_checkpoint_range(&ckpt_id, offset, len).await
+        }
+    }
+
+    fn get_checkpoint_payload_range<'a>(
+        &'a self,
+        id: &'a CheckpointId,
+        offset: u64,
+        len: usize,
+    ) -> impl MaybeSendFuture<Output = Result<Vec<u8>>> + 'a {
+        let cache = self.cache.clone();
+        let inner = self.inner.clone();
+        let namespace = self.namespace.clone();
+        let identifier = CachedCheckpointStore::<S>::identifier(id);
+        let known_etag = {
+            self.etags
+                .lock()
+                .ok()
+                .and_then(|map| map.get(&identifier).cloned())
+                .flatten()
+        };
+        let ckpt_id = id.clone();
+        async move {
+            if len == 0 {
+                return Ok(Vec::new());
+            }
+
+            if let Some(cache) = cache.as_ref() {
+                let primary = CachedCheckpointStore::<S>::cache_key(
+                    &namespace,
+                    &ckpt_id,
+                    known_etag.as_deref(),
+                );
+                if let Some(CacheValue::Checkpoint(entry)) = cache.get(&primary) {
+                    let start = usize::try_from(offset).map_err(|_| {
+                        crate::types::Error::Corrupt(format!(
+                            "checkpoint range overflow: offset={offset}"
+                        ))
+                    })?;
+                    if start >= entry.payload.len() {
+                        return Ok(Vec::new());
+                    }
+                    let end = start.saturating_add(len).min(entry.payload.len());
+                    return Ok(entry.payload.as_slice()[start..end].to_vec());
+                }
+            }
+
+            inner
+                .get_checkpoint_payload_range(&ckpt_id, offset, len)
+                .await
+        }
+    }
+
+    fn put_checkpoint_index<'s>(
+        &'s self,
+        id: &'s CheckpointId,
+        payload: &'s [u8],
+        content_type: &str,
+    ) -> impl MaybeSendFuture<Output = Result<()>> + 's {
+        let cache = self.cache.clone();
+        let inner = self.inner.clone();
+        let ckpt_id = id.clone();
+        let payload_owned = payload.to_vec();
+        let content_type_owned = content_type.to_owned();
+        let index_etags = self.index_etags.clone();
+        let namespace = self.namespace.clone();
+        async move {
+            inner
+                .put_checkpoint_index(&ckpt_id, &payload_owned, &content_type_owned)
+                .await?;
+            if let Some(cache) = cache {
+                cache.insert(
+                    CachedCheckpointStore::<S>::cache_key_index(&namespace, &ckpt_id, None),
+                    CacheValue::CheckpointIndex(RunIndexCacheEntry::new(
+                        payload_owned.clone(),
+                        None,
+                    )),
+                );
+            }
+            if let Ok(mut map) = index_etags.lock() {
+                map.insert(CachedCheckpointStore::<S>::index_identifier(&ckpt_id), None);
+            }
+            Ok(())
+        }
+    }
+
+    fn get_checkpoint_index<'a>(
+        &'a self,
+        id: &'a CheckpointId,
+    ) -> impl MaybeSendFuture<Output = Result<Option<Vec<u8>>>> + 'a {
+        async move {
+            let (payload, _etag) =
+                <Self as CheckpointStore>::get_checkpoint_index_with_etag(self, id).await?;
+            Ok(payload)
+        }
+    }
+
+    fn get_checkpoint_index_with_etag<'a>(
+        &'a self,
+        id: &'a CheckpointId,
+    ) -> impl MaybeSendFuture<Output = Result<(Option<Vec<u8>>, Option<String>)>> + 'a {
+        let cache_lookup = self.cache.clone();
+        let cache_store = self.cache.clone();
+        let inner = self.inner.clone();
+        let index_etags = self.index_etags.clone();
+        let ckpt_id = id.clone();
+        let identifier = CachedCheckpointStore::<S>::index_identifier(id);
+        let namespace = self.namespace.clone();
+        let known_etag = {
+            self.index_etags
+                .lock()
+                .ok()
+                .and_then(|map| map.get(&identifier).cloned())
+                .flatten()
+        };
+        async move {
+            if let Some(cache) = cache_lookup.as_ref() {
+                let primary = CachedCheckpointStore::<S>::cache_key_index(
+                    &namespace,
+                    &ckpt_id,
+                    known_etag.as_deref(),
+                );
+                if let Some(CacheValue::CheckpointIndex(entry)) = cache.get(&primary) {
+                    return Ok((
+                        Some(entry.payload().as_slice().to_vec()),
+                        entry.etag().map(str::to_owned),
+                    ));
+                }
+                if known_etag.is_some() {
+                    let fallback =
+                        CachedCheckpointStore::<S>::cache_key_index(&namespace, &ckpt_id, None);
+                    if let Some(CacheValue::CheckpointIndex(entry)) = cache.get(&fallback) {
+                        return Ok((
+                            Some(entry.payload().as_slice().to_vec()),
+                            entry.etag().map(str::to_owned),
+                        ));
+                    }
+                }
+            }
+
+            let (payload, etag) = inner.get_checkpoint_index_with_etag(&ckpt_id).await?;
+
+            if let (Some(cache), Some(payload)) = (cache_store, payload.as_ref()) {
+                match &etag {
+                    Some(tag) => {
+                        cache.invalidate(&CachedCheckpointStore::<S>::cache_key_index(
+                            &namespace, &ckpt_id, None,
+                        ));
+                        cache.insert(
+                            CachedCheckpointStore::<S>::cache_key_index(
+                                &namespace,
+                                &ckpt_id,
+                                Some(tag.as_str()),
+                            ),
+                            CacheValue::CheckpointIndex(RunIndexCacheEntry::new(
+                                payload.clone(),
+                                Some(tag.clone()),
+                            )),
+                        );
+                    }
+                    None => {
+                        cache.insert(
+                            CachedCheckpointStore::<S>::cache_key_index(&namespace, &ckpt_id, None),
+                            CacheValue::CheckpointIndex(RunIndexCacheEntry::new(
+                                payload.clone(),
+                                None,
+                            )),
+                        );
+                    }
+                }
+            }
+
+            if let Ok(mut map) = index_etags.lock() {
+                map.insert(identifier, etag.clone());
+            }
+
+            Ok((payload, etag))
+        }
+    }
+
     fn list(
         &self,
     ) -> impl MaybeSendFuture<
@@ -643,13 +964,18 @@ where
         let inner = self.inner.clone();
         let ckpt_id = id.clone();
         let etags = self.etags.clone();
+        let index_etags = self.index_etags.clone();
         let namespace = self.namespace.clone();
         async move {
             inner.delete(&ckpt_id).await?;
             let identifier = CachedCheckpointStore::<S>::identifier(&ckpt_id);
+            let index_identifier = CachedCheckpointStore::<S>::index_identifier(&ckpt_id);
 
             if let Some(cache) = cache.as_ref() {
                 cache.invalidate(&CachedCheckpointStore::<S>::cache_key(
+                    &namespace, &ckpt_id, None,
+                ));
+                cache.invalidate(&CachedCheckpointStore::<S>::cache_key_index(
                     &namespace, &ckpt_id, None,
                 ));
             }
@@ -658,6 +984,18 @@ where
                 if let Some(tag) = map.remove(&identifier) {
                     if let (Some(cache), Some(tag)) = (cache.as_ref(), tag) {
                         cache.invalidate(&CachedCheckpointStore::<S>::cache_key(
+                            &namespace,
+                            &ckpt_id,
+                            Some(tag.as_str()),
+                        ));
+                    }
+                }
+            }
+
+            if let Ok(mut map) = index_etags.lock() {
+                if let Some(tag) = map.remove(&index_identifier) {
+                    if let (Some(cache), Some(tag)) = (cache.as_ref(), tag) {
+                        cache.invalidate(&CachedCheckpointStore::<S>::cache_key_index(
                             &namespace,
                             &ckpt_id,
                             Some(tag.as_str()),
@@ -687,6 +1025,7 @@ impl MemoryBlobCache {
                     // Count payload bytes only; meta size is negligible.
                     entry.payload.len() as u32
                 }
+                CacheValue::CheckpointIndex(entry) => entry.payload().len() as u32,
             })
             .eviction_listener(move |_key, _value, _cause| {
                 eviction_counter.fetch_add(1, Ordering::Relaxed);
@@ -785,6 +1124,7 @@ mod tests {
                 created_at_ms: 0,
                 format: "application/json".into(),
                 last_segment_seq_at_ckpt: 0,
+                run_sparse_index: None,
             };
             let id = cached
                 .put_checkpoint(&meta, payload, "application/json")
@@ -814,6 +1154,7 @@ mod tests {
                 created_at_ms: 0,
                 format: "application/json".into(),
                 last_segment_seq_at_ckpt: 0,
+                run_sparse_index: None,
             };
 
             let id = cached

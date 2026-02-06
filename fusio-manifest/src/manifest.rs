@@ -65,7 +65,7 @@ where
 #[cfg(any(feature = "tokio", all(feature = "web", target_arch = "wasm32")))]
 impl<K, V, HS, SS, CS, LS> Manifest<K, V, HS, SS, CS, LS>
 where
-    K: PartialOrd + Eq + Hash + Serialize + DeserializeOwned,
+    K: Ord + Hash + Serialize + DeserializeOwned,
     V: Serialize + DeserializeOwned,
     HS: HeadStore + 'static,
     SS: SegmentIo + 'static,
@@ -85,7 +85,7 @@ where
 
 impl<K, V, HS, SS, CS, LS, E, R> Manifest<K, V, HS, SS, CS, LS, E, R>
 where
-    K: PartialOrd + Eq + Hash + Serialize + DeserializeOwned,
+    K: Ord + Hash + Serialize + DeserializeOwned,
     V: Serialize + DeserializeOwned,
     HS: HeadStore + 'static,
     SS: SegmentIo + 'static,
@@ -174,6 +174,7 @@ where
                         checkpoint_id: None,
                         last_segment_seq: None,
                         last_txn_id: 0,
+                        merge_tree: Default::default(),
                     },
                     PutCondition::IfNotExists,
                 ),
@@ -237,6 +238,7 @@ where
                 checkpoint_id: cur.checkpoint_id.clone(),
                 last_segment_seq: Some(max_seq),
                 last_txn_id: last_txn,
+                merge_tree: cur.merge_tree.clone(),
             };
 
             match self.store.head.put(&new_head, cond.clone()).await {
@@ -268,7 +270,7 @@ where
 // In-memory constructors live in `testing` helpers (test-only).
 impl<K, V, HS, SS, CS, LS, E, R> Manifest<K, V, HS, SS, CS, LS, E, R>
 where
-    K: PartialOrd + Eq + Hash + Serialize + DeserializeOwned,
+    K: Ord + Hash + Serialize + DeserializeOwned,
     V: Serialize + DeserializeOwned,
     HS: HeadStore + 'static,
     SS: SegmentIo + 'static,
@@ -372,13 +374,25 @@ where
                 last_segment_seq: None,
                 checkpoint_seq: None,
                 checkpoint_id: None,
+                level_runs: Vec::new(),
             }),
             Some((h, tag)) => {
-                let (checkpoint_id, checkpoint_seq) = if let Some(id) = h.checkpoint_id.as_ref() {
+                let (checkpoint_id, checkpoint_seq, level_runs) = if !h.merge_tree.levels.is_empty()
+                {
+                    (
+                        h.merge_tree.levels.iter().flatten().next().cloned(),
+                        h.merge_tree.compacted_segment_seq,
+                        h.merge_tree.levels.clone(),
+                    )
+                } else if let Some(id) = h.checkpoint_id.as_ref() {
                     let meta = self.store.checkpoint.get_checkpoint_meta(id).await?;
-                    (Some(id.clone()), Some(meta.last_segment_seq_at_ckpt))
+                    (
+                        Some(id.clone()),
+                        Some(meta.last_segment_seq_at_ckpt),
+                        Vec::new(),
+                    )
                 } else {
-                    (None, None)
+                    (None, None, Vec::new())
                 };
                 let snap = Snapshot {
                     head_tag: Some(tag),
@@ -386,6 +400,7 @@ where
                     last_segment_seq: h.last_segment_seq,
                     checkpoint_seq,
                     checkpoint_id,
+                    level_runs,
                 };
                 tracing::info!(
                     txn_id = %snap.txn_id.0,
@@ -402,7 +417,7 @@ where
 mod tests {
     use std::{
         sync::{
-            atomic::{AtomicBool, Ordering},
+            atomic::{AtomicBool, AtomicUsize, Ordering},
             Arc,
         },
         time::{Duration, SystemTime},
@@ -415,9 +430,9 @@ mod tests {
 
     use super::*;
     use crate::{
-        checkpoint::CheckpointStoreImpl,
+        checkpoint::{CheckpointId, CheckpointMeta, CheckpointStore, CheckpointStoreImpl},
         context::ManifestContext,
-        head::{HeadStoreImpl, HeadTag},
+        head::{HeadStore, HeadStoreImpl, HeadTag},
         lease::{LeaseKind, LeaseStoreImpl},
         retention::DefaultRetention,
         segment::SegmentStoreImpl,
@@ -495,6 +510,166 @@ mod tests {
                     inner.put(&head_cloned, cond_cloned).await
                 }
             }
+        }
+    }
+
+    #[derive(Clone)]
+    struct CountingCheckpointStore<C> {
+        inner: C,
+        full_gets: Arc<AtomicUsize>,
+        range_gets: Arc<AtomicUsize>,
+        meta_gets: Arc<AtomicUsize>,
+        forbid_meta_get: bool,
+    }
+
+    impl<C> CountingCheckpointStore<C>
+    where
+        C: CheckpointStore,
+    {
+        fn new(inner: C) -> Self {
+            Self {
+                inner,
+                full_gets: Arc::new(AtomicUsize::new(0)),
+                range_gets: Arc::new(AtomicUsize::new(0)),
+                meta_gets: Arc::new(AtomicUsize::new(0)),
+                forbid_meta_get: false,
+            }
+        }
+
+        fn forbid_meta_get(mut self) -> Self {
+            self.forbid_meta_get = true;
+            self
+        }
+
+        fn full_gets(&self) -> usize {
+            self.full_gets.load(Ordering::SeqCst)
+        }
+
+        fn range_gets(&self) -> usize {
+            self.range_gets.load(Ordering::SeqCst)
+        }
+
+        fn meta_gets(&self) -> usize {
+            self.meta_gets.load(Ordering::SeqCst)
+        }
+
+        fn reset(&self) {
+            self.full_gets.store(0, Ordering::SeqCst);
+            self.range_gets.store(0, Ordering::SeqCst);
+            self.meta_gets.store(0, Ordering::SeqCst);
+        }
+    }
+
+    impl<C> CheckpointStore for CountingCheckpointStore<C>
+    where
+        C: CheckpointStore,
+    {
+        fn put_checkpoint<'s>(
+            &'s self,
+            meta: &CheckpointMeta,
+            payload: &'s [u8],
+            content_type: &str,
+        ) -> impl MaybeSendFuture<Output = Result<CheckpointId>> + 's {
+            self.inner.put_checkpoint(meta, payload, content_type)
+        }
+
+        fn get_checkpoint<'a>(
+            &'a self,
+            id: &'a CheckpointId,
+        ) -> impl MaybeSendFuture<Output = Result<(CheckpointMeta, Vec<u8>)>> + 'a {
+            let inner = self.inner.clone();
+            let full_gets = self.full_gets.clone();
+            let ckpt = id.clone();
+            async move {
+                full_gets.fetch_add(1, Ordering::SeqCst);
+                inner.get_checkpoint(&ckpt).await
+            }
+        }
+
+        fn get_checkpoint_meta<'a>(
+            &'a self,
+            id: &'a CheckpointId,
+        ) -> impl MaybeSendFuture<Output = Result<CheckpointMeta>> + 'a {
+            let inner = self.inner.clone();
+            let meta_gets = self.meta_gets.clone();
+            let forbid = self.forbid_meta_get;
+            let ckpt = id.clone();
+            async move {
+                meta_gets.fetch_add(1, Ordering::SeqCst);
+                if forbid {
+                    return Err(Error::Unimplemented(
+                        "point get should not call get_checkpoint_meta on sparse path",
+                    ));
+                }
+                inner.get_checkpoint_meta(&ckpt).await
+            }
+        }
+
+        fn put_checkpoint_index<'s>(
+            &'s self,
+            id: &'s CheckpointId,
+            payload: &'s [u8],
+            content_type: &str,
+        ) -> impl MaybeSendFuture<Output = Result<()>> + 's {
+            self.inner.put_checkpoint_index(id, payload, content_type)
+        }
+
+        fn get_checkpoint_index_with_etag<'a>(
+            &'a self,
+            id: &'a CheckpointId,
+        ) -> impl MaybeSendFuture<Output = Result<(Option<Vec<u8>>, Option<String>)>> + 'a {
+            self.inner.get_checkpoint_index_with_etag(id)
+        }
+
+        fn get_checkpoint_index<'a>(
+            &'a self,
+            id: &'a CheckpointId,
+        ) -> impl MaybeSendFuture<Output = Result<Option<Vec<u8>>>> + 'a {
+            self.inner.get_checkpoint_index(id)
+        }
+
+        fn get_checkpoint_range<'a>(
+            &'a self,
+            id: &'a CheckpointId,
+            offset: u64,
+            len: usize,
+        ) -> impl MaybeSendFuture<Output = Result<(CheckpointMeta, Vec<u8>)>> + 'a {
+            let inner = self.inner.clone();
+            let range_gets = self.range_gets.clone();
+            let ckpt = id.clone();
+            async move {
+                range_gets.fetch_add(1, Ordering::SeqCst);
+                inner.get_checkpoint_range(&ckpt, offset, len).await
+            }
+        }
+
+        fn get_checkpoint_payload_range<'a>(
+            &'a self,
+            id: &'a CheckpointId,
+            offset: u64,
+            len: usize,
+        ) -> impl MaybeSendFuture<Output = Result<Vec<u8>>> + 'a {
+            let inner = self.inner.clone();
+            let range_gets = self.range_gets.clone();
+            let ckpt = id.clone();
+            async move {
+                range_gets.fetch_add(1, Ordering::SeqCst);
+                inner.get_checkpoint_payload_range(&ckpt, offset, len).await
+            }
+        }
+
+        fn list(
+            &self,
+        ) -> impl MaybeSendFuture<
+            Output = Result<
+                impl futures_util::Stream<Item = Result<(CheckpointId, CheckpointMeta)>> + '_,
+            >,
+        > + '_ {
+            self.inner.list()
+        }
+
+        fn delete(&self, id: &CheckpointId) -> impl MaybeSendFuture<Output = Result<()>> + '_ {
+            self.inner.delete(id)
         }
     }
 
@@ -665,6 +840,129 @@ mod tests {
             let gc = sess.get(&"c".into()).await.unwrap();
             assert_eq!(ga.as_deref(), Some("1"));
             assert_eq!(gb.as_deref(), Some("20"));
+            assert_eq!(gc.as_deref(), Some("3"));
+            sess.end().await.unwrap();
+        })
+    }
+
+    #[rstest]
+    fn mem_kv_point_get_uses_sparse_range_read(in_memory_stores: InMemoryStores) {
+        block_on(async move {
+            let checkpoint = CountingCheckpointStore::new(in_memory_stores.checkpoint.clone());
+            let opts: ManifestContext<DefaultRetention, NoopExecutor> =
+                ManifestContext::new(NoopExecutor::default()).with_sparse_stride(2);
+            let kv = Manifest::new_with_context(
+                in_memory_stores.head.clone(),
+                in_memory_stores.segment.clone(),
+                checkpoint.clone(),
+                in_memory_stores.lease.clone(),
+                Arc::new(opts),
+            );
+
+            let mut write = kv.session_write().await.unwrap();
+            for idx in 0..16 {
+                write.put(format!("k{idx:02}"), format!("v{idx:02}"));
+            }
+            write.commit().await.unwrap();
+
+            kv.compactor().compact_once().await.unwrap();
+            checkpoint.reset();
+
+            let sess = kv.session_read().await.unwrap();
+            let value = sess.get(&"k11".to_string()).await.unwrap();
+            assert_eq!(value.as_deref(), Some("v11"));
+            sess.end().await.unwrap();
+
+            assert_eq!(
+                checkpoint.full_gets(),
+                0,
+                "sparse-index point get should avoid full checkpoint payload reads"
+            );
+            assert!(
+                checkpoint.range_gets() > 0,
+                "sparse-index point get should issue at least one ranged read"
+            );
+        })
+    }
+
+    #[rstest]
+    fn mem_kv_point_get_sparse_path_avoids_meta_fetch(in_memory_stores: InMemoryStores) {
+        block_on(async move {
+            let checkpoint =
+                CountingCheckpointStore::new(in_memory_stores.checkpoint.clone()).forbid_meta_get();
+            let opts: ManifestContext<DefaultRetention, NoopExecutor> =
+                ManifestContext::new(NoopExecutor::default()).with_sparse_stride(2);
+            let kv = Manifest::new_with_context(
+                in_memory_stores.head.clone(),
+                in_memory_stores.segment.clone(),
+                checkpoint.clone(),
+                in_memory_stores.lease.clone(),
+                Arc::new(opts),
+            );
+
+            let mut write = kv.session_write().await.unwrap();
+            for idx in 0..16 {
+                write.put(format!("k{idx:02}"), format!("v{idx:02}"));
+            }
+            write.commit().await.unwrap();
+
+            kv.compactor().compact_once().await.unwrap();
+            checkpoint.reset();
+
+            let sess = kv.session_read().await.unwrap();
+            let value = sess.get(&"k09".to_string()).await.unwrap();
+            assert_eq!(value.as_deref(), Some("v09"));
+            sess.end().await.unwrap();
+
+            assert_eq!(
+                checkpoint.meta_gets(),
+                0,
+                "sparse-index point get should not need checkpoint meta fetch"
+            );
+            assert!(
+                checkpoint.range_gets() > 0,
+                "sparse-index point get should issue ranged payload reads"
+            );
+        })
+    }
+
+    #[rstest]
+    fn mem_kv_compact_promotes_into_higher_levels(in_memory_stores: InMemoryStores) {
+        block_on(async move {
+            let kv = test_manifest(&in_memory_stores);
+            let compactor = kv.compactor();
+
+            let mut s1 = kv.session_write().await.unwrap();
+            s1.put("a".into(), "1".into());
+            s1.commit().await.unwrap();
+            compactor.compact_once().await.unwrap();
+
+            let mut s2 = kv.session_write().await.unwrap();
+            s2.put("b".into(), "2".into());
+            s2.commit().await.unwrap();
+            compactor.compact_once().await.unwrap();
+
+            let mut s3 = kv.session_write().await.unwrap();
+            s3.delete("a".into());
+            s3.put("c".into(), "3".into());
+            s3.commit().await.unwrap();
+            compactor.compact_once().await.unwrap();
+
+            let (head, _tag) = in_memory_stores.head.load().await.unwrap().unwrap();
+            assert_eq!(head.merge_tree.levels.len(), 7);
+            assert!(head
+                .merge_tree
+                .levels
+                .get(1)
+                .and_then(|id| id.as_ref())
+                .is_some());
+
+            let sess = kv.session_read().await.unwrap();
+            let ga = sess.get(&"a".into()).await.unwrap();
+            let gb = sess.get(&"b".into()).await.unwrap();
+            let gc = sess.get(&"c".into()).await.unwrap();
+            assert!(ga.is_none());
+            assert_eq!(gb.as_deref(), Some("2"));
             assert_eq!(gc.as_deref(), Some("3"));
             sess.end().await.unwrap();
         })

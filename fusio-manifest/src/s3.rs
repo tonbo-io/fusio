@@ -288,7 +288,7 @@ where
 
 impl<K, V, E, R> S3Manifest<K, V, E, R>
 where
-    K: PartialOrd + Eq + Hash + serde::Serialize + for<'de> serde::Deserialize<'de>,
+    K: Ord + Hash + serde::Serialize + for<'de> serde::Deserialize<'de>,
     V: serde::Serialize + for<'de> serde::Deserialize<'de>,
     E: Executor + Timer + Clone + 'static,
     R: RetentionPolicy + Clone,
@@ -348,7 +348,7 @@ where
 
 impl<K, V, E, R> S3Compactor<K, V, E, R>
 where
-    K: PartialOrd + Eq + Hash + serde::Serialize + for<'de> serde::Deserialize<'de>,
+    K: Ord + Hash + serde::Serialize + for<'de> serde::Deserialize<'de>,
     V: serde::Serialize + for<'de> serde::Deserialize<'de>,
     E: Executor + Timer + Clone + 'static,
     R: RetentionPolicy + Clone,
@@ -385,7 +385,7 @@ where
 /// Open an S3 compactor over the given config (consumes `Config`).
 fn compactor<K, V, E, R>(cfg: Config<R, E>) -> S3Compactor<K, V, E, R>
 where
-    K: PartialOrd + Eq + Hash + serde::Serialize + for<'de> serde::Deserialize<'de>,
+    K: Ord + Hash + serde::Serialize + for<'de> serde::Deserialize<'de>,
     V: serde::Serialize + for<'de> serde::Deserialize<'de>,
     E: Executor + Timer + Clone + 'static,
     R: RetentionPolicy + Clone,
@@ -413,7 +413,7 @@ where
 
 impl<K, V, E, R> From<Config<R, E>> for S3Manifest<K, V, E, R>
 where
-    K: PartialOrd + Eq + Hash + serde::Serialize + for<'de> serde::Deserialize<'de>,
+    K: Ord + Hash + serde::Serialize + for<'de> serde::Deserialize<'de>,
     V: serde::Serialize + for<'de> serde::Deserialize<'de>,
     E: Executor + Timer + Clone + 'static,
     R: RetentionPolicy + Clone,
@@ -435,7 +435,7 @@ where
 
 impl<K, V, E, R> From<Config<R, E>> for S3Compactor<K, V, E, R>
 where
-    K: PartialOrd + Eq + Hash + serde::Serialize + for<'de> serde::Deserialize<'de>,
+    K: Ord + Hash + serde::Serialize + for<'de> serde::Deserialize<'de>,
     V: serde::Serialize + for<'de> serde::Deserialize<'de>,
     E: Executor + Timer + Clone + 'static,
     R: RetentionPolicy + Clone,

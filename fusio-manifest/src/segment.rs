@@ -18,6 +18,9 @@ use crate::types::{Error, Result, SegmentId};
 #[derive(Debug, Clone)]
 pub struct SegmentMeta {
     pub txn_id: u64,
+    /// JSON-encoded key bounds for fast negative filtering in L0 point gets.
+    pub key_min_json: Option<String>,
+    pub key_max_json: Option<String>,
 }
 
 pub trait SegmentIo: MaybeSend + MaybeSync {
@@ -69,6 +72,8 @@ pub struct SegmentStoreImpl<FS> {
 }
 
 const TXN_ID_HEADER: &str = "x-amz-meta-fusio-txn-id";
+const KEY_MIN_HEADER: &str = "x-amz-meta-fusio-key-min";
+const KEY_MAX_HEADER: &str = "x-amz-meta-fusio-key-max";
 
 /// Capability for fetching object metadata without downloading the payload.
 pub trait ObjectHead {
@@ -126,8 +131,17 @@ where
         } else {
             Some(content_type.to_string())
         };
-        let meta_headers = vec![(TXN_ID_HEADER.to_string(), txn_id.to_string())];
+        let key_bounds = if content_type == "application/json" {
+            extract_segment_key_bounds(payload)
+        } else {
+            None
+        };
         async move {
+            let mut meta_headers = vec![(TXN_ID_HEADER.to_string(), txn_id.to_string())];
+            if let Some((min_key, max_key)) = key_bounds {
+                meta_headers.push((KEY_MIN_HEADER.to_string(), min_key));
+                meta_headers.push((KEY_MAX_HEADER.to_string(), max_key));
+            }
             let path = Path::parse(&key).map_err(Error::other)?;
             self.fs
                 .put_conditional(
@@ -193,7 +207,19 @@ where
                         let parsed = txn.parse::<u64>().map_err(|e| {
                             Error::Corrupt(format!("segment txn header parse error: {e}"))
                         })?;
-                        Ok(SegmentMeta { txn_id: parsed })
+                        let key_min_json = metadata.get(KEY_MIN_HEADER).cloned();
+                        let key_max_json = metadata.get(KEY_MAX_HEADER).cloned();
+                        let (key_min_json, key_max_json) =
+                            if key_min_json.is_some() && key_max_json.is_some() {
+                                (key_min_json, key_max_json)
+                            } else {
+                                (None, None)
+                            };
+                        Ok(SegmentMeta {
+                            txn_id: parsed,
+                            key_min_json,
+                            key_max_json,
+                        })
                     }
                     Ok(None) => Err(Error::Corrupt(format!(
                         "segment metadata missing object for key {key}"
@@ -277,10 +303,46 @@ fn map_fs_error(err: FsError) -> Error {
     }
 }
 
+fn extract_segment_key_bounds(payload: &[u8]) -> Option<(String, String)> {
+    let header: SegmentHeaderOnly = serde_json::from_slice(payload).ok()?;
+    let first = header.records.first();
+    let last = header.records.last();
+    if let (Some(first), Some(last)) = (first, last) {
+        return Some((first.key.to_string(), last.key.to_string()));
+    }
+    None
+}
+
+#[cfg_attr(
+    not(any(feature = "tokio", all(feature = "web", target_arch = "wasm32"))),
+    allow(dead_code)
+)]
+fn segment_headers_from_payload(
+    path: &Path,
+    bytes: &[u8],
+) -> Result<HashMap<String, String>, FsError> {
+    let header: SegmentHeaderOnly = serde_json::from_slice(bytes)
+        .map_err(|err| FsError::Other(Box::new(SegmentMetadataParseError::new(path, err))))?;
+    let mut meta = HashMap::with_capacity(3);
+    meta.insert(TXN_ID_HEADER.to_string(), header.txn_id.to_string());
+    if let (Some(first), Some(last)) = (header.records.first(), header.records.last()) {
+        meta.insert(KEY_MIN_HEADER.to_string(), first.key.to_string());
+        meta.insert(KEY_MAX_HEADER.to_string(), last.key.to_string());
+    }
+    Ok(meta)
+}
+
 #[cfg_attr(not(feature = "tokio"), allow(dead_code))]
 #[derive(Deserialize)]
-struct SegmentTxnOnly {
+struct SegmentHeaderOnly {
     txn_id: u64,
+    #[serde(default)]
+    records: Vec<SegmentRecordKeyOnly>,
+}
+
+#[derive(Deserialize)]
+struct SegmentRecordKeyOnly {
+    key: serde_json::Value,
 }
 
 #[cfg_attr(not(feature = "tokio"), allow(dead_code))]
@@ -324,11 +386,7 @@ impl ObjectHead for fusio::impls::disk::TokioFs {
             let ext = path_clone.extension().map(str::to_owned);
             match FsCas::load_with_tag(self, &path_clone).await? {
                 Some((bytes, _)) if matches!(ext.as_deref(), Some("json")) => {
-                    let header: SegmentTxnOnly = serde_json::from_slice(&bytes).map_err(|err| {
-                        FsError::Other(Box::new(SegmentMetadataParseError::new(&path_clone, err)))
-                    })?;
-                    let mut meta = HashMap::with_capacity(1);
-                    meta.insert(TXN_ID_HEADER.to_string(), header.txn_id.to_string());
+                    let meta = segment_headers_from_payload(&path_clone, &bytes)?;
                     Ok(Some(meta))
                 }
                 Some(_) => Ok(None),
@@ -350,11 +408,7 @@ impl ObjectHead for OPFS {
             let ext = path_clone.extension().map(str::to_owned);
             match FsCas::load_with_tag(self, &path_clone).await? {
                 Some((bytes, _)) if matches!(ext.as_deref(), Some("json")) => {
-                    let header: SegmentTxnOnly = serde_json::from_slice(&bytes).map_err(|err| {
-                        FsError::Other(Box::new(SegmentMetadataParseError::new(&path_clone, err)))
-                    })?;
-                    let mut meta = HashMap::with_capacity(1);
-                    meta.insert(TXN_ID_HEADER.to_string(), header.txn_id.to_string());
+                    let meta = segment_headers_from_payload(&path_clone, &bytes)?;
                     Ok(Some(meta))
                 }
                 Some(_) => Ok(None),
@@ -418,11 +472,36 @@ mod tests {
 
         let meta = store.load_meta(&seg_id).await.expect("load metadata");
         assert_eq!(meta.txn_id, 42);
+        assert!(meta.key_min_json.is_none());
+        assert!(meta.key_max_json.is_none());
 
         let listed = store.list_from(0, 10).await.expect("list segments");
         assert_eq!(listed, vec![SegmentId { seq: 1 }]);
 
         let bytes = store.get(&seg_id).await.expect("fetch segment payload");
         assert_eq!(bytes, payload);
+    }
+
+    #[tokio::test]
+    async fn segment_store_localfs_key_bounds_round_trip() {
+        let tmp = TempDir::new().expect("create temp dir");
+        let segments_root = tmp.path().join("segments");
+        std::fs::create_dir_all(&segments_root).expect("create segments dir");
+
+        let prefix_path = fusio::path::Path::from_absolute_path(&segments_root)
+            .expect("convert absolute path to fusio path");
+        let prefix: String = prefix_path.into();
+
+        let store = SegmentStoreImpl::new(LocalFs {}, prefix);
+        let payload = br#"{"txn_id":7,"records":[{"key":"a"},{"key":"z"}]}"#;
+        let seg_id = store
+            .put_next(1, 7, payload, "application/json")
+            .await
+            .expect("write segment");
+
+        let meta = store.load_meta(&seg_id).await.expect("load metadata");
+        assert_eq!(meta.txn_id, 7);
+        assert_eq!(meta.key_min_json.as_deref(), Some("\"a\""));
+        assert_eq!(meta.key_max_json.as_deref(), Some("\"z\""));
     }
 }

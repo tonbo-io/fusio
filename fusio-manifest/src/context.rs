@@ -28,6 +28,10 @@ where
     pub cache: Option<Arc<dyn BlobCache>>,
     /// Optional namespace used to scope shared blob caches.
     pub cache_namespace: Option<Arc<str>>,
+    /// Maximum merge-tree level count (L1..=Lmax).
+    pub max_level: usize,
+    /// Sparse index stride used when materializing merge-tree runs.
+    pub sparse_stride: usize,
 }
 
 impl<E> ManifestContext<DefaultRetention, E>
@@ -42,6 +46,8 @@ where
             executor,
             cache: None,
             cache_namespace: None,
+            max_level: 7,
+            sparse_stride: 64,
         }
     }
 }
@@ -104,6 +110,8 @@ where
             executor: self.executor,
             cache: self.cache,
             cache_namespace: self.cache_namespace,
+            max_level: self.max_level,
+            sparse_stride: self.sparse_stride,
         }
     }
 
@@ -143,6 +151,28 @@ where
     /// Inspect the configured cache namespace.
     pub fn cache_namespace(&self) -> Option<&str> {
         self.cache_namespace.as_deref()
+    }
+
+    /// Configure the maximum merge-tree level count (minimum 1).
+    pub fn with_max_level(mut self, max_level: usize) -> Self {
+        self.max_level = max_level.max(1);
+        self
+    }
+
+    /// Mutably configure the maximum merge-tree level count (minimum 1).
+    pub fn set_max_level(&mut self, max_level: usize) {
+        self.max_level = max_level.max(1);
+    }
+
+    /// Configure sparse index stride (minimum 1).
+    pub fn with_sparse_stride(mut self, sparse_stride: usize) -> Self {
+        self.sparse_stride = sparse_stride.max(1);
+        self
+    }
+
+    /// Mutably configure sparse index stride (minimum 1).
+    pub fn set_sparse_stride(&mut self, sparse_stride: usize) {
+        self.sparse_stride = sparse_stride.max(1);
     }
 }
 

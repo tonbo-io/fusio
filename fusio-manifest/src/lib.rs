@@ -85,6 +85,7 @@ mod tests {
             checkpoint_id: None,
             last_segment_seq: None,
             last_txn_id: 7,
+            merge_tree: Default::default(),
         };
         // First publish should succeed as if_not_exists
         let tag = block_on(store.put(&head, PutCondition::IfNotExists)).unwrap();

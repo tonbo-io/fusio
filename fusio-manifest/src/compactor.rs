@@ -7,7 +7,7 @@
 //! remote/scheduled compaction jobs.
 
 use core::{hash::Hash, marker::PhantomData, time::Duration};
-use std::{collections::HashMap, sync::Arc, time::SystemTime};
+use std::{collections::BTreeMap, sync::Arc, time::SystemTime};
 
 use fusio::executor::{Executor, Timer};
 use futures_util::TryStreamExt;
@@ -15,19 +15,27 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 use crate::{
     backoff::{classify_error, RetryClass},
-    checkpoint::{CheckpointId, CheckpointMeta, CheckpointStore},
+    checkpoint::{
+        CheckpointId, CheckpointMeta, CheckpointStore, RunSparseAnchorMeta, RunSparseIndexMeta,
+    },
     context::ManifestContext,
     gc::{GcPlan, GcPlanStore, GcTag, SegmentRange},
-    head::{HeadJson, HeadStore, HeadTag, PutCondition},
+    head::{HeadJson, HeadStore, HeadTag, MergeTreeState, PutCondition},
     lease::LeaseStore,
-    manifest::{Manifest, Op, Segment},
+    manifest::{Manifest, Op, Record, Segment},
     retention::{DefaultRetention, RetentionPolicy},
     segment::SegmentIo,
-    snapshot::Snapshot,
     store::Store,
-    types::{Error, Result, TxnId},
+    types::{Error, Result},
     DefaultExecutor,
 };
+
+const RUN_PAYLOAD_FORMAT: &str = "application/vnd.fusio-manifest.run+jsonl";
+
+#[derive(Debug, Serialize, Deserialize)]
+struct RunPayload<K, V> {
+    records: Vec<crate::manifest::Record<K, V>>,
+}
 
 /// Headless compactor that orchestrates compaction + GC using the same logic
 /// as `Manifest`, without requiring a long‑lived manifest instance owned by
@@ -55,7 +63,7 @@ struct CheckpointRetentionStats {
 
 impl<K, V, HS, SS, CS, LS, E, R> Compactor<K, V, HS, SS, CS, LS, E, R>
 where
-    K: PartialOrd + Eq + Hash + Serialize + DeserializeOwned,
+    K: Ord + Hash + Serialize + DeserializeOwned,
     V: Serialize + DeserializeOwned,
     HS: HeadStore + 'static,
     SS: SegmentIo + 'static,
@@ -82,64 +90,99 @@ where
         Manifest::from_store(self.store.clone())
     }
 
-    async fn snapshot(&self) -> Result<Snapshot> {
-        match self.store.head.load().await? {
-            None => Ok(Snapshot {
-                head_tag: None,
-                txn_id: TxnId(0),
-                last_segment_seq: None,
-                checkpoint_seq: None,
-                checkpoint_id: None,
-            }),
-            Some((h, tag)) => {
-                let (checkpoint_id, checkpoint_seq) = if let Some(id) = h.checkpoint_id.as_ref() {
-                    let (meta, _payload) = self.store.checkpoint.get_checkpoint(id).await?;
-                    (Some(id.clone()), Some(meta.last_segment_seq_at_ckpt))
-                } else {
-                    (None, None)
-                };
-                Ok(Snapshot {
-                    head_tag: Some(tag),
-                    txn_id: TxnId(h.last_txn_id),
-                    last_segment_seq: h.last_segment_seq,
-                    checkpoint_seq,
-                    checkpoint_id,
-                })
-            }
+    fn decode_run_records(bytes: &[u8]) -> Result<Vec<Record<K, V>>> {
+        #[derive(Deserialize)]
+        struct LegacyPayload<K, V> {
+            entries: Vec<(K, V)>,
         }
+
+        if bytes.is_empty() {
+            return Ok(Vec::new());
+        }
+        if let Ok(payload) = serde_json::from_slice::<RunPayload<K, V>>(bytes) {
+            return Ok(payload.records);
+        }
+        if let Ok(payload) = serde_json::from_slice::<LegacyPayload<K, V>>(bytes) {
+            let mut records = payload
+                .entries
+                .into_iter()
+                .map(|(key, value)| Record {
+                    key,
+                    op: Op::Put,
+                    value: Some(value),
+                })
+                .collect::<Vec<_>>();
+            records.sort_by(|left, right| left.key.cmp(&right.key));
+            return Ok(records);
+        }
+        let mut ndjson_records = Vec::<Record<K, V>>::new();
+        let mut saw_non_empty = false;
+        for line in bytes.split(|byte| *byte == b'\n') {
+            if line.is_empty() {
+                continue;
+            }
+            saw_non_empty = true;
+            let record: Record<K, V> = match serde_json::from_slice(line) {
+                Ok(record) => record,
+                Err(_) => {
+                    return Err(Error::Corrupt(
+                        "ckpt decode: unsupported payload format".to_string(),
+                    ));
+                }
+            };
+            ndjson_records.push(record);
+        }
+        if saw_non_empty {
+            return Ok(ndjson_records);
+        }
+
+        Err(Error::Corrupt(
+            "ckpt decode: unsupported payload format".to_string(),
+        ))
     }
 
-    async fn fold_until(&self, map: &mut HashMap<K, V>, snap: &Snapshot) -> Result<()> {
-        if let Some(id) = snap.checkpoint_id.as_ref() {
-            #[derive(Deserialize)]
-            struct CkptPayload<K, V> {
-                entries: Vec<(K, V)>,
-            }
+    fn merge_records(newer: Vec<Record<K, V>>, older: Vec<Record<K, V>>) -> Vec<Record<K, V>> {
+        let mut newer_it = newer.into_iter().peekable();
+        let mut older_it = older.into_iter().peekable();
+        let mut out = Vec::new();
 
-            let (_meta, bytes) = self.store.checkpoint.get_checkpoint(id).await?;
-            let payload: CkptPayload<K, V> = serde_json::from_slice(&bytes)
-                .map_err(|e| Error::Corrupt(format!("ckpt decode: {e}")))?;
-            for (k, v) in payload.entries {
-                map.insert(k, v);
+        while let (Some(n), Some(o)) = (newer_it.peek(), older_it.peek()) {
+            match n.key.cmp(&o.key) {
+                core::cmp::Ordering::Less => out.push(newer_it.next().expect("peeked")),
+                core::cmp::Ordering::Greater => out.push(older_it.next().expect("peeked")),
+                core::cmp::Ordering::Equal => {
+                    out.push(newer_it.next().expect("peeked"));
+                    let _ = older_it.next();
+                }
             }
         }
+        out.extend(newer_it);
+        out.extend(older_it);
+        out
+    }
 
-        let last_seq = match snap.last_segment_seq {
-            Some(s) => s,
-            None => return Ok(()),
-        };
-        let mut cursor = snap
-            .checkpoint_seq
-            .map(|s| s.saturating_add(1))
-            .unwrap_or(0);
+    async fn collect_l0_delta(
+        &self,
+        from_seq_inclusive: u64,
+        to_seq_inclusive: u64,
+        max_txn: u64,
+    ) -> Result<Vec<Record<K, V>>> {
+        if to_seq_inclusive < from_seq_inclusive {
+            return Ok(Vec::new());
+        }
+        let mut merged = BTreeMap::<K, (Op, Option<V>)>::new();
+        let mut cursor = from_seq_inclusive;
         loop {
             let ids = self.store.segment.list_from(cursor, 256).await?;
             if ids.is_empty() {
                 break;
             }
             for id in ids {
-                if id.seq > last_seq {
-                    return Ok(());
+                if id.seq > to_seq_inclusive {
+                    return Ok(merged
+                        .into_iter()
+                        .map(|(key, (op, value))| Record { key, op, value })
+                        .collect());
                 }
                 if id.seq < cursor {
                     continue;
@@ -147,131 +190,233 @@ where
                 let bytes = self.store.segment.get(&id).await?;
                 let seg: Segment<K, V> = serde_json::from_slice(&bytes)
                     .map_err(|e| Error::Corrupt(format!("kv segment decode: {e}")))?;
-                if seg.txn_id > snap.txn_id.0 {
-                    return Ok(());
+                if seg.txn_id > max_txn {
+                    return Ok(merged
+                        .into_iter()
+                        .map(|(key, (op, value))| Record { key, op, value })
+                        .collect());
                 }
-                for r in seg.records.into_iter() {
-                    match r.op {
-                        Op::Put => {
-                            if let Some(v) = r.value {
-                                map.insert(r.key, v);
-                            }
-                        }
-                        Op::Del => {
-                            map.remove(&r.key);
-                        }
-                    }
+                for record in seg.records {
+                    merged.insert(record.key, (record.op, record.value));
                 }
                 cursor = id.seq.saturating_add(1);
             }
         }
-        Ok(())
+        Ok(merged
+            .into_iter()
+            .map(|(key, (op, value))| Record { key, op, value })
+            .collect())
     }
 
-    /// Fold segments into a checkpoint and CAS-publish it into HEAD. Returns the checkpoint id
-    /// and HEAD tag.
-    pub async fn compact_once(&self) -> Result<(CheckpointId, HeadTag)> {
-        let snap = self.snapshot().await?;
-        let mut map: HashMap<K, V> = HashMap::new();
-        self.fold_until(&mut map, &snap).await?;
+    async fn persist_run(
+        &self,
+        lsn: u64,
+        last_segment_seq_at_ckpt: u64,
+        records: Vec<Record<K, V>>,
+    ) -> Result<CheckpointId> {
+        let key_count = records.len();
+        let stride = self.store.opts.sparse_stride.max(1);
+        let (payload, run_sparse_index) = if records.is_empty() {
+            (Vec::new(), None)
+        } else {
+            let mut payload = Vec::new();
+            let mut anchors = Vec::new();
+            let mut key_min_json = None::<String>;
+            let mut key_max_json = None::<String>;
 
-        #[derive(Serialize)]
-        struct CkptPayload<K, V> {
-            entries: Vec<(K, V)>,
-        }
+            for (idx, record) in records.iter().enumerate() {
+                let key_json = serde_json::to_string(&record.key)
+                    .map_err(|e| Error::Corrupt(format!("run index key encode: {e}")))?;
+                if idx == 0 {
+                    key_min_json = Some(key_json.clone());
+                }
+                key_max_json = Some(key_json.clone());
+                if idx % stride == 0 {
+                    anchors.push(RunSparseAnchorMeta {
+                        key_json,
+                        offset: payload.len() as u64,
+                    });
+                }
+                serde_json::to_writer(&mut payload, record)
+                    .map_err(|e| Error::Corrupt(format!("run record encode: {e}")))?;
+                payload.push(b'\n');
+            }
 
-        let entries: Vec<(K, V)> = map.into_iter().collect();
-        let entries_len = entries.len();
-        let payload = serde_json::to_vec(&CkptPayload { entries })
-            .map_err(|e| Error::Corrupt(format!("ckpt encode: {e}")))?;
-
+            let index = RunSparseIndexMeta {
+                key_min_json: key_min_json.expect("non-empty records have min key"),
+                key_max_json: key_max_json.expect("non-empty records have max key"),
+                anchors,
+                stride,
+                record_count: records.len(),
+                payload_byte_size: payload.len(),
+            };
+            (payload, Some(index))
+        };
+        let index_payload = run_sparse_index
+            .as_ref()
+            .map(|index| {
+                serde_json::to_vec(index)
+                    .map_err(|e| Error::Corrupt(format!("run index encode: {e}")))
+            })
+            .transpose()?;
         let meta = CheckpointMeta {
-            lsn: snap.txn_id.0,
-            key_count: entries_len,
+            lsn,
+            key_count,
             byte_size: payload.len(),
             created_at_ms: system_time_to_ms(self.store.opts.timer().system_time()),
-            format: "application/json".into(),
-            last_segment_seq_at_ckpt: snap.last_segment_seq.unwrap_or(0),
+            format: RUN_PAYLOAD_FORMAT.into(),
+            last_segment_seq_at_ckpt,
+            run_sparse_index: None,
         };
-
         let id = self
             .store
             .checkpoint
-            .put_checkpoint(&meta, &payload, "application/json")
+            .put_checkpoint(&meta, &payload, RUN_PAYLOAD_FORMAT)
             .await?;
+        if let Some(index_payload) = index_payload {
+            self.store
+                .checkpoint
+                .put_checkpoint_index(&id, &index_payload, "application/json")
+                .await?;
+        }
+        Ok(id)
+    }
 
-        match self.store.head.load().await? {
-            None => {
-                let new_head = HeadJson {
-                    version: 1,
-                    checkpoint_id: Some(id.clone()),
-                    last_segment_seq: None,
-                    last_txn_id: 0,
-                };
-                let pol = self.store.opts.backoff;
-                let timer = self.store.opts.timer().clone();
+    async fn load_run(&self, id: &CheckpointId) -> Result<(CheckpointMeta, Vec<Record<K, V>>)> {
+        let (meta, bytes) = self.store.checkpoint.get_checkpoint(id).await?;
+        let records = Self::decode_run_records(&bytes)?;
+        Ok((meta, records))
+    }
 
-                let mut backoff_iter = pol.build_backoff();
+    /// Compact L0 segments into a bounded merge-tree stored as run checkpoints.
+    /// Returns the newest run id and resulting HEAD tag.
+    pub async fn compact_once(&self) -> Result<(CheckpointId, HeadTag)> {
+        let pol = self.store.opts.backoff;
+        let timer = self.store.opts.timer().clone();
+        let mut backoff_iter = pol.build_backoff();
 
-                let tag = loop {
-                    match self
-                        .store
-                        .head
-                        .put(&new_head, PutCondition::IfNotExists)
-                        .await
-                    {
-                        Ok(t) => break t,
-                        Err(Error::PreconditionFailed) => return Err(Error::PreconditionFailed),
-                        Err(e) => match crate::backoff::classify_error(&e) {
-                            RetryClass::RetryTransient => {
-                                if let Some(delay) = backoff_iter.next() {
-                                    timer.sleep(delay).await;
-                                    continue;
-                                } else {
-                                    return Err(e);
-                                }
-                            }
-                            _ => return Err(e),
-                        },
+        loop {
+            let loaded = self.store.head.load().await?;
+            let (cur, cond, cur_tag) = match loaded {
+                None => (
+                    HeadJson {
+                        version: 1,
+                        checkpoint_id: None,
+                        last_segment_seq: None,
+                        last_txn_id: 0,
+                        merge_tree: MergeTreeState::default(),
+                    },
+                    PutCondition::IfNotExists,
+                    None,
+                ),
+                Some((h, tag)) => (h, PutCondition::IfMatch(tag.clone()), Some(tag)),
+            };
+
+            let max_level = self.store.opts.max_level.max(1);
+            let mut levels = if cur.merge_tree.levels.is_empty() {
+                vec![None; max_level]
+            } else {
+                let mut levels = cur.merge_tree.levels.clone();
+                levels.resize(max_level, None);
+                levels.truncate(max_level);
+                levels
+            };
+
+            let compacted_seq = cur.merge_tree.compacted_segment_seq.unwrap_or(0);
+            let end_seq = cur.last_segment_seq.unwrap_or(0);
+            let start_seq = compacted_seq.saturating_add(1).max(1);
+            let mut carry_last_seq = compacted_seq.max(end_seq);
+            let mut next_run_id = cur.merge_tree.next_run_id;
+            let mut delete_ids = Vec::<CheckpointId>::new();
+
+            let mut carry = self
+                .collect_l0_delta(start_seq, end_seq, cur.last_txn_id)
+                .await?;
+
+            let mut newest_run = levels.iter().flatten().next().cloned();
+            if carry.is_empty() {
+                if let (Some(id), Some(tag)) = (newest_run.clone(), cur_tag.clone()) {
+                    return Ok((id, tag));
+                }
+                next_run_id = next_run_id.saturating_add(1);
+                let id = self
+                    .persist_run(next_run_id, carry_last_seq, Vec::new())
+                    .await?;
+                levels[0] = Some(id.clone());
+                newest_run = Some(id);
+            } else {
+                let mut placed = false;
+                for level_idx in 0..max_level {
+                    if let Some(existing_id) = levels[level_idx].take() {
+                        let (meta, older) = self.load_run(&existing_id).await?;
+                        carry_last_seq = carry_last_seq.max(meta.last_segment_seq_at_ckpt);
+                        carry = Self::merge_records(carry, older);
+                        delete_ids.push(existing_id);
+                        continue;
                     }
-                };
-                Ok((id, tag))
+                    next_run_id = next_run_id.saturating_add(1);
+                    let carry_to_store = core::mem::take(&mut carry);
+                    let id = self
+                        .persist_run(next_run_id, carry_last_seq, carry_to_store)
+                        .await?;
+                    levels[level_idx] = Some(id.clone());
+                    newest_run = levels.iter().flatten().next().cloned();
+                    placed = true;
+                    break;
+                }
+
+                if !placed {
+                    let idx = max_level - 1;
+                    if let Some(existing_id) = levels[idx].take() {
+                        let (meta, older) = self.load_run(&existing_id).await?;
+                        carry_last_seq = carry_last_seq.max(meta.last_segment_seq_at_ckpt);
+                        carry = Self::merge_records(carry, older);
+                        delete_ids.push(existing_id);
+                    }
+                    next_run_id = next_run_id.saturating_add(1);
+                    let carry_to_store = core::mem::take(&mut carry);
+                    let id = self
+                        .persist_run(next_run_id, carry_last_seq, carry_to_store)
+                        .await?;
+                    levels[idx] = Some(id.clone());
+                    newest_run = levels.iter().flatten().next().cloned();
+                }
             }
-            Some((cur, cur_tag)) => {
-                let new_head = HeadJson {
-                    version: cur.version,
-                    checkpoint_id: Some(id.clone()),
-                    last_segment_seq: cur.last_segment_seq,
-                    last_txn_id: cur.last_txn_id,
-                };
-                let pol = self.store.opts.backoff;
-                let timer = self.store.opts.timer().clone();
 
-                let mut backoff_iter = pol.build_backoff();
+            let merge_tree = MergeTreeState {
+                levels,
+                compacted_segment_seq: Some(carry_last_seq),
+                next_run_id,
+            };
 
-                let tag = loop {
-                    match self
-                        .store
-                        .head
-                        .put(&new_head, PutCondition::IfMatch(cur_tag.clone()))
-                        .await
-                    {
-                        Ok(t) => break t,
-                        Err(Error::PreconditionFailed) => return Err(Error::PreconditionFailed),
-                        Err(e) => match crate::backoff::classify_error(&e) {
-                            RetryClass::RetryTransient => {
-                                if let Some(delay) = backoff_iter.next() {
-                                    timer.sleep(delay).await;
-                                    continue;
-                                } else {
-                                    return Err(e);
-                                }
-                            }
-                            _ => return Err(e),
-                        },
+            let new_head = HeadJson {
+                version: cur.version.max(1),
+                checkpoint_id: merge_tree.levels.iter().flatten().next().cloned(),
+                last_segment_seq: cur.last_segment_seq,
+                last_txn_id: cur.last_txn_id,
+                merge_tree,
+            };
+
+            match self.store.head.put(&new_head, cond.clone()).await {
+                Ok(tag) => {
+                    for id in delete_ids {
+                        let _ = self.store.checkpoint.delete(&id).await;
                     }
-                };
-                Ok((id, tag))
+                    if let Some(id) = newest_run {
+                        return Ok((id, tag));
+                    }
+                    return Err(Error::Corrupt("compaction produced no run id".into()));
+                }
+                Err(e) => match classify_error(&e) {
+                    RetryClass::RetryTransient | RetryClass::DurableConflict => {
+                        if let Some(delay) = backoff_iter.next() {
+                            timer.sleep(delay).await;
+                            continue;
+                        }
+                        return Err(e);
+                    }
+                    _ => return Err(e),
+                },
             }
         }
     }
@@ -279,10 +424,12 @@ where
     /// Compact and then attempt GC of legacy segments and checkpoints based on active leases.
     pub async fn compact_and_gc(&self) -> Result<(CheckpointId, HeadTag)> {
         let (ckpt_id, tag) = self.compact_once().await?;
-        match self.store.head.load().await? {
-            Some((_h, cur_tag)) if cur_tag != tag => return Ok((ckpt_id, tag)),
-            _ => {}
-        }
+        let pinned_runs: std::collections::BTreeSet<CheckpointId> =
+            match self.store.head.load().await? {
+                Some((_h, cur_tag)) if cur_tag != tag => return Ok((ckpt_id, tag)),
+                Some((h, _cur_tag)) => h.merge_tree.levels.into_iter().flatten().collect(),
+                None => std::collections::BTreeSet::new(),
+            };
 
         let now = Duration::from_millis(system_time_to_ms(self.store.opts.timer().system_time()));
         let leases = self.store.leases.list_active(now).await?;
@@ -331,8 +478,9 @@ where
             let keep_newest = newest.as_ref().map(|(i, _)| i == &id).unwrap_or(false);
             let keep_floor = floor.as_ref().map(|(i, _)| i == &id).unwrap_or(false);
             let keep_in_last = newest_ids.contains(&id);
+            let keep_referenced = pinned_runs.contains(&id);
             let age_ok = now_ms2.saturating_sub(m.created_at_ms) >= ttl_ms;
-            if !keep_newest && !keep_floor && !keep_in_last && age_ok {
+            if !keep_newest && !keep_floor && !keep_in_last && !keep_referenced && age_ok {
                 let _ = self.store.checkpoint.delete(&id).await;
             }
         }
@@ -419,7 +567,17 @@ where
             let retention = self
                 .collect_checkpoint_retention_state(watermark, keep_last)
                 .await?;
-            let delete_checkpoints = Self::checkpoints_to_delete(&retention, now_ms, ttl_ms);
+            let referenced: std::collections::BTreeSet<String> = head_json
+                .merge_tree
+                .levels
+                .iter()
+                .flatten()
+                .map(|id| id.0.clone())
+                .collect();
+            let delete_checkpoints = Self::checkpoints_to_delete(&retention, now_ms, ttl_ms)
+                .into_iter()
+                .filter(|id| !referenced.contains(id))
+                .collect();
             let delete_segments = Self::segments_to_delete(&retention, &head_json);
 
             let plan = GcPlan {
@@ -683,6 +841,7 @@ where
                 checkpoint_id: Some(target_id.clone()),
                 last_segment_seq: cur_head.last_segment_seq,
                 last_txn_id: cur_head.last_txn_id,
+                merge_tree: cur_head.merge_tree,
             };
             match self
                 .store
@@ -1090,6 +1249,29 @@ mod tests {
             id: &'a CheckpointId,
         ) -> impl MaybeSendFuture<Output = Result<CheckpointMeta>> + 'a {
             self.inner.get_checkpoint_meta(id)
+        }
+
+        fn put_checkpoint_index<'s>(
+            &'s self,
+            id: &'s CheckpointId,
+            payload: &'s [u8],
+            content_type: &str,
+        ) -> impl MaybeSendFuture<Output = Result<()>> + 's {
+            self.inner.put_checkpoint_index(id, payload, content_type)
+        }
+
+        fn get_checkpoint_index_with_etag<'a>(
+            &'a self,
+            id: &'a CheckpointId,
+        ) -> impl MaybeSendFuture<Output = Result<(Option<Vec<u8>>, Option<String>)>> + 'a {
+            self.inner.get_checkpoint_index_with_etag(id)
+        }
+
+        fn get_checkpoint_index<'a>(
+            &'a self,
+            id: &'a CheckpointId,
+        ) -> impl MaybeSendFuture<Output = Result<Option<Vec<u8>>>> + 'a {
+            self.inner.get_checkpoint_index(id)
         }
 
         fn list(
