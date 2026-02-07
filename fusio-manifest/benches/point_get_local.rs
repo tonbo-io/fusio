@@ -321,6 +321,8 @@ struct BenchConfig {
     query_count: usize,
     prewarm_count: usize,
     sparse_stride: usize,
+    run_block_target_bytes: usize,
+    run_block_max_records: usize,
     multi_level_epochs: usize,
     multi_level_keys_per_epoch: usize,
     cache_enabled: bool,
@@ -337,6 +339,13 @@ impl BenchConfig {
             query_count: env_usize("FUSIO_MANIFEST_BENCH_QUERY_COUNT", 20_000).max(1),
             prewarm_count: env_usize("FUSIO_MANIFEST_BENCH_PREWARM", 2_000),
             sparse_stride: env_usize("FUSIO_MANIFEST_BENCH_SPARSE_STRIDE", 64).max(1),
+            run_block_target_bytes: env_usize(
+                "FUSIO_MANIFEST_BENCH_RUN_BLOCK_TARGET_BYTES",
+                256 * 1024,
+            )
+            .max(1),
+            run_block_max_records: env_usize("FUSIO_MANIFEST_BENCH_RUN_BLOCK_MAX_RECORDS", 4096)
+                .max(1),
             multi_level_epochs: env_usize("FUSIO_MANIFEST_BENCH_MULTI_LEVEL_EPOCHS", 31).max(1),
             multi_level_keys_per_epoch: env_usize(
                 "FUSIO_MANIFEST_BENCH_MULTI_LEVEL_KEYS_PER_EPOCH",
@@ -498,7 +507,9 @@ fn build_manifest(root: &Path, cfg: &BenchConfig) -> (Arc<BenchManifest>, IoCoun
     let checkpoint = CountingCheckpointStore::new(checkpoint, counters.clone());
     let mut context = ManifestContext::new(TokioExecutor::default())
         .with_sparse_stride(cfg.sparse_stride)
-        .with_run_bloom_enabled(cfg.bloom_enabled);
+        .with_run_bloom_enabled(cfg.bloom_enabled)
+        .with_run_block_target_bytes(cfg.run_block_target_bytes)
+        .with_run_block_max_records(cfg.run_block_max_records);
     #[cfg(feature = "cache-moka")]
     if cfg.cache_enabled {
         context = context.with_cache(Some(
@@ -723,7 +734,7 @@ fn point_get_local(c: &mut criterion::Criterion) {
     eprintln!(
         "[point_get_local] keys={} value_bytes={} segment_batch={} query_count={} prewarm={} \
          sparse_stride={} multi_epochs={} multi_keys_per_epoch={} cache_enabled={} cache_bytes={} \
-         bloom_enabled={}",
+         bloom_enabled={} run_block_target_bytes={} run_block_max_records={}",
         cfg.key_count,
         cfg.value_bytes,
         cfg.segment_batch,
@@ -734,13 +745,15 @@ fn point_get_local(c: &mut criterion::Criterion) {
         cfg.multi_level_keys_per_epoch,
         cfg.cache_enabled,
         cfg.cache_bytes,
-        cfg.bloom_enabled
+        cfg.bloom_enabled,
+        cfg.run_block_target_bytes,
+        cfg.run_block_max_records
     );
     #[cfg(not(feature = "cache-moka"))]
     eprintln!(
         "[point_get_local] keys={} value_bytes={} segment_batch={} query_count={} prewarm={} \
          sparse_stride={} multi_epochs={} multi_keys_per_epoch={} cache_enabled={} \
-         bloom_enabled={} (cache-moka disabled)",
+         bloom_enabled={} run_block_target_bytes={} run_block_max_records={} (cache-moka disabled)",
         cfg.key_count,
         cfg.value_bytes,
         cfg.segment_batch,
@@ -750,7 +763,9 @@ fn point_get_local(c: &mut criterion::Criterion) {
         cfg.multi_level_epochs,
         cfg.multi_level_keys_per_epoch,
         cfg.cache_enabled,
-        cfg.bloom_enabled
+        cfg.bloom_enabled,
+        cfg.run_block_target_bytes,
+        cfg.run_block_max_records
     );
 
     let runtime = tokio::runtime::Builder::new_multi_thread()

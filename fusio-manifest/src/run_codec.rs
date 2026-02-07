@@ -6,18 +6,36 @@ use crate::{
     types::{Error, Result},
 };
 
-pub(crate) const RUN_DATA_CONTENT_TYPE: &str = "application/vnd.fusio-manifest.run-v2+bin";
-pub(crate) const RUN_INDEX_CONTENT_TYPE: &str = "application/vnd.fusio-manifest.run-index-v2+bin";
+pub(crate) const RUN_DATA_CONTENT_TYPE: &str = "application/vnd.fusio-manifest.run-v3+bin";
+pub(crate) const RUN_INDEX_CONTENT_TYPE: &str = "application/vnd.fusio-manifest.run-index-v3+bin";
 
-const RUN_DATA_MAGIC: &[u8; 4] = b"FRD2";
-const RUN_INDEX_MAGIC: &[u8; 4] = b"FRI2";
-const RUN_BLOCK_MAGIC: &[u8; 4] = b"FRB2";
+const RUN_DATA_MAGIC: &[u8; 4] = b"FRD3";
+const RUN_INDEX_MAGIC: &[u8; 4] = b"FRI3";
+const RUN_BLOCK_MAGIC: &[u8; 4] = b"FRB3";
 const RUN_FORMAT_VERSION: u8 = 1;
 const BLOOM_BITS_PER_KEY: usize = 10;
 const BLOOM_MIN_BITS: usize = 64;
 
 const OP_PUT_TAG: u8 = 1;
 const OP_DEL_TAG: u8 = 2;
+
+const RUN_BLOCK_HEADER_LEN: usize = 4 + 1 + 4 + 4 + 4;
+const RUN_BLOCK_ENTRY_META_LEN: usize = 4 + 4 + 4 + 4 + 1;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RunBuildOptions {
+    pub target_bytes: usize,
+    pub max_records: usize,
+}
+
+impl RunBuildOptions {
+    pub fn new(target_bytes: usize, max_records: usize) -> Self {
+        Self {
+            target_bytes: target_bytes.max(1),
+            max_records: max_records.max(1),
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RunBlockMeta {
@@ -34,7 +52,8 @@ pub(crate) struct RunIndexMeta {
     pub key_max_json: Vec<u8>,
     pub record_count: u64,
     pub payload_byte_size: u64,
-    pub block_record_stride: u32,
+    pub block_target_bytes: u32,
+    pub block_max_records: u32,
     pub bloom_k: u8,
     pub bloom_bits: Vec<u8>,
     pub blocks: Vec<RunBlockMeta>,
@@ -45,62 +64,127 @@ pub(crate) struct EncodedRun {
     pub index: RunIndexMeta,
 }
 
+struct EncodedEntry {
+    key_json: Vec<u8>,
+    op_tag: u8,
+    value_json: Option<Vec<u8>>,
+}
+
+struct RunBlockLayout {
+    entry_count: usize,
+    entries_start: usize,
+    key_start: usize,
+    key_len: usize,
+    value_start: usize,
+    value_len: usize,
+}
+
+#[derive(Clone, Copy)]
+struct RunBlockEntryMeta {
+    key_offset: u32,
+    key_len: u32,
+    value_offset: u32,
+    value_len: u32,
+    op_tag: u8,
+}
+
 pub(crate) fn encode_run<K, V>(
     records: &[Record<K, V>],
-    block_record_stride: usize,
+    options: RunBuildOptions,
 ) -> Result<EncodedRun>
 where
     K: Serialize,
     V: Serialize,
 {
-    let stride = block_record_stride.max(1);
+    let normalized = RunBuildOptions::new(options.target_bytes, options.max_records);
+
     let mut payload = Vec::new();
     payload.extend_from_slice(RUN_DATA_MAGIC);
     payload.push(RUN_FORMAT_VERSION);
 
-    let mut blocks = Vec::new();
-    for chunk in records.chunks(stride) {
-        let first_key_json = serde_json::to_vec(&chunk[0].key)
+    let mut entries = Vec::with_capacity(records.len());
+    for record in records {
+        let key_json = serde_json::to_vec(&record.key)
             .map_err(|e| Error::Corrupt(format!("run key encode: {e}")))?;
-        let last_key_json = serde_json::to_vec(&chunk[chunk.len() - 1].key)
-            .map_err(|e| Error::Corrupt(format!("run key encode: {e}")))?;
+        let (op_tag, value_json) = match record.op {
+            Op::Put => {
+                let value = record
+                    .value
+                    .as_ref()
+                    .ok_or_else(|| Error::Corrupt("put record missing value".into()))?;
+                let value_json = serde_json::to_vec(value)
+                    .map_err(|e| Error::Corrupt(format!("run value encode: {e}")))?;
+                (OP_PUT_TAG, Some(value_json))
+            }
+            Op::Del => (OP_DEL_TAG, None),
+        };
+        entries.push(EncodedEntry {
+            key_json,
+            op_tag,
+            value_json,
+        });
+    }
 
-        let block = encode_run_block(chunk)?;
+    let mut blocks = Vec::new();
+    let mut start = 0;
+    while start < entries.len() {
+        let mut end = start;
+        let mut key_bytes = 0usize;
+        let mut value_bytes = 0usize;
+
+        while end < entries.len() {
+            let entry = &entries[end];
+            let entry_value_len = entry.value_json.as_ref().map_or(0, Vec::len);
+            let next_count = end + 1 - start;
+            let next_key_bytes = key_bytes.saturating_add(entry.key_json.len());
+            let next_value_bytes = value_bytes.saturating_add(entry_value_len);
+            let next_size = estimate_run_block_size(next_count, next_key_bytes, next_value_bytes)?;
+            if end > start
+                && (next_count > normalized.max_records || next_size > normalized.target_bytes)
+            {
+                break;
+            }
+
+            key_bytes = next_key_bytes;
+            value_bytes = next_value_bytes;
+            end += 1;
+
+            if end - start >= normalized.max_records {
+                break;
+            }
+        }
+
+        let block = encode_run_block(&entries[start..end])?;
         let offset = u64::try_from(payload.len())
             .map_err(|_| Error::Corrupt("run payload too large".into()))?;
         let len =
             u32::try_from(block.len()).map_err(|_| Error::Corrupt("run block too large".into()))?;
-        let record_count = u32::try_from(chunk.len())
-            .map_err(|_| Error::Corrupt("run block has too many records".into()))?;
-        payload.extend_from_slice(&block);
+        let record_count =
+            u32::try_from(end - start).map_err(|_| Error::Corrupt("run block too large".into()))?;
+
         blocks.push(RunBlockMeta {
-            first_key_json,
-            last_key_json,
+            first_key_json: entries[start].key_json.clone(),
+            last_key_json: entries[end - 1].key_json.clone(),
             offset,
             len,
             record_count,
         });
+        payload.extend_from_slice(&block);
+        start = end;
     }
 
     let (key_min_json, key_max_json) =
-        if let (Some(first), Some(last)) = (records.first(), records.last()) {
-            (
-                serde_json::to_vec(&first.key)
-                    .map_err(|e| Error::Corrupt(format!("run key encode: {e}")))?,
-                serde_json::to_vec(&last.key)
-                    .map_err(|e| Error::Corrupt(format!("run key encode: {e}")))?,
-            )
+        if let (Some(first), Some(last)) = (entries.first(), entries.last()) {
+            (first.key_json.clone(), last.key_json.clone())
         } else {
             (Vec::new(), Vec::new())
         };
 
-    let record_count = u64::try_from(records.len())
+    let (bloom_k, bloom_bits) = build_bloom(&entries);
+    let record_count = u64::try_from(entries.len())
         .map_err(|_| Error::Corrupt("run has too many records".into()))?;
     let payload_byte_size =
         u64::try_from(payload.len()).map_err(|_| Error::Corrupt("run payload too large".into()))?;
-    let block_record_stride =
-        u32::try_from(stride).map_err(|_| Error::Corrupt("run block stride too large".into()))?;
-    let (bloom_k, bloom_bits) = build_bloom(records)?;
 
     Ok(EncodedRun {
         payload,
@@ -109,7 +193,10 @@ where
             key_max_json,
             record_count,
             payload_byte_size,
-            block_record_stride,
+            block_target_bytes: u32::try_from(normalized.target_bytes)
+                .map_err(|_| Error::Corrupt("run block target_bytes too large".into()))?,
+            block_max_records: u32::try_from(normalized.max_records)
+                .map_err(|_| Error::Corrupt("run block max_records too large".into()))?,
             bloom_k,
             bloom_bits,
             blocks,
@@ -126,7 +213,8 @@ pub(crate) fn encode_run_index(index: &RunIndexMeta) -> Result<Vec<u8>> {
     write_bytes(&mut out, &index.key_max_json)?;
     out.extend_from_slice(&index.record_count.to_le_bytes());
     out.extend_from_slice(&index.payload_byte_size.to_le_bytes());
-    out.extend_from_slice(&index.block_record_stride.to_le_bytes());
+    out.extend_from_slice(&index.block_target_bytes.to_le_bytes());
+    out.extend_from_slice(&index.block_max_records.to_le_bytes());
     out.push(index.bloom_k);
     write_bytes(&mut out, &index.bloom_bits)?;
 
@@ -158,10 +246,12 @@ pub(crate) fn decode_run_index(bytes: &[u8]) -> Result<RunIndexMeta> {
     let key_max_json = read_bytes(bytes, &mut cursor, "run index key_max")?;
     let record_count = read_u64(bytes, &mut cursor, "run index record_count")?;
     let payload_byte_size = read_u64(bytes, &mut cursor, "run index payload_byte_size")?;
-    let block_record_stride = read_u32(bytes, &mut cursor, "run index block_record_stride")?;
+    let block_target_bytes = read_u32(bytes, &mut cursor, "run index block_target_bytes")?;
+    let block_max_records = read_u32(bytes, &mut cursor, "run index block_max_records")?;
     let bloom_k = read_u8(bytes, &mut cursor, "run index bloom_k")?;
     let bloom_bits = read_bytes(bytes, &mut cursor, "run index bloom_bits")?;
     let block_count = read_u32(bytes, &mut cursor, "run index block_count")?;
+
     let mut blocks = Vec::with_capacity(block_count as usize);
     let mut prev_end = 0_u64;
     for _ in 0..block_count {
@@ -196,9 +286,24 @@ pub(crate) fn decode_run_index(bytes: &[u8]) -> Result<RunIndexMeta> {
     if cursor != bytes.len() {
         return Err(Error::Corrupt("run index has trailing bytes".into()));
     }
+    if block_target_bytes == 0 {
+        return Err(Error::Corrupt(
+            "run index block_target_bytes must be > 0".into(),
+        ));
+    }
+    if block_max_records == 0 {
+        return Err(Error::Corrupt(
+            "run index block_max_records must be > 0".into(),
+        ));
+    }
     if (record_count == 0) != blocks.is_empty() {
         return Err(Error::Corrupt(
             "run index record_count does not match block list".into(),
+        ));
+    }
+    if record_count > 0 && (key_min_json.is_empty() || key_max_json.is_empty()) {
+        return Err(Error::Corrupt(
+            "run index key range missing for non-empty run".into(),
         ));
     }
 
@@ -207,7 +312,8 @@ pub(crate) fn decode_run_index(bytes: &[u8]) -> Result<RunIndexMeta> {
         key_max_json,
         record_count,
         payload_byte_size,
-        block_record_stride,
+        block_target_bytes,
+        block_max_records,
         bloom_k,
         bloom_bits,
         blocks,
@@ -219,26 +325,19 @@ where
     K: DeserializeOwned,
     V: DeserializeOwned,
 {
-    let mut cursor = 0;
-    ensure_magic(bytes, &mut cursor, RUN_BLOCK_MAGIC, "run block")?;
-    let version = read_u8(bytes, &mut cursor, "run block version")?;
-    if version != RUN_FORMAT_VERSION {
-        return Err(Error::Corrupt(format!(
-            "unsupported run block version: {version}"
-        )));
-    }
+    let layout = parse_run_block_layout(bytes)?;
+    let mut out = Vec::with_capacity(layout.entry_count);
 
-    let record_count = read_u32(bytes, &mut cursor, "run block record_count")?;
-    let mut out = Vec::with_capacity(record_count as usize);
-    for _ in 0..record_count {
-        let key_json = read_bytes(bytes, &mut cursor, "run block key")?;
-        let key = serde_json::from_slice(&key_json)
+    for idx in 0..layout.entry_count {
+        let meta = read_block_entry_meta(bytes, &layout, idx)?;
+        let key_json = block_key_slice(bytes, &layout, &meta)?;
+        let key = serde_json::from_slice(key_json)
             .map_err(|e| Error::Corrupt(format!("run key decode: {e}")))?;
-        let op_tag = read_u8(bytes, &mut cursor, "run block op")?;
-        match op_tag {
+
+        match meta.op_tag {
             OP_PUT_TAG => {
-                let value_json = read_bytes(bytes, &mut cursor, "run block value")?;
-                let value = serde_json::from_slice(&value_json)
+                let value_json = block_value_slice(bytes, &layout, &meta)?;
+                let value = serde_json::from_slice(value_json)
                     .map_err(|e| Error::Corrupt(format!("run value decode: {e}")))?;
                 out.push(Record {
                     key,
@@ -253,16 +352,66 @@ where
             }),
             _ => {
                 return Err(Error::Corrupt(format!(
-                    "run block has unknown op tag: {op_tag}"
+                    "run block has unknown op tag: {}",
+                    meta.op_tag
                 )));
             }
         }
     }
 
-    if cursor != bytes.len() {
-        return Err(Error::Corrupt("run block has trailing bytes".into()));
-    }
     Ok(out)
+}
+
+pub(crate) fn lookup_key_in_run_block<K, V>(bytes: &[u8], key: &K) -> Result<Option<Option<V>>>
+where
+    K: Ord + DeserializeOwned,
+    V: DeserializeOwned,
+{
+    let layout = parse_run_block_layout(bytes)?;
+    if layout.entry_count == 0 {
+        return Ok(None);
+    }
+
+    let mut lo = 0usize;
+    let mut hi = layout.entry_count;
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        let meta = read_block_entry_meta(bytes, &layout, mid)?;
+        let mid_key_json = block_key_slice(bytes, &layout, &meta)?;
+        let mid_key: K = serde_json::from_slice(mid_key_json)
+            .map_err(|e| Error::Corrupt(format!("run key decode: {e}")))?;
+        if &mid_key < key {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+
+    if lo >= layout.entry_count {
+        return Ok(None);
+    }
+
+    let meta = read_block_entry_meta(bytes, &layout, lo)?;
+    let candidate_key_json = block_key_slice(bytes, &layout, &meta)?;
+    let candidate_key: K = serde_json::from_slice(candidate_key_json)
+        .map_err(|e| Error::Corrupt(format!("run key decode: {e}")))?;
+    if &candidate_key != key {
+        return Ok(None);
+    }
+
+    match meta.op_tag {
+        OP_DEL_TAG => Ok(Some(None)),
+        OP_PUT_TAG => {
+            let value_json = block_value_slice(bytes, &layout, &meta)?;
+            let value = serde_json::from_slice(value_json)
+                .map_err(|e| Error::Corrupt(format!("run value decode: {e}")))?;
+            Ok(Some(Some(value)))
+        }
+        _ => Err(Error::Corrupt(format!(
+            "run block has unknown op tag: {}",
+            meta.op_tag
+        ))),
+    }
 }
 
 pub(crate) fn run_block_window_for_key_with_bloom<K>(
@@ -352,51 +501,239 @@ where
     Ok(true)
 }
 
-fn encode_run_block<K, V>(records: &[Record<K, V>]) -> Result<Vec<u8>>
-where
-    K: Serialize,
-    V: Serialize,
-{
-    let mut out = Vec::new();
+fn estimate_run_block_size(
+    entry_count: usize,
+    key_bytes: usize,
+    value_bytes: usize,
+) -> Result<usize> {
+    let metas = entry_count
+        .checked_mul(RUN_BLOCK_ENTRY_META_LEN)
+        .ok_or_else(|| Error::Corrupt("run block size overflow".into()))?;
+    RUN_BLOCK_HEADER_LEN
+        .checked_add(metas)
+        .and_then(|v| v.checked_add(key_bytes))
+        .and_then(|v| v.checked_add(value_bytes))
+        .ok_or_else(|| Error::Corrupt("run block size overflow".into()))
+}
+
+fn encode_run_block(entries: &[EncodedEntry]) -> Result<Vec<u8>> {
+    let entry_count = entries.len();
+    let mut key_bytes = Vec::new();
+    let mut value_bytes = Vec::new();
+    let mut metas = Vec::with_capacity(entry_count);
+
+    for entry in entries {
+        let key_offset = u32::try_from(key_bytes.len())
+            .map_err(|_| Error::Corrupt("run block key section too large".into()))?;
+        let key_len = u32::try_from(entry.key_json.len())
+            .map_err(|_| Error::Corrupt("run block key too large".into()))?;
+        key_bytes.extend_from_slice(&entry.key_json);
+
+        let (value_offset, value_len) = if entry.op_tag == OP_PUT_TAG {
+            let value_json = entry
+                .value_json
+                .as_ref()
+                .ok_or_else(|| Error::Corrupt("put record missing value".into()))?;
+            let value_offset = u32::try_from(value_bytes.len())
+                .map_err(|_| Error::Corrupt("run block value section too large".into()))?;
+            let value_len = u32::try_from(value_json.len())
+                .map_err(|_| Error::Corrupt("run block value too large".into()))?;
+            value_bytes.extend_from_slice(value_json);
+            (value_offset, value_len)
+        } else {
+            (0, 0)
+        };
+
+        metas.push(RunBlockEntryMeta {
+            key_offset,
+            key_len,
+            value_offset,
+            value_len,
+            op_tag: entry.op_tag,
+        });
+    }
+
+    let mut out = Vec::with_capacity(estimate_run_block_size(
+        entry_count,
+        key_bytes.len(),
+        value_bytes.len(),
+    )?);
     out.extend_from_slice(RUN_BLOCK_MAGIC);
     out.push(RUN_FORMAT_VERSION);
-    let record_count = u32::try_from(records.len())
-        .map_err(|_| Error::Corrupt("run block has too many records".into()))?;
-    out.extend_from_slice(&record_count.to_le_bytes());
-    for record in records {
-        let key_json = serde_json::to_vec(&record.key)
-            .map_err(|e| Error::Corrupt(format!("run key encode: {e}")))?;
-        write_bytes(&mut out, &key_json)?;
+    out.extend_from_slice(
+        &u32::try_from(entry_count)
+            .map_err(|_| Error::Corrupt("run block has too many records".into()))?
+            .to_le_bytes(),
+    );
+    out.extend_from_slice(
+        &u32::try_from(key_bytes.len())
+            .map_err(|_| Error::Corrupt("run block key section too large".into()))?
+            .to_le_bytes(),
+    );
+    out.extend_from_slice(
+        &u32::try_from(value_bytes.len())
+            .map_err(|_| Error::Corrupt("run block value section too large".into()))?
+            .to_le_bytes(),
+    );
 
-        match record.op {
-            Op::Put => {
-                out.push(OP_PUT_TAG);
-                let value = record
-                    .value
-                    .as_ref()
-                    .ok_or_else(|| Error::Corrupt("put record missing value".into()))?;
-                let value_json = serde_json::to_vec(value)
-                    .map_err(|e| Error::Corrupt(format!("run value encode: {e}")))?;
-                write_bytes(&mut out, &value_json)?;
-            }
-            Op::Del => {
-                out.push(OP_DEL_TAG);
-            }
-        }
+    for meta in metas {
+        out.extend_from_slice(&meta.key_offset.to_le_bytes());
+        out.extend_from_slice(&meta.key_len.to_le_bytes());
+        out.extend_from_slice(&meta.value_offset.to_le_bytes());
+        out.extend_from_slice(&meta.value_len.to_le_bytes());
+        out.push(meta.op_tag);
     }
+    out.extend_from_slice(&key_bytes);
+    out.extend_from_slice(&value_bytes);
     Ok(out)
 }
 
-fn build_bloom<K, V>(records: &[Record<K, V>]) -> Result<(u8, Vec<u8>)>
-where
-    K: Serialize,
-    V: Serialize,
-{
-    if records.is_empty() {
-        return Ok((0, Vec::new()));
+fn parse_run_block_layout(bytes: &[u8]) -> Result<RunBlockLayout> {
+    let mut cursor = 0;
+    ensure_magic(bytes, &mut cursor, RUN_BLOCK_MAGIC, "run block")?;
+    let version = read_u8(bytes, &mut cursor, "run block version")?;
+    if version != RUN_FORMAT_VERSION {
+        return Err(Error::Corrupt(format!(
+            "unsupported run block version: {version}"
+        )));
     }
 
-    let target_bits = records
+    let entry_count = read_u32(bytes, &mut cursor, "run block record_count")? as usize;
+    let key_len = read_u32(bytes, &mut cursor, "run block key_section_len")? as usize;
+    let value_len = read_u32(bytes, &mut cursor, "run block value_section_len")? as usize;
+
+    let entries_start = cursor;
+    let entries_len = entry_count
+        .checked_mul(RUN_BLOCK_ENTRY_META_LEN)
+        .ok_or_else(|| Error::Corrupt("run block entry meta overflow".into()))?;
+    let key_start = entries_start
+        .checked_add(entries_len)
+        .ok_or_else(|| Error::Corrupt("run block section overflow".into()))?;
+    let value_start = key_start
+        .checked_add(key_len)
+        .ok_or_else(|| Error::Corrupt("run block section overflow".into()))?;
+    let end = value_start
+        .checked_add(value_len)
+        .ok_or_else(|| Error::Corrupt("run block section overflow".into()))?;
+
+    if end != bytes.len() {
+        return Err(Error::Corrupt("run block has trailing bytes".into()));
+    }
+
+    Ok(RunBlockLayout {
+        entry_count,
+        entries_start,
+        key_start,
+        key_len,
+        value_start,
+        value_len,
+    })
+}
+
+fn read_block_entry_meta(
+    bytes: &[u8],
+    layout: &RunBlockLayout,
+    idx: usize,
+) -> Result<RunBlockEntryMeta> {
+    if idx >= layout.entry_count {
+        return Err(Error::Corrupt("run block entry index out of bounds".into()));
+    }
+
+    let start = layout
+        .entries_start
+        .checked_add(
+            idx.checked_mul(RUN_BLOCK_ENTRY_META_LEN)
+                .ok_or_else(|| Error::Corrupt("run block entry meta overflow".into()))?,
+        )
+        .ok_or_else(|| Error::Corrupt("run block entry meta overflow".into()))?;
+
+    let key_offset = read_u32_at(bytes, start, "run block key_offset")?;
+    let key_len = read_u32_at(bytes, start + 4, "run block key_len")?;
+    let value_offset = read_u32_at(bytes, start + 8, "run block value_offset")?;
+    let value_len = read_u32_at(bytes, start + 12, "run block value_len")?;
+    let op_tag = *bytes
+        .get(start + 16)
+        .ok_or_else(|| Error::Corrupt("unexpected EOF while decoding run block op".into()))?;
+
+    let key_end = (key_offset as usize)
+        .checked_add(key_len as usize)
+        .ok_or_else(|| Error::Corrupt("run block key range overflow".into()))?;
+    if key_end > layout.key_len {
+        return Err(Error::Corrupt("run block key range out of bounds".into()));
+    }
+
+    match op_tag {
+        OP_PUT_TAG => {
+            let value_end = (value_offset as usize)
+                .checked_add(value_len as usize)
+                .ok_or_else(|| Error::Corrupt("run block value range overflow".into()))?;
+            if value_end > layout.value_len {
+                return Err(Error::Corrupt("run block value range out of bounds".into()));
+            }
+        }
+        OP_DEL_TAG => {
+            if value_len != 0 {
+                return Err(Error::Corrupt(
+                    "run block tombstone has non-empty value".into(),
+                ));
+            }
+        }
+        _ => {
+            return Err(Error::Corrupt(format!(
+                "run block has unknown op tag: {op_tag}"
+            )));
+        }
+    }
+
+    Ok(RunBlockEntryMeta {
+        key_offset,
+        key_len,
+        value_offset,
+        value_len,
+        op_tag,
+    })
+}
+
+fn block_key_slice<'a>(
+    bytes: &'a [u8],
+    layout: &RunBlockLayout,
+    meta: &RunBlockEntryMeta,
+) -> Result<&'a [u8]> {
+    let start = layout
+        .key_start
+        .checked_add(meta.key_offset as usize)
+        .ok_or_else(|| Error::Corrupt("run block key offset overflow".into()))?;
+    let end = start
+        .checked_add(meta.key_len as usize)
+        .ok_or_else(|| Error::Corrupt("run block key offset overflow".into()))?;
+    bytes
+        .get(start..end)
+        .ok_or_else(|| Error::Corrupt("run block key range out of bounds".into()))
+}
+
+fn block_value_slice<'a>(
+    bytes: &'a [u8],
+    layout: &RunBlockLayout,
+    meta: &RunBlockEntryMeta,
+) -> Result<&'a [u8]> {
+    let start = layout
+        .value_start
+        .checked_add(meta.value_offset as usize)
+        .ok_or_else(|| Error::Corrupt("run block value offset overflow".into()))?;
+    let end = start
+        .checked_add(meta.value_len as usize)
+        .ok_or_else(|| Error::Corrupt("run block value offset overflow".into()))?;
+    bytes
+        .get(start..end)
+        .ok_or_else(|| Error::Corrupt("run block value range out of bounds".into()))
+}
+
+fn build_bloom(entries: &[EncodedEntry]) -> (u8, Vec<u8>) {
+    if entries.is_empty() {
+        return (0, Vec::new());
+    }
+
+    let target_bits = entries
         .len()
         .saturating_mul(BLOOM_BITS_PER_KEY)
         .max(BLOOM_MIN_BITS);
@@ -404,12 +741,10 @@ where
     let mut bits = vec![0_u8; bytes_len];
     let k = ((BLOOM_BITS_PER_KEY as f64 * std::f64::consts::LN_2).round() as u8).clamp(1, 15);
 
-    for record in records {
-        let key_json = serde_json::to_vec(&record.key)
-            .map_err(|e| Error::Corrupt(format!("run key encode: {e}")))?;
-        bloom_insert(&mut bits, k, &key_json);
+    for entry in entries {
+        bloom_insert(&mut bits, k, &entry.key_json);
     }
-    Ok((k, bits))
+    (k, bits)
 }
 
 fn bloom_insert(bits: &mut [u8], k: u8, key_json: &[u8]) {
@@ -490,6 +825,18 @@ fn read_u64(bytes: &[u8], cursor: &mut usize, field: &str) -> Result<u64> {
     Ok(u64::from_le_bytes(buf))
 }
 
+fn read_u32_at(bytes: &[u8], start: usize, field: &str) -> Result<u32> {
+    let end = start
+        .checked_add(4)
+        .ok_or_else(|| Error::Corrupt(format!("{field} overflow")))?;
+    let raw = bytes
+        .get(start..end)
+        .ok_or_else(|| Error::Corrupt(format!("unexpected EOF while decoding {field}")))?;
+    let mut buf = [0_u8; 4];
+    buf.copy_from_slice(raw);
+    Ok(u32::from_le_bytes(buf))
+}
+
 fn read_bytes(bytes: &[u8], cursor: &mut usize, field: &str) -> Result<Vec<u8>> {
     let len = read_u32(bytes, cursor, field)? as usize;
     let raw = take(bytes, cursor, len, field)?;
@@ -534,20 +881,17 @@ mod tests {
             },
         ];
 
-        let encoded = encode_run(&records, 2).expect("encode run");
+        let encoded = encode_run(&records, RunBuildOptions::new(128, 2)).expect("encode run");
         let index_payload = encode_run_index(&encoded.index).expect("encode run index");
         let decoded_index = decode_run_index(&index_payload).expect("decode run index");
+
         assert_eq!(decoded_index.blocks.len(), 2);
+        assert_eq!(decoded_index.block_target_bytes, 128);
+        assert_eq!(decoded_index.block_max_records, 2);
         assert!(decoded_index.bloom_k > 0);
         assert!(!decoded_index.bloom_bits.is_empty());
         assert!(
             run_might_contain_key(&decoded_index, &"a".to_string()).expect("bloom check for key a")
-        );
-        assert!(
-            run_might_contain_key(&decoded_index, &"b".to_string()).expect("bloom check for key b")
-        );
-        assert!(
-            run_might_contain_key(&decoded_index, &"c".to_string()).expect("bloom check for key c")
         );
 
         let (offset, len) =
@@ -558,5 +902,38 @@ mod tests {
         let decoded_records = decode_run_block::<String, String>(block).expect("decode run block");
         assert_eq!(decoded_records.len(), 2);
         assert_eq!(decoded_records[1].op, Op::Del);
+
+        let looked_up =
+            lookup_key_in_run_block::<String, String>(block, &"b".to_string()).expect("lookup");
+        assert_eq!(looked_up, Some(None));
+    }
+
+    #[test]
+    fn run_block_lookup_skips_value_deserialize_for_miss() {
+        let records = vec![Record {
+            key: "a".to_string(),
+            op: Op::Put,
+            value: Some("v1".to_string()),
+        }];
+
+        let encoded = encode_run(&records, RunBuildOptions::new(64, 4)).expect("encode run");
+        let index_payload = encode_run_index(&encoded.index).expect("encode run index");
+        let decoded_index = decode_run_index(&index_payload).expect("decode run index");
+        let (offset, len) =
+            run_block_window_for_key_with_bloom::<String>(&decoded_index, &"a".to_string(), true)
+                .expect("window")
+                .expect("window exists");
+
+        let mut corrupted = encoded.payload[offset as usize..offset as usize + len].to_vec();
+        let last = corrupted.len() - 1;
+        corrupted[last] = b'{';
+
+        let miss = lookup_key_in_run_block::<String, String>(&corrupted, &"z".to_string())
+            .expect("miss lookup");
+        assert_eq!(miss, None);
+
+        let hit_err = lookup_key_in_run_block::<String, String>(&corrupted, &"a".to_string())
+            .expect_err("hit should fail due to corrupted value payload");
+        assert!(format!("{hit_err}").contains("run value decode"));
     }
 }

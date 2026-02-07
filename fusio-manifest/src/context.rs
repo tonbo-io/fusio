@@ -34,6 +34,10 @@ where
     pub sparse_stride: usize,
     /// Whether run-level bloom checks are enabled on point-get paths.
     pub run_bloom_enabled: bool,
+    /// Target bytes per run data block.
+    pub run_block_target_bytes: usize,
+    /// Max records per run data block.
+    pub run_block_max_records: usize,
 }
 
 impl<E> ManifestContext<DefaultRetention, E>
@@ -51,6 +55,8 @@ where
             max_level: 7,
             sparse_stride: 64,
             run_bloom_enabled: true,
+            run_block_target_bytes: 256 * 1024,
+            run_block_max_records: 4096,
         }
     }
 }
@@ -116,6 +122,8 @@ where
             max_level: self.max_level,
             sparse_stride: self.sparse_stride,
             run_bloom_enabled: self.run_bloom_enabled,
+            run_block_target_bytes: self.run_block_target_bytes,
+            run_block_max_records: self.run_block_max_records,
         }
     }
 
@@ -188,6 +196,28 @@ where
     /// Mutably enable/disable run-level bloom checks in point-get path.
     pub fn set_run_bloom_enabled(&mut self, enabled: bool) {
         self.run_bloom_enabled = enabled;
+    }
+
+    /// Configure target bytes per run data block (minimum 1).
+    pub fn with_run_block_target_bytes(mut self, bytes: usize) -> Self {
+        self.run_block_target_bytes = bytes.max(1);
+        self
+    }
+
+    /// Mutably configure target bytes per run data block (minimum 1).
+    pub fn set_run_block_target_bytes(&mut self, bytes: usize) {
+        self.run_block_target_bytes = bytes.max(1);
+    }
+
+    /// Configure max records per run data block (minimum 1).
+    pub fn with_run_block_max_records(mut self, max_records: usize) -> Self {
+        self.run_block_max_records = max_records.max(1);
+        self
+    }
+
+    /// Mutably configure max records per run data block (minimum 1).
+    pub fn set_run_block_max_records(&mut self, max_records: usize) {
+        self.run_block_max_records = max_records.max(1);
     }
 }
 
