@@ -274,7 +274,7 @@ where
                     .await?;
                 let (res, _) = f.write_all(payload_owned).await;
                 res?;
-                f.commit().await?;
+                commit_or_ignore_local_unsupported(f.commit().await)?;
             }
             {
                 let meta_bytes = meta_bytes?;
@@ -290,7 +290,7 @@ where
                     .await?;
                 let (res, _meta_bytes) = f.write_all(meta_bytes).await;
                 res?;
-                f.commit().await?;
+                commit_or_ignore_local_unsupported(f.commit().await)?;
             }
             Ok(id)
         }
@@ -365,7 +365,7 @@ where
                 .await?;
             let (res, _) = file.write_all(payload_owned).await;
             res?;
-            file.commit().await?;
+            commit_or_ignore_local_unsupported(file.commit().await)?;
             Ok(())
         }
     }
@@ -430,7 +430,7 @@ where
             };
             match read_slice(preferred_key, self.fs.clone()).await {
                 Ok(bytes) => Ok((meta, bytes)),
-                Err(Error::Io(FsError::Io(err))) if err.kind() == ErrorKind::NotFound => {
+                Err(Error::Io(err)) if is_not_found_fs_error(&err) => {
                     let fallback_key = if meta.format == "application/json" {
                         data_key_bin
                     } else {
@@ -475,7 +475,7 @@ where
 
             match read_slice(data_key_json, self.fs.clone()).await {
                 Ok(bytes) => Ok(bytes),
-                Err(Error::Io(FsError::Io(err))) if err.kind() == ErrorKind::NotFound => {
+                Err(Error::Io(err)) if is_not_found_fs_error(&err) => {
                     read_slice(data_key_bin, self.fs.clone()).await
                 }
                 Err(e) => Err(e),
@@ -562,5 +562,24 @@ where
         let meta: CheckpointMeta = serde_json::from_slice(&meta_bytes)
             .map_err(|e| Error::Corrupt(format!("ckpt meta decode: {e}")))?;
         Ok(meta)
+    }
+}
+
+fn commit_or_ignore_local_unsupported(result: std::result::Result<(), FsError>) -> Result<()> {
+    match result {
+        Ok(()) => Ok(()),
+        Err(FsError::Unsupported { .. }) => Ok(()),
+        Err(other) => Err(other.into()),
+    }
+}
+
+fn is_not_found_fs_error(err: &FsError) -> bool {
+    match err {
+        FsError::Io(io) => io.kind() == ErrorKind::NotFound,
+        FsError::Path(source) => source
+            .downcast_ref::<std::io::Error>()
+            .map(|io| io.kind() == ErrorKind::NotFound)
+            .unwrap_or(false),
+        _ => false,
     }
 }

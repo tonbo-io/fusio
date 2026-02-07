@@ -1,4 +1,9 @@
-use std::{collections::HashMap, fmt, io::ErrorKind, pin::Pin};
+use std::{
+    collections::{BinaryHeap, HashMap, HashSet},
+    fmt,
+    io::ErrorKind,
+    pin::Pin,
+};
 
 #[cfg(all(feature = "web", target_arch = "wasm32"))]
 use fusio::impls::disk::OPFS;
@@ -54,7 +59,8 @@ pub trait SegmentIo: MaybeSend + MaybeSync {
     /// Fetch segment metadata if available without reading the payload.
     fn load_meta(&self, id: &SegmentId) -> impl MaybeSendFuture<Output = Result<SegmentMeta>> + '_;
 
-    /// List segment ids starting from a minimum sequence number (inclusive), up to `limit` items.
+    /// List segment ids starting from `from_seq` (inclusive), returning the smallest `limit`
+    /// sequence numbers in ascending order.
     fn list_from(
         &self,
         from_seq: u64,
@@ -242,7 +248,14 @@ where
         limit: usize,
     ) -> impl MaybeSendFuture<Output = Result<Vec<SegmentId>>> + '_ {
         async move {
-            let mut out = Vec::new();
+            if limit == 0 {
+                return Ok(Vec::new());
+            }
+
+            // Keep only the smallest `limit` seq values >= `from_seq`, independent of backend
+            // listing order. This preserves correctness for paged scans and compaction cursors.
+            let mut selected = BinaryHeap::<u64>::with_capacity(limit);
+            let mut dedup = HashSet::<u64>::with_capacity(limit);
             let prefix_path = if self.prefix.is_empty() {
                 Path::default()
             } else {
@@ -255,14 +268,33 @@ where
                 if let Some(filename) = meta.path.filename() {
                     if let Some(seq) = SegmentStoreImpl::<FS>::parse_seq(filename) {
                         if seq >= from_seq {
-                            out.push(SegmentId { seq });
+                            if dedup.contains(&seq) {
+                                continue;
+                            }
+                            if selected.len() < limit {
+                                selected.push(seq);
+                                dedup.insert(seq);
+                                continue;
+                            }
+                            if let Some(&largest) = selected.peek() {
+                                if seq < largest {
+                                    if let Some(evicted) = selected.pop() {
+                                        dedup.remove(&evicted);
+                                    }
+                                    selected.push(seq);
+                                    dedup.insert(seq);
+                                }
+                            }
                         }
                     }
                 }
-                if out.len() >= limit {
-                    break;
-                }
             }
+
+            let mut out: Vec<SegmentId> = selected
+                .into_vec()
+                .into_iter()
+                .map(|seq| SegmentId { seq })
+                .collect();
             out.sort_by_key(|s| s.seq);
             Ok(out)
         }
@@ -503,5 +535,47 @@ mod tests {
         assert_eq!(meta.txn_id, 7);
         assert_eq!(meta.key_min_json.as_deref(), Some("\"a\""));
         assert_eq!(meta.key_max_json.as_deref(), Some("\"z\""));
+    }
+
+    #[tokio::test]
+    async fn segment_store_localfs_list_from_returns_lowest_window() {
+        let tmp = TempDir::new().expect("create temp dir");
+        let segments_root = tmp.path().join("segments");
+        std::fs::create_dir_all(&segments_root).expect("create segments dir");
+
+        let prefix_path = fusio::path::Path::from_absolute_path(&segments_root)
+            .expect("convert absolute path to fusio path");
+        let prefix: String = prefix_path.into();
+        let store = SegmentStoreImpl::new(LocalFs {}, prefix);
+
+        for seq in 1_u64..=320_u64 {
+            let payload = format!("{{\"txn_id\":{seq},\"records\":[]}}");
+            store
+                .put_next(seq, seq, payload.as_bytes(), "application/json")
+                .await
+                .expect("write segment");
+        }
+
+        let first_page = store.list_from(1, 256).await.expect("list first page");
+        assert_eq!(first_page.len(), 256);
+        assert_eq!(first_page.first().map(|id| id.seq), Some(1));
+        assert_eq!(first_page.last().map(|id| id.seq), Some(256));
+        for window in first_page.windows(2) {
+            assert!(
+                window[0].seq < window[1].seq,
+                "first page should be ascending"
+            );
+        }
+
+        let second_page = store.list_from(257, 256).await.expect("list second page");
+        assert_eq!(second_page.len(), 64);
+        assert_eq!(second_page.first().map(|id| id.seq), Some(257));
+        assert_eq!(second_page.last().map(|id| id.seq), Some(320));
+        for window in second_page.windows(2) {
+            assert!(
+                window[0].seq < window[1].seq,
+                "second page should be ascending"
+            );
+        }
     }
 }
