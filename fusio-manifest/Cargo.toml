@@ -39,6 +39,7 @@ tracing = "0.1"
 futures-executor = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+criterion = { workspace = true }
 loom = "0.7"
 proptest = "1"
 rand = { workspace = true }
@@ -63,6 +64,11 @@ required-features = ["tokio"]
 
 [[example]]
 name = "step4_lease_keeper"
+required-features = ["tokio"]
+
+[[bench]]
+harness = false
+name = "point_get_local"
 required-features = ["tokio"]
 
 [package.metadata.docs.rs]

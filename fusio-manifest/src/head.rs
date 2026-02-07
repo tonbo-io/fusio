@@ -21,6 +21,20 @@ pub enum PutCondition {
     IfMatch(HeadTag),
 }
 
+/// Merge-tree state persisted in HEAD.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct MergeTreeState {
+    /// Run ids for levels L1..=Lmax. `None` means level is empty.
+    #[serde(default)]
+    pub levels: Vec<Option<CheckpointId>>,
+    /// Highest segment sequence already compacted into the tree.
+    #[serde(default)]
+    pub compacted_segment_seq: Option<u64>,
+    /// Monotonic run identifier source used for checkpoint ids.
+    #[serde(default)]
+    pub next_run_id: u64,
+}
+
 /// JSON-serializable HEAD structure per RFC.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct HeadJson {
@@ -28,6 +42,8 @@ pub struct HeadJson {
     pub checkpoint_id: Option<CheckpointId>,
     pub last_segment_seq: Option<u64>,
     pub last_txn_id: u64,
+    #[serde(default)]
+    pub merge_tree: MergeTreeState,
 }
 
 /// Backend abstraction for publishing and fetching HEAD with conditional semantics.

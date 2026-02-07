@@ -25,7 +25,7 @@ pub type MemManifest<K, V> = Manifest<
 /// Construct an in-memory manifest with a custom context.
 pub fn new_manifest_with_context<K, V, C>(opts: C) -> MemManifest<K, V>
 where
-    K: PartialOrd + Eq + Hash + Serialize + DeserializeOwned,
+    K: Ord + Hash + Serialize + DeserializeOwned,
     V: Serialize + DeserializeOwned,
     C: Into<Arc<ManifestContext<DefaultExecutor>>>,
 {
