@@ -1,5 +1,5 @@
 use std::{
-    path::Path,
+    path::{Path, PathBuf},
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc,
@@ -16,7 +16,7 @@ use fusio_manifest::{
     retention::DefaultRetention,
     snapshot::Snapshot,
     types::{Result, SegmentId},
-    BackoffPolicy, CheckpointId, CheckpointMeta, CheckpointStore, CheckpointStoreImpl,
+    BackoffPolicy, CacheLayer, CheckpointId, CheckpointMeta, CheckpointStore, CheckpointStoreImpl,
     HeadStoreImpl, LeaseStoreImpl, SegmentIo, SegmentMeta, SegmentStoreImpl,
 };
 use rand::{rngs::StdRng, Rng, SeedableRng};
@@ -323,6 +323,9 @@ struct BenchConfig {
     sparse_stride: usize,
     multi_level_epochs: usize,
     multi_level_keys_per_epoch: usize,
+    cache_enabled: bool,
+    cache_bytes: u64,
+    bloom_enabled: bool,
 }
 
 impl BenchConfig {
@@ -340,6 +343,9 @@ impl BenchConfig {
                 1024,
             )
             .max(1),
+            cache_enabled: env_bool("FUSIO_MANIFEST_BENCH_ENABLE_CACHE", false),
+            cache_bytes: env_usize("FUSIO_MANIFEST_BENCH_CACHE_BYTES", 64 * 1024 * 1024) as u64,
+            bloom_enabled: env_bool("FUSIO_MANIFEST_BENCH_ENABLE_BLOOM", true),
         }
     }
 }
@@ -367,6 +373,18 @@ fn env_usize(name: &str, default: usize) -> usize {
     std::env::var(name)
         .ok()
         .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(default)
+}
+
+fn env_bool(name: &str, default: bool) -> bool {
+    std::env::var(name)
+        .ok()
+        .map(|raw| {
+            matches!(
+                raw.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
         .unwrap_or(default)
 }
 
@@ -413,6 +431,37 @@ fn build_miss_queries(query_count: usize) -> Vec<String> {
         .collect()
 }
 
+fn build_in_range_miss_queries_for_base(
+    key_count: usize,
+    query_count: usize,
+    seed: u64,
+) -> Vec<String> {
+    let mut rng = StdRng::seed_from_u64(seed);
+    let upper = key_count.saturating_sub(1).max(1);
+    (0..query_count)
+        .map(|_| {
+            let idx = rng.gen_range(0..upper);
+            format!("{}~", base_key(idx))
+        })
+        .collect()
+}
+
+fn build_in_range_miss_queries_for_multilevel(
+    epoch: usize,
+    keys_per_epoch: usize,
+    query_count: usize,
+    seed: u64,
+) -> Vec<String> {
+    let mut rng = StdRng::seed_from_u64(seed);
+    let upper = keys_per_epoch.saturating_sub(1).max(1);
+    (0..query_count)
+        .map(|_| {
+            let idx = rng.gen_range(0..upper);
+            format!("{}~", multi_level_key(epoch, idx))
+        })
+        .collect()
+}
+
 fn percentile_us(sorted_nanos: &[u64], percentile: f64) -> f64 {
     if sorted_nanos.is_empty() {
         return 0.0;
@@ -447,9 +496,19 @@ fn build_manifest(root: &Path, cfg: &BenchConfig) -> (Arc<BenchManifest>, IoCoun
     let counters = IoCounters::default();
     let segment = CountingSegmentStore::new(segment, counters.clone());
     let checkpoint = CountingCheckpointStore::new(checkpoint, counters.clone());
-    let context = Arc::new(
-        ManifestContext::new(TokioExecutor::default()).with_sparse_stride(cfg.sparse_stride),
-    );
+    let mut context = ManifestContext::new(TokioExecutor::default())
+        .with_sparse_stride(cfg.sparse_stride)
+        .with_run_bloom_enabled(cfg.bloom_enabled);
+    #[cfg(feature = "cache-moka")]
+    if cfg.cache_enabled {
+        context = context.with_cache(Some(
+            CacheLayer::Memory {
+                max_bytes: cfg.cache_bytes,
+            }
+            .into_cache(),
+        ));
+    }
+    let context = Arc::new(context);
     let manifest = Manifest::new_with_context(head, segment, checkpoint, lease, context);
     (Arc::new(manifest), counters)
 }
@@ -581,6 +640,29 @@ async fn prepare_l1_case(cfg: &BenchConfig, name: &'static str, hit: bool) -> Re
     })
 }
 
+async fn prepare_l1_in_range_miss_case(
+    cfg: &BenchConfig,
+    name: &'static str,
+) -> Result<PreparedCase> {
+    let tempdir = TempDir::new().expect("create temp dir");
+    let root = tempdir.path().join(name);
+    let (manifest, counters) = build_manifest(&root, cfg);
+    let value = value_blob(cfg.value_bytes);
+    write_base_segments(manifest.as_ref(), cfg, &value).await?;
+    manifest.compactor().compact_once().await?;
+    let snapshot = manifest.snapshot().await?;
+    let queries = build_in_range_miss_queries_for_base(cfg.key_count, cfg.query_count, 53);
+    Ok(PreparedCase {
+        name,
+        manifest,
+        snapshot,
+        queries: Arc::new(queries),
+        expected_hits: 0,
+        counters,
+        _tempdir: tempdir,
+    })
+}
+
 async fn prepare_multi_level_case(
     cfg: &BenchConfig,
     name: &'static str,
@@ -608,11 +690,40 @@ async fn prepare_multi_level_case(
     })
 }
 
+async fn prepare_multi_level_in_range_miss_case(
+    cfg: &BenchConfig,
+    name: &'static str,
+) -> Result<PreparedCase> {
+    let tempdir = TempDir::new().expect("create temp dir");
+    let root = tempdir.path().join(name);
+    let (manifest, counters) = build_manifest(&root, cfg);
+    let value = value_blob(cfg.value_bytes);
+    write_multi_level_segments(manifest.as_ref(), cfg, &value).await?;
+    let snapshot = manifest.snapshot().await?;
+    let queries = build_in_range_miss_queries_for_multilevel(
+        0,
+        cfg.multi_level_keys_per_epoch,
+        cfg.query_count,
+        59,
+    );
+    Ok(PreparedCase {
+        name,
+        manifest,
+        snapshot,
+        queries: Arc::new(queries),
+        expected_hits: 0,
+        counters,
+        _tempdir: tempdir,
+    })
+}
+
 fn point_get_local(c: &mut criterion::Criterion) {
     let cfg = BenchConfig::from_env();
+    #[cfg(feature = "cache-moka")]
     eprintln!(
         "[point_get_local] keys={} value_bytes={} segment_batch={} query_count={} prewarm={} \
-         sparse_stride={} multi_epochs={} multi_keys_per_epoch={}",
+         sparse_stride={} multi_epochs={} multi_keys_per_epoch={} cache_enabled={} cache_bytes={} \
+         bloom_enabled={}",
         cfg.key_count,
         cfg.value_bytes,
         cfg.segment_batch,
@@ -620,7 +731,26 @@ fn point_get_local(c: &mut criterion::Criterion) {
         cfg.prewarm_count,
         cfg.sparse_stride,
         cfg.multi_level_epochs,
-        cfg.multi_level_keys_per_epoch
+        cfg.multi_level_keys_per_epoch,
+        cfg.cache_enabled,
+        cfg.cache_bytes,
+        cfg.bloom_enabled
+    );
+    #[cfg(not(feature = "cache-moka"))]
+    eprintln!(
+        "[point_get_local] keys={} value_bytes={} segment_batch={} query_count={} prewarm={} \
+         sparse_stride={} multi_epochs={} multi_keys_per_epoch={} cache_enabled={} \
+         bloom_enabled={} (cache-moka disabled)",
+        cfg.key_count,
+        cfg.value_bytes,
+        cfg.segment_batch,
+        cfg.query_count,
+        cfg.prewarm_count,
+        cfg.sparse_stride,
+        cfg.multi_level_epochs,
+        cfg.multi_level_keys_per_epoch,
+        cfg.cache_enabled,
+        cfg.bloom_enabled
     );
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -633,10 +763,20 @@ fn point_get_local(c: &mut criterion::Criterion) {
         let l0_miss = prepare_l0_case(&cfg, "L0-Miss", false).await?;
         let l1_hit = prepare_l1_case(&cfg, "L1-Hit", true).await?;
         let l1_miss = prepare_l1_case(&cfg, "L1-Miss", false).await?;
+        let l1_in_range_miss = prepare_l1_in_range_miss_case(&cfg, "L1-InRangeMiss").await?;
         let ml_hit = prepare_multi_level_case(&cfg, "MultiLevel-Hit", true).await?;
         let ml_miss = prepare_multi_level_case(&cfg, "MultiLevel-Miss", false).await?;
+        let ml_in_range_miss =
+            prepare_multi_level_in_range_miss_case(&cfg, "MultiLevel-InRangeMiss").await?;
         Ok::<_, fusio_manifest::types::Error>(vec![
-            l0_hit, l0_miss, l1_hit, l1_miss, ml_hit, ml_miss,
+            l0_hit,
+            l0_miss,
+            l1_hit,
+            l1_miss,
+            l1_in_range_miss,
+            ml_hit,
+            ml_miss,
+            ml_in_range_miss,
         ])
     });
     let cases = cases.expect("prepare benchmark cases");
@@ -715,5 +855,21 @@ fn point_get_local(c: &mut criterion::Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, point_get_local);
+fn workspace_criterion_output_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .map(|workspace_root| workspace_root.join("target").join("criterion"))
+        .unwrap_or_else(|| PathBuf::from("target").join("criterion"))
+}
+
+fn criterion_config() -> criterion::Criterion {
+    let output_dir = workspace_criterion_output_dir();
+    criterion::Criterion::default().output_directory(&output_dir)
+}
+
+criterion_group! {
+    name = benches;
+    config = criterion_config();
+    targets = point_get_local
+}
 criterion_main!(benches);

@@ -32,6 +32,8 @@ where
     pub max_level: usize,
     /// Sparse index stride used when materializing merge-tree runs.
     pub sparse_stride: usize,
+    /// Whether run-level bloom checks are enabled on point-get paths.
+    pub run_bloom_enabled: bool,
 }
 
 impl<E> ManifestContext<DefaultRetention, E>
@@ -48,6 +50,7 @@ where
             cache_namespace: None,
             max_level: 7,
             sparse_stride: 64,
+            run_bloom_enabled: true,
         }
     }
 }
@@ -112,6 +115,7 @@ where
             cache_namespace: self.cache_namespace,
             max_level: self.max_level,
             sparse_stride: self.sparse_stride,
+            run_bloom_enabled: self.run_bloom_enabled,
         }
     }
 
@@ -173,6 +177,17 @@ where
     /// Mutably configure sparse index stride (minimum 1).
     pub fn set_sparse_stride(&mut self, sparse_stride: usize) {
         self.sparse_stride = sparse_stride.max(1);
+    }
+
+    /// Enable/disable run-level bloom checks in point-get path.
+    pub fn with_run_bloom_enabled(mut self, enabled: bool) -> Self {
+        self.run_bloom_enabled = enabled;
+        self
+    }
+
+    /// Mutably enable/disable run-level bloom checks in point-get path.
+    pub fn set_run_bloom_enabled(&mut self, enabled: bool) {
+        self.run_bloom_enabled = enabled;
     }
 }
 
