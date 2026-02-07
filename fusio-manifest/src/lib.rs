@@ -51,6 +51,7 @@ pub type DefaultExecutor = NoopExecutor;
 
 pub(crate) mod cache;
 pub mod retention;
+pub(crate) mod run_codec;
 pub(crate) mod segment;
 pub(crate) mod store;
 pub use cache::CacheLayer;

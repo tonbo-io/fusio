@@ -11,31 +11,23 @@ use std::{collections::BTreeMap, sync::Arc, time::SystemTime};
 
 use fusio::executor::{Executor, Timer};
 use futures_util::TryStreamExt;
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Serialize};
 
 use crate::{
     backoff::{classify_error, RetryClass},
-    checkpoint::{
-        CheckpointId, CheckpointMeta, CheckpointStore, RunSparseAnchorMeta, RunSparseIndexMeta,
-    },
+    checkpoint::{CheckpointId, CheckpointMeta, CheckpointStore},
     context::ManifestContext,
     gc::{GcPlan, GcPlanStore, GcTag, SegmentRange},
     head::{HeadJson, HeadStore, HeadTag, MergeTreeState, PutCondition},
     lease::LeaseStore,
     manifest::{Manifest, Op, Record, Segment},
     retention::{DefaultRetention, RetentionPolicy},
+    run_codec,
     segment::SegmentIo,
     store::Store,
     types::{Error, Result},
     DefaultExecutor,
 };
-
-const RUN_PAYLOAD_FORMAT: &str = "application/vnd.fusio-manifest.run+jsonl";
-
-#[derive(Debug, Serialize, Deserialize)]
-struct RunPayload<K, V> {
-    records: Vec<crate::manifest::Record<K, V>>,
-}
 
 /// Headless compactor that orchestrates compaction + GC using the same logic
 /// as `Manifest`, without requiring a long‑lived manifest instance owned by
@@ -88,57 +80,6 @@ where
 
     fn manifest(&self) -> Manifest<K, V, HS, SS, CS, LS, E, R> {
         Manifest::from_store(self.store.clone())
-    }
-
-    fn decode_run_records(bytes: &[u8]) -> Result<Vec<Record<K, V>>> {
-        #[derive(Deserialize)]
-        struct LegacyPayload<K, V> {
-            entries: Vec<(K, V)>,
-        }
-
-        if bytes.is_empty() {
-            return Ok(Vec::new());
-        }
-        if let Ok(payload) = serde_json::from_slice::<RunPayload<K, V>>(bytes) {
-            return Ok(payload.records);
-        }
-        if let Ok(payload) = serde_json::from_slice::<LegacyPayload<K, V>>(bytes) {
-            let mut records = payload
-                .entries
-                .into_iter()
-                .map(|(key, value)| Record {
-                    key,
-                    op: Op::Put,
-                    value: Some(value),
-                })
-                .collect::<Vec<_>>();
-            records.sort_by(|left, right| left.key.cmp(&right.key));
-            return Ok(records);
-        }
-        let mut ndjson_records = Vec::<Record<K, V>>::new();
-        let mut saw_non_empty = false;
-        for line in bytes.split(|byte| *byte == b'\n') {
-            if line.is_empty() {
-                continue;
-            }
-            saw_non_empty = true;
-            let record: Record<K, V> = match serde_json::from_slice(line) {
-                Ok(record) => record,
-                Err(_) => {
-                    return Err(Error::Corrupt(
-                        "ckpt decode: unsupported payload format".to_string(),
-                    ));
-                }
-            };
-            ndjson_records.push(record);
-        }
-        if saw_non_empty {
-            return Ok(ndjson_records);
-        }
-
-        Err(Error::Corrupt(
-            "ckpt decode: unsupported payload format".to_string(),
-        ))
     }
 
     fn merge_records(newer: Vec<Record<K, V>>, older: Vec<Record<K, V>>) -> Vec<Record<K, V>> {
@@ -215,76 +156,58 @@ where
         records: Vec<Record<K, V>>,
     ) -> Result<CheckpointId> {
         let key_count = records.len();
-        let stride = self.store.opts.sparse_stride.max(1);
-        let (payload, run_sparse_index) = if records.is_empty() {
-            (Vec::new(), None)
-        } else {
-            let mut payload = Vec::new();
-            let mut anchors = Vec::new();
-            let mut key_min_json = None::<String>;
-            let mut key_max_json = None::<String>;
-
-            for (idx, record) in records.iter().enumerate() {
-                let key_json = serde_json::to_string(&record.key)
-                    .map_err(|e| Error::Corrupt(format!("run index key encode: {e}")))?;
-                if idx == 0 {
-                    key_min_json = Some(key_json.clone());
-                }
-                key_max_json = Some(key_json.clone());
-                if idx % stride == 0 {
-                    anchors.push(RunSparseAnchorMeta {
-                        key_json,
-                        offset: payload.len() as u64,
-                    });
-                }
-                serde_json::to_writer(&mut payload, record)
-                    .map_err(|e| Error::Corrupt(format!("run record encode: {e}")))?;
-                payload.push(b'\n');
-            }
-
-            let index = RunSparseIndexMeta {
-                key_min_json: key_min_json.expect("non-empty records have min key"),
-                key_max_json: key_max_json.expect("non-empty records have max key"),
-                anchors,
-                stride,
-                record_count: records.len(),
-                payload_byte_size: payload.len(),
-            };
-            (payload, Some(index))
-        };
-        let index_payload = run_sparse_index
-            .as_ref()
-            .map(|index| {
-                serde_json::to_vec(index)
-                    .map_err(|e| Error::Corrupt(format!("run index encode: {e}")))
-            })
-            .transpose()?;
+        let encoded = run_codec::encode_run(&records, self.store.opts.sparse_stride.max(1))?;
+        let index_payload = run_codec::encode_run_index(&encoded.index)?;
         let meta = CheckpointMeta {
             lsn,
             key_count,
-            byte_size: payload.len(),
+            byte_size: encoded.payload.len(),
             created_at_ms: system_time_to_ms(self.store.opts.timer().system_time()),
-            format: RUN_PAYLOAD_FORMAT.into(),
+            format: run_codec::RUN_DATA_CONTENT_TYPE.into(),
             last_segment_seq_at_ckpt,
             run_sparse_index: None,
         };
         let id = self
             .store
             .checkpoint
-            .put_checkpoint(&meta, &payload, RUN_PAYLOAD_FORMAT)
+            .put_checkpoint(&meta, &encoded.payload, run_codec::RUN_DATA_CONTENT_TYPE)
             .await?;
-        if let Some(index_payload) = index_payload {
-            self.store
-                .checkpoint
-                .put_checkpoint_index(&id, &index_payload, "application/json")
-                .await?;
-        }
+        self.store
+            .checkpoint
+            .put_checkpoint_index(&id, &index_payload, run_codec::RUN_INDEX_CONTENT_TYPE)
+            .await?;
         Ok(id)
     }
 
     async fn load_run(&self, id: &CheckpointId) -> Result<(CheckpointMeta, Vec<Record<K, V>>)> {
-        let (meta, bytes) = self.store.checkpoint.get_checkpoint(id).await?;
-        let records = Self::decode_run_records(&bytes)?;
+        let meta = self.store.checkpoint.get_checkpoint_meta(id).await?;
+        if meta.format != run_codec::RUN_DATA_CONTENT_TYPE {
+            return Err(Error::Corrupt(format!(
+                "unsupported run content type: {}",
+                meta.format
+            )));
+        }
+
+        let index_bytes = self
+            .store
+            .checkpoint
+            .get_checkpoint_index(id)
+            .await?
+            .ok_or_else(|| Error::Corrupt(format!("run index missing for {}", id.as_str())))?;
+        let index = run_codec::decode_run_index(&index_bytes)?;
+        let mut records = Vec::with_capacity(index.record_count.min(usize::MAX as u64) as usize);
+        for block in &index.blocks {
+            if block.len == 0 {
+                continue;
+            }
+            let bytes = self
+                .store
+                .checkpoint
+                .get_checkpoint_payload_range(id, block.offset, block.len as usize)
+                .await?;
+            let mut block_records = run_codec::decode_run_block(&bytes)?;
+            records.append(&mut block_records);
+        }
         Ok((meta, records))
     }
 
@@ -824,8 +747,8 @@ where
 
             // If HEAD already references a sufficient checkpoint, nothing to do.
             let already_ok = if let Some(cur_ckpt_id) = cur_head.checkpoint_id.as_ref() {
-                match self.store.checkpoint.get_checkpoint(cur_ckpt_id).await {
-                    Ok((meta, _)) => meta.last_segment_seq_at_ckpt >= upto,
+                match self.store.checkpoint.get_checkpoint_meta(cur_ckpt_id).await {
+                    Ok(meta) => meta.last_segment_seq_at_ckpt >= upto,
                     Err(_) => false,
                 }
             } else {

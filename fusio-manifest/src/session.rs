@@ -7,15 +7,16 @@ use std::{
 };
 
 use fusio::executor::{Executor, Timer};
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Serialize};
 
 use crate::{
     backoff::{classify_error, RetryClass},
-    checkpoint::{CheckpointStore, RunSparseIndexMeta},
+    checkpoint::{CheckpointId, CheckpointStore},
     head::{HeadJson, HeadStore, PutCondition},
     lease::{keeper::LeaseKeeper, LeaseHandle, LeaseStore},
     manifest::{Op, Record, Segment},
     retention::{DefaultRetention, RetentionPolicy},
+    run_codec,
     segment::SegmentIo,
     snapshot::{ScanRange, Snapshot},
     store::Store,
@@ -170,119 +171,57 @@ where
         None
     }
 
-    fn lookup_in_checkpoint(mut entries: Vec<(K, V)>, key: &K) -> Option<V> {
-        if let Ok(idx) = entries.binary_search_by(|(entry_key, _)| entry_key.cmp(key)) {
-            return Some(entries.swap_remove(idx).1);
-        }
-        for (entry_key, value) in entries.into_iter().rev() {
-            if &entry_key == key {
-                return Some(value);
-            }
-        }
-        None
-    }
-
-    fn decode_run_records(bytes: &[u8]) -> Result<Vec<Record<K, V>>> {
-        #[derive(Deserialize)]
-        struct RunPayload<K, V> {
-            records: Vec<Record<K, V>>,
-        }
-        #[derive(Deserialize)]
-        struct CkptPayload<K, V> {
-            entries: Vec<(K, V)>,
-        }
-
-        if bytes.is_empty() {
-            return Ok(Vec::new());
-        }
-        if let Ok(payload) = serde_json::from_slice::<RunPayload<K, V>>(bytes) {
-            return Ok(payload.records);
-        }
-        if let Ok(payload) = serde_json::from_slice::<CkptPayload<K, V>>(bytes) {
-            let mut records = payload
-                .entries
-                .into_iter()
-                .map(|(key, value)| Record {
-                    key,
-                    op: Op::Put,
-                    value: Some(value),
-                })
-                .collect::<Vec<_>>();
-            records.sort_by(|left, right| left.key.cmp(&right.key));
-            return Ok(records);
-        }
-        let mut ndjson_records = Vec::<Record<K, V>>::new();
-        let mut saw_non_empty = false;
-        for line in bytes.split(|byte| *byte == b'\n') {
-            if line.is_empty() {
+    async fn load_run_records(&self, id: &CheckpointId) -> Result<Vec<Record<K, V>>> {
+        let index_bytes = self
+            .store
+            .checkpoint
+            .get_checkpoint_index(id)
+            .await?
+            .ok_or_else(|| Error::Corrupt(format!("run index missing for {}", id.as_str())))?;
+        let index = run_codec::decode_run_index(&index_bytes)?;
+        let mut out = Vec::with_capacity(index.record_count.min(usize::MAX as u64) as usize);
+        for block in &index.blocks {
+            if block.len == 0 {
                 continue;
             }
-            saw_non_empty = true;
-            let record: Record<K, V> = match serde_json::from_slice(line) {
-                Ok(record) => record,
-                Err(_) => {
-                    return Err(Error::Corrupt(
-                        "ckpt decode: unsupported payload format".to_string(),
-                    ));
-                }
-            };
-            ndjson_records.push(record);
+            let bytes = self
+                .store
+                .checkpoint
+                .get_checkpoint_payload_range(id, block.offset, block.len as usize)
+                .await?;
+            let mut records = run_codec::decode_run_block(&bytes)?;
+            out.append(&mut records);
         }
-        if saw_non_empty {
-            return Ok(ndjson_records);
-        }
-
-        Err(Error::Corrupt(
-            "ckpt decode: unsupported payload format".to_string(),
-        ))
+        Ok(out)
     }
 
-    fn decode_sparse_key(key_json: &str) -> Result<K> {
-        serde_json::from_str(key_json)
-            .map_err(|e| Error::Corrupt(format!("run sparse key decode: {e}")))
-    }
-
-    fn decode_sparse_index(bytes: &[u8]) -> Result<RunSparseIndexMeta> {
-        serde_json::from_slice(bytes).map_err(|e| Error::Corrupt(format!("run index decode: {e}")))
-    }
-
-    fn run_sparse_window(
-        index: &RunSparseIndexMeta,
-        fallback_byte_size: Option<usize>,
-        key: &K,
-    ) -> Result<Option<(u64, usize)>> {
-        let key_min = Self::decode_sparse_key(&index.key_min_json)?;
-        if key < &key_min {
+    async fn lookup_in_run(&self, id: &CheckpointId, key: &K) -> Result<Option<Option<V>>> {
+        let index_bytes = self
+            .store
+            .checkpoint
+            .get_checkpoint_index(id)
+            .await?
+            .ok_or_else(|| Error::Corrupt(format!("run index missing for {}", id.as_str())))?;
+        let index = run_codec::decode_run_index(&index_bytes)?;
+        let Some((offset, len)) = run_codec::run_block_window_for_key_with_bloom(
+            &index,
+            key,
+            self.store.opts.run_bloom_enabled,
+        )?
+        else {
             return Ok(None);
-        }
-        let key_max = Self::decode_sparse_key(&index.key_max_json)?;
-        if key > &key_max {
-            return Ok(None);
-        }
-
-        let total_bytes = if index.payload_byte_size > 0 {
-            index.payload_byte_size as u64
-        } else {
-            fallback_byte_size.unwrap_or(0) as u64
         };
-        if total_bytes == 0 {
+        if len == 0 {
             return Ok(None);
         }
 
-        let mut start = 0_u64;
-        for anchor in &index.anchors {
-            let anchor_key = Self::decode_sparse_key(&anchor.key_json)?;
-            if &anchor_key <= key {
-                start = anchor.offset;
-                continue;
-            }
-            let len = anchor.offset.saturating_sub(start).min(usize::MAX as u64) as usize;
-            return Ok(Some((start, len)));
-        }
-
-        let start = start.min(total_bytes);
-        let len = total_bytes.saturating_sub(start).min(usize::MAX as u64) as usize;
-        Ok(Some((start, len)))
+        let bytes = self
+            .store
+            .checkpoint
+            .get_checkpoint_payload_range(id, offset, len)
+            .await?;
+        let records = run_codec::decode_run_block(&bytes)?;
+        Ok(Self::lookup_in_segment(Segment { txn_id: 0, records }, key))
     }
 
     fn segment_might_contain_key(meta: &crate::segment::SegmentMeta, key: &K) -> bool {
@@ -317,13 +256,11 @@ where
     async fn fold_into_map(&self, map: &mut HashMap<K, V>) -> Result<()> {
         if !self.snapshot.level_runs.is_empty() {
             for run_id in self.snapshot.level_runs.iter().rev().flatten() {
-                let (_meta, bytes) = self.store.checkpoint.get_checkpoint(run_id).await?;
-                let records = Self::decode_run_records(&bytes)?;
+                let records = self.load_run_records(run_id).await?;
                 Self::apply_records(map, records);
             }
         } else if let Some(id) = self.snapshot.checkpoint_id.as_ref() {
-            let (_meta, bytes) = self.store.checkpoint.get_checkpoint(id).await?;
-            let records = Self::decode_run_records(&bytes)?;
+            let records = self.load_run_records(id).await?;
             Self::apply_records(map, records);
         }
 
@@ -438,76 +375,13 @@ where
             }
             if !self.snapshot.level_runs.is_empty() {
                 for run_id in self.snapshot.level_runs.iter().flatten() {
-                    if let Some(index_bytes) =
-                        self.store.checkpoint.get_checkpoint_index(run_id).await?
-                    {
-                        let index = Self::decode_sparse_index(&index_bytes)?;
-                        let window = if index.payload_byte_size > 0 {
-                            Self::run_sparse_window(&index, None, key)?
-                        } else {
-                            let meta = self.store.checkpoint.get_checkpoint_meta(run_id).await?;
-                            Self::run_sparse_window(&index, Some(meta.byte_size), key)?
-                        };
-                        if let Some((offset, len)) = window {
-                            if len == 0 {
-                                continue;
-                            }
-                            let bytes = self
-                                .store
-                                .checkpoint
-                                .get_checkpoint_payload_range(run_id, offset, len)
-                                .await?;
-                            let records = Self::decode_run_records(&bytes)?;
-                            let seg = Segment { txn_id: 0, records };
-                            if let Some(value) = Self::lookup_in_segment(seg, key) {
-                                return Ok(value);
-                            }
-                        }
-                        continue;
-                    }
-
-                    let meta = self.store.checkpoint.get_checkpoint_meta(run_id).await?;
-                    if let Some(index) = meta.run_sparse_index.clone() {
-                        if let Some((offset, len)) =
-                            Self::run_sparse_window(&index, Some(meta.byte_size), key)?
-                        {
-                            if len == 0 {
-                                continue;
-                            }
-                            let bytes = self
-                                .store
-                                .checkpoint
-                                .get_checkpoint_payload_range(run_id, offset, len)
-                                .await?;
-                            let records = Self::decode_run_records(&bytes)?;
-                            let seg = Segment { txn_id: 0, records };
-                            if let Some(value) = Self::lookup_in_segment(seg, key) {
-                                return Ok(value);
-                            }
-                        }
-                        continue;
-                    }
-
-                    let (_meta, bytes) = self.store.checkpoint.get_checkpoint(run_id).await?;
-                    let records = Self::decode_run_records(&bytes)?;
-                    let seg = Segment { txn_id: 0, records };
-                    if let Some(value) = Self::lookup_in_segment(seg, key) {
+                    if let Some(value) = self.lookup_in_run(run_id, key).await? {
                         return Ok(value);
                     }
                 }
             } else if let Some(ckpt_id) = self.snapshot.checkpoint_id.clone() {
-                let (_meta, bytes) = self.store.checkpoint.get_checkpoint(&ckpt_id).await?;
-                let records = Self::decode_run_records(&bytes)?;
-                let mut puts: Vec<(K, V)> = Vec::new();
-                for record in records {
-                    if record.op == Op::Put {
-                        if let Some(value) = record.value {
-                            puts.push((record.key, value));
-                        }
-                    }
-                }
-                if let Some(value) = Self::lookup_in_checkpoint(puts, key) {
-                    return Ok(Some(value));
+                if let Some(value) = self.lookup_in_run(&ckpt_id, key).await? {
+                    return Ok(value);
                 }
             }
             return Ok(None);

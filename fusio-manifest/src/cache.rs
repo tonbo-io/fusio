@@ -1,7 +1,7 @@
 #[cfg(feature = "cache-moka")]
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::{
-    collections::HashMap,
+    collections::{BTreeSet, HashMap},
     fmt,
     hash::{Hash, Hasher},
     sync::{Arc, Mutex},
@@ -13,6 +13,7 @@ use moka::sync::Cache;
 
 use crate::{
     checkpoint::{CheckpointId, CheckpointMeta, CheckpointStore},
+    run_codec,
     segment::SegmentIo,
     types::{Result, SegmentId},
 };
@@ -23,6 +24,7 @@ use crate::{
 pub enum CacheKind {
     Checkpoint,
     CheckpointIndex,
+    RunBlock,
     Segment,
 }
 
@@ -169,12 +171,36 @@ impl RunIndexCacheEntry {
     }
 }
 
+#[derive(Clone)]
+pub struct RunBlockCacheEntry {
+    payload: CachedPayload,
+    etag: Option<Box<str>>,
+}
+
+impl RunBlockCacheEntry {
+    pub fn new(payload: Vec<u8>, etag: Option<String>) -> Self {
+        Self {
+            payload: CachedPayload::new(payload),
+            etag: etag.map(|e| e.into_boxed_str()),
+        }
+    }
+
+    pub fn payload(&self) -> &CachedPayload {
+        &self.payload
+    }
+
+    pub fn etag(&self) -> Option<&str> {
+        self.etag.as_deref()
+    }
+}
+
 /// Unified cache value enum so we can share the underlying LRU for segments and checkpoints.
 #[derive(Clone)]
 pub enum CacheValue {
     Segment(SegmentCacheEntry),
     Checkpoint(CheckpointCacheEntry),
     CheckpointIndex(RunIndexCacheEntry),
+    RunBlock(RunBlockCacheEntry),
 }
 
 /// Basic cache statistics exposed to callers for observability.
@@ -478,6 +504,7 @@ pub struct CachedCheckpointStore<S> {
     namespace: Arc<str>,
     etags: Arc<Mutex<HashMap<String, Option<String>>>>,
     index_etags: Arc<Mutex<HashMap<String, Option<String>>>>,
+    block_ranges: Arc<Mutex<HashMap<String, BTreeSet<(u64, usize)>>>>,
 }
 
 impl<S> CachedCheckpointStore<S> {
@@ -493,6 +520,7 @@ impl<S> CachedCheckpointStore<S> {
             namespace,
             etags: Arc::new(Mutex::new(HashMap::new())),
             index_etags: Arc::new(Mutex::new(HashMap::new())),
+            block_ranges: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -516,6 +544,24 @@ impl<S> CachedCheckpointStore<S> {
             scoped,
             etag.map(|e| e.to_owned()),
         )
+    }
+
+    fn cache_key_block(
+        namespace: &Arc<str>,
+        id: &CheckpointId,
+        offset: u64,
+        len: usize,
+        etag: Option<&str>,
+    ) -> CacheKey {
+        let mut scoped = String::with_capacity(namespace.len() + 1 + id.as_str().len() + 40);
+        scoped.push_str(namespace);
+        scoped.push(':');
+        scoped.push_str(id.as_str());
+        scoped.push('@');
+        scoped.push_str(&offset.to_string());
+        scoped.push(':');
+        scoped.push_str(&len.to_string());
+        CacheKey::new(CacheKind::RunBlock, scoped, etag.map(|e| e.to_owned()))
     }
 
     fn identifier(id: &CheckpointId) -> String {
@@ -549,24 +595,53 @@ where
         let content_type_owned = content_type.to_owned();
         let etags = self.etags.clone();
         let index_etags = self.index_etags.clone();
+        let block_ranges = self.block_ranges.clone();
         let namespace = self.namespace.clone();
         async move {
             let id = inner
                 .put_checkpoint(&meta_clone, &payload_owned, &content_type_owned)
                 .await?;
             let key = CachedCheckpointStore::<S>::cache_key(&namespace, &id, None);
-            if let Some(cache) = cache.as_ref() {
-                cache.insert(
-                    key,
-                    CacheValue::Checkpoint(CheckpointCacheEntry::new(
-                        meta_clone.clone(),
-                        payload_owned.clone(),
-                        None,
-                    )),
-                );
+            let cacheable_payload = meta_clone.format != run_codec::RUN_DATA_CONTENT_TYPE;
+            let identifier = CachedCheckpointStore::<S>::identifier(&id);
+            let previous_etag = if let Ok(mut map) = etags.lock() {
+                map.insert(identifier.clone(), None).flatten()
+            } else {
+                None
+            };
+            if cacheable_payload {
+                if let Some(cache) = cache.as_ref() {
+                    cache.insert(
+                        key,
+                        CacheValue::Checkpoint(CheckpointCacheEntry::new(
+                            meta_clone.clone(),
+                            payload_owned.clone(),
+                            None,
+                        )),
+                    );
+                }
+            } else if let Some(cache) = cache.as_ref() {
+                cache.invalidate(&key);
             }
-            if let Ok(mut map) = etags.lock() {
-                map.insert(CachedCheckpointStore::<S>::identifier(&id), None);
+            if let Ok(mut map) = block_ranges.lock() {
+                if let Some(ranges) = map.remove(&identifier) {
+                    if let Some(cache) = cache.as_ref() {
+                        for (offset, len) in ranges {
+                            cache.invalidate(&CachedCheckpointStore::<S>::cache_key_block(
+                                &namespace, &id, offset, len, None,
+                            ));
+                            if let Some(tag) = previous_etag.as_ref() {
+                                cache.invalidate(&CachedCheckpointStore::<S>::cache_key_block(
+                                    &namespace,
+                                    &id,
+                                    offset,
+                                    len,
+                                    Some(tag.as_str()),
+                                ));
+                            }
+                        }
+                    }
+                }
             }
             if let Ok(mut map) = index_etags.lock() {
                 if let Some(tag) = map.remove(&CachedCheckpointStore::<S>::index_identifier(&id)) {
@@ -648,33 +723,47 @@ where
             let (meta, payload, etag) = inner.get_checkpoint_with_etag(&ckpt_id).await?;
 
             if let Some(cache) = cache_store {
-                match &etag {
-                    Some(tag) => {
-                        cache.invalidate(&CachedCheckpointStore::<S>::cache_key(
-                            &namespace, &ckpt_id, None,
-                        ));
-                        cache.insert(
-                            CachedCheckpointStore::<S>::cache_key(
-                                &namespace,
-                                &ckpt_id,
-                                Some(tag.as_str()),
-                            ),
-                            CacheValue::Checkpoint(CheckpointCacheEntry::new(
-                                meta.clone(),
-                                payload.clone(),
-                                Some(tag.clone()),
-                            )),
-                        );
+                let cacheable_payload = meta.format != run_codec::RUN_DATA_CONTENT_TYPE;
+                if cacheable_payload {
+                    match &etag {
+                        Some(tag) => {
+                            cache.invalidate(&CachedCheckpointStore::<S>::cache_key(
+                                &namespace, &ckpt_id, None,
+                            ));
+                            cache.insert(
+                                CachedCheckpointStore::<S>::cache_key(
+                                    &namespace,
+                                    &ckpt_id,
+                                    Some(tag.as_str()),
+                                ),
+                                CacheValue::Checkpoint(CheckpointCacheEntry::new(
+                                    meta.clone(),
+                                    payload.clone(),
+                                    Some(tag.clone()),
+                                )),
+                            );
+                        }
+                        None => {
+                            cache.insert(
+                                CachedCheckpointStore::<S>::cache_key(&namespace, &ckpt_id, None),
+                                CacheValue::Checkpoint(CheckpointCacheEntry::new(
+                                    meta.clone(),
+                                    payload.clone(),
+                                    None,
+                                )),
+                            );
+                        }
                     }
-                    None => {
-                        cache.insert(
-                            CachedCheckpointStore::<S>::cache_key(&namespace, &ckpt_id, None),
-                            CacheValue::Checkpoint(CheckpointCacheEntry::new(
-                                meta.clone(),
-                                payload.clone(),
-                                None,
-                            )),
-                        );
+                } else {
+                    cache.invalidate(&CachedCheckpointStore::<S>::cache_key(
+                        &namespace, &ckpt_id, None,
+                    ));
+                    if let Some(tag) = etag.as_ref() {
+                        cache.invalidate(&CachedCheckpointStore::<S>::cache_key(
+                            &namespace,
+                            &ckpt_id,
+                            Some(tag.as_str()),
+                        ));
                     }
                 }
             }
@@ -791,6 +880,7 @@ where
                 .flatten()
         };
         let ckpt_id = id.clone();
+        let block_ranges = self.block_ranges.clone();
         async move {
             if len == 0 {
                 return Ok(Vec::new());
@@ -814,11 +904,42 @@ where
                     let end = start.saturating_add(len).min(entry.payload.len());
                     return Ok(entry.payload.as_slice()[start..end].to_vec());
                 }
+
+                let block_key = CachedCheckpointStore::<S>::cache_key_block(
+                    &namespace,
+                    &ckpt_id,
+                    offset,
+                    len,
+                    known_etag.as_deref(),
+                );
+                if let Some(CacheValue::RunBlock(entry)) = cache.get(&block_key) {
+                    return Ok(entry.payload().as_slice().to_vec());
+                }
             }
 
-            inner
+            let payload = inner
                 .get_checkpoint_payload_range(&ckpt_id, offset, len)
-                .await
+                .await?;
+            if let Some(cache) = cache.as_ref() {
+                let block_key = CachedCheckpointStore::<S>::cache_key_block(
+                    &namespace,
+                    &ckpt_id,
+                    offset,
+                    len,
+                    known_etag.as_deref(),
+                );
+                cache.insert(
+                    block_key,
+                    CacheValue::RunBlock(RunBlockCacheEntry::new(
+                        payload.clone(),
+                        known_etag.clone(),
+                    )),
+                );
+                if let Ok(mut map) = block_ranges.lock() {
+                    map.entry(identifier).or_default().insert((offset, len));
+                }
+            }
+            Ok(payload)
         }
     }
 
@@ -965,11 +1086,17 @@ where
         let ckpt_id = id.clone();
         let etags = self.etags.clone();
         let index_etags = self.index_etags.clone();
+        let block_ranges = self.block_ranges.clone();
         let namespace = self.namespace.clone();
         async move {
             inner.delete(&ckpt_id).await?;
             let identifier = CachedCheckpointStore::<S>::identifier(&ckpt_id);
             let index_identifier = CachedCheckpointStore::<S>::index_identifier(&ckpt_id);
+            let deleted_etag = if let Ok(mut map) = etags.lock() {
+                map.remove(&identifier).flatten()
+            } else {
+                None
+            };
 
             if let Some(cache) = cache.as_ref() {
                 cache.invalidate(&CachedCheckpointStore::<S>::cache_key(
@@ -979,15 +1106,30 @@ where
                     &namespace, &ckpt_id, None,
                 ));
             }
-
-            if let Ok(mut map) = etags.lock() {
-                if let Some(tag) = map.remove(&identifier) {
-                    if let (Some(cache), Some(tag)) = (cache.as_ref(), tag) {
-                        cache.invalidate(&CachedCheckpointStore::<S>::cache_key(
-                            &namespace,
-                            &ckpt_id,
-                            Some(tag.as_str()),
-                        ));
+            if let (Some(cache), Some(tag)) = (cache.as_ref(), deleted_etag.as_ref()) {
+                cache.invalidate(&CachedCheckpointStore::<S>::cache_key(
+                    &namespace,
+                    &ckpt_id,
+                    Some(tag.as_str()),
+                ));
+            }
+            if let Ok(mut map) = block_ranges.lock() {
+                if let Some(ranges) = map.remove(&identifier) {
+                    if let Some(cache) = cache.as_ref() {
+                        for (offset, len) in ranges {
+                            cache.invalidate(&CachedCheckpointStore::<S>::cache_key_block(
+                                &namespace, &ckpt_id, offset, len, None,
+                            ));
+                            if let Some(tag) = deleted_etag.as_ref() {
+                                cache.invalidate(&CachedCheckpointStore::<S>::cache_key_block(
+                                    &namespace,
+                                    &ckpt_id,
+                                    offset,
+                                    len,
+                                    Some(tag.as_str()),
+                                ));
+                            }
+                        }
                     }
                 }
             }
@@ -1026,6 +1168,7 @@ impl MemoryBlobCache {
                     entry.payload.len() as u32
                 }
                 CacheValue::CheckpointIndex(entry) => entry.payload().len() as u32,
+                CacheValue::RunBlock(entry) => entry.payload().len() as u32,
             })
             .eviction_listener(move |_key, _value, _cause| {
                 eviction_counter.fetch_add(1, Ordering::Relaxed);
@@ -1084,6 +1227,7 @@ mod tests {
     use super::*;
     use crate::{
         checkpoint::CheckpointMeta,
+        run_codec,
         test_utils::{in_memory_stores, InMemoryStores},
     };
 
@@ -1190,6 +1334,47 @@ mod tests {
 
             assert!(cache.get(&key_etag).is_none());
             assert!(cache.get(&key_none).is_none());
+        });
+    }
+
+    #[rstest]
+    fn run_payload_range_cache_hits_after_warm(in_memory_stores: InMemoryStores) {
+        let cache = Arc::new(MemoryBlobCache::new(16 * 1024));
+        let cached =
+            CachedCheckpointStore::new(in_memory_stores.checkpoint, Some(cache.clone()), None);
+
+        block_on(async {
+            let payload = br#"{"run":"payload-bytes"}"#;
+            let meta = CheckpointMeta {
+                lsn: 11,
+                key_count: 1,
+                byte_size: payload.len(),
+                created_at_ms: 0,
+                format: run_codec::RUN_DATA_CONTENT_TYPE.to_string(),
+                last_segment_seq_at_ckpt: 0,
+                run_sparse_index: None,
+            };
+            let id = cached
+                .put_checkpoint(&meta, payload, run_codec::RUN_DATA_CONTENT_TYPE)
+                .await
+                .unwrap();
+
+            let first = cached
+                .get_checkpoint_payload_range(&id, 2, 5)
+                .await
+                .unwrap();
+            assert_eq!(first, payload[2..7].to_vec());
+            let metrics_after_first = cache.metrics();
+            assert_eq!(metrics_after_first.hits, 0);
+            assert!(metrics_after_first.misses >= 1);
+
+            let second = cached
+                .get_checkpoint_payload_range(&id, 2, 5)
+                .await
+                .unwrap();
+            assert_eq!(second, first);
+            let metrics_after_second = cache.metrics();
+            assert!(metrics_after_second.hits >= 1);
         });
     }
 
