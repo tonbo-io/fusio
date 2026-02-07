@@ -220,8 +220,7 @@ where
             .checkpoint
             .get_checkpoint_payload_range(id, offset, len)
             .await?;
-        let records = run_codec::decode_run_block(&bytes)?;
-        Ok(Self::lookup_in_segment(Segment { txn_id: 0, records }, key))
+        run_codec::lookup_key_in_run_block(&bytes, key)
     }
 
     fn segment_might_contain_key(meta: &crate::segment::SegmentMeta, key: &K) -> bool {
