@@ -156,7 +156,13 @@ where
         records: Vec<Record<K, V>>,
     ) -> Result<CheckpointId> {
         let key_count = records.len();
-        let encoded = run_codec::encode_run(&records, self.store.opts.sparse_stride.max(1))?;
+        let encoded = run_codec::encode_run(
+            &records,
+            run_codec::RunBuildOptions::new(
+                self.store.opts.run_block_target_bytes,
+                self.store.opts.run_block_max_records,
+            ),
+        )?;
         let index_payload = run_codec::encode_run_index(&encoded.index)?;
         let meta = CheckpointMeta {
             lsn,
