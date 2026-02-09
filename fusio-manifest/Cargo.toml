@@ -71,5 +71,10 @@ harness = false
 name = "point_get_local"
 required-features = ["tokio"]
 
+[[bench]]
+harness = false
+name = "scan_range_local"
+required-features = ["tokio"]
+
 [package.metadata.docs.rs]
 all-features = true

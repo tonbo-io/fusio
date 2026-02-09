@@ -436,6 +436,7 @@ mod tests {
         lease::{LeaseKind, LeaseStoreImpl},
         retention::DefaultRetention,
         segment::SegmentStoreImpl,
+        snapshot::ScanRange,
         test_utils::{in_memory_stores, InMemoryStores},
     };
 
@@ -922,6 +923,55 @@ mod tests {
             assert!(
                 checkpoint.range_gets() > 0,
                 "sparse-index point get should issue ranged payload reads"
+            );
+        })
+    }
+
+    #[rstest]
+    fn mem_kv_scan_range_reads_subset_of_run_blocks(in_memory_stores: InMemoryStores) {
+        block_on(async move {
+            let checkpoint = CountingCheckpointStore::new(in_memory_stores.checkpoint.clone());
+            let opts: ManifestContext<DefaultRetention, NoopExecutor> =
+                ManifestContext::new(NoopExecutor::default())
+                    .with_run_block_target_bytes(1024 * 1024)
+                    .with_run_block_max_records(2);
+            let kv = Manifest::new_with_context(
+                in_memory_stores.head.clone(),
+                in_memory_stores.segment.clone(),
+                checkpoint.clone(),
+                in_memory_stores.lease.clone(),
+                Arc::new(opts),
+            );
+
+            let mut write = kv.session_write().await.unwrap();
+            for idx in 0..16 {
+                write.put(format!("k{idx:02}"), format!("v{idx:02}"));
+            }
+            write.commit().await.unwrap();
+
+            kv.compactor().compact_once().await.unwrap();
+            checkpoint.reset();
+
+            let sess = kv.session_read().await.unwrap();
+            let mut rows = sess
+                .scan_range(ScanRange {
+                    start: Some("k11".to_string()),
+                    end: Some("k12".to_string()),
+                })
+                .await
+                .unwrap();
+            sess.end().await.unwrap();
+
+            rows.sort_by(|left, right| left.0.cmp(&right.0));
+            assert_eq!(rows, vec![("k11".to_string(), "v11".to_string())]);
+            assert_eq!(
+                checkpoint.full_gets(),
+                0,
+                "scan_range should avoid full checkpoint payload reads"
+            );
+            assert!(
+                checkpoint.range_gets() <= 2,
+                "scan_range should only read a small number of overlapping run blocks"
             );
         })
     }

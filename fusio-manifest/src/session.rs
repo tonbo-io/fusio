@@ -171,7 +171,73 @@ where
         None
     }
 
-    async fn load_run_records(&self, id: &CheckpointId) -> Result<Vec<Record<K, V>>> {
+    fn key_in_scan_range(key: &K, range: &ScanRange<K>) -> bool {
+        if let Some(start) = range.start.as_ref() {
+            if key < start {
+                return false;
+            }
+        }
+        if let Some(end) = range.end.as_ref() {
+            if key >= end {
+                return false;
+            }
+        }
+        true
+    }
+
+    fn run_might_overlap_scan_range(
+        index: &run_codec::RunIndexMeta,
+        range: &ScanRange<K>,
+    ) -> Result<bool> {
+        if index.record_count == 0 {
+            return Ok(false);
+        }
+
+        let key_min: K = serde_json::from_slice(&index.key_min_json)
+            .map_err(|e| Error::Corrupt(format!("run key_min decode: {e}")))?;
+        let key_max: K = serde_json::from_slice(&index.key_max_json)
+            .map_err(|e| Error::Corrupt(format!("run key_max decode: {e}")))?;
+
+        if let Some(start) = range.start.as_ref() {
+            if key_max < *start {
+                return Ok(false);
+            }
+        }
+        if let Some(end) = range.end.as_ref() {
+            if key_min >= *end {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
+    fn run_block_might_overlap_scan_range(
+        block: &run_codec::RunBlockMeta,
+        range: &ScanRange<K>,
+    ) -> Result<bool> {
+        let first_key: K = serde_json::from_slice(&block.first_key_json)
+            .map_err(|e| Error::Corrupt(format!("run block first_key decode: {e}")))?;
+        let last_key: K = serde_json::from_slice(&block.last_key_json)
+            .map_err(|e| Error::Corrupt(format!("run block last_key decode: {e}")))?;
+
+        if let Some(start) = range.start.as_ref() {
+            if last_key < *start {
+                return Ok(false);
+            }
+        }
+        if let Some(end) = range.end.as_ref() {
+            if first_key >= *end {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
+    async fn load_run_records(
+        &self,
+        id: &CheckpointId,
+        scan_range: Option<&ScanRange<K>>,
+    ) -> Result<Vec<Record<K, V>>> {
         let index_bytes = self
             .store
             .checkpoint
@@ -179,10 +245,21 @@ where
             .await?
             .ok_or_else(|| Error::Corrupt(format!("run index missing for {}", id.as_str())))?;
         let index = run_codec::decode_run_index(&index_bytes)?;
+        if let Some(range) = scan_range {
+            if !Self::run_might_overlap_scan_range(&index, range)? {
+                return Ok(Vec::new());
+            }
+        }
+
         let mut out = Vec::with_capacity(index.record_count.min(usize::MAX as u64) as usize);
         for block in &index.blocks {
             if block.len == 0 {
                 continue;
+            }
+            if let Some(range) = scan_range {
+                if !Self::run_block_might_overlap_scan_range(block, range)? {
+                    continue;
+                }
             }
             let bytes = self
                 .store
@@ -190,6 +267,9 @@ where
                 .get_checkpoint_payload_range(id, block.offset, block.len as usize)
                 .await?;
             let mut records = run_codec::decode_run_block(&bytes)?;
+            if let Some(range) = scan_range {
+                records.retain(|record| Self::key_in_scan_range(&record.key, range));
+            }
             out.append(&mut records);
         }
         Ok(out)
@@ -237,6 +317,35 @@ where
         }
     }
 
+    fn segment_might_overlap_scan_range(
+        meta: &crate::segment::SegmentMeta,
+        range: &ScanRange<K>,
+    ) -> bool {
+        match (meta.key_min_json.as_ref(), meta.key_max_json.as_ref()) {
+            (Some(min_json), Some(max_json)) => {
+                let min_key = serde_json::from_str::<K>(min_json).ok();
+                let max_key = serde_json::from_str::<K>(max_json).ok();
+                match (min_key, max_key) {
+                    (Some(min_key), Some(max_key)) => {
+                        if let Some(start) = range.start.as_ref() {
+                            if max_key < *start {
+                                return false;
+                            }
+                        }
+                        if let Some(end) = range.end.as_ref() {
+                            if min_key >= *end {
+                                return false;
+                            }
+                        }
+                        true
+                    }
+                    _ => true,
+                }
+            }
+            _ => true,
+        }
+    }
+
     fn apply_records(map: &mut HashMap<K, V>, records: Vec<Record<K, V>>) {
         for record in records {
             match record.op {
@@ -252,14 +361,18 @@ where
         }
     }
 
-    async fn fold_into_map(&self, map: &mut HashMap<K, V>) -> Result<()> {
+    async fn fold_into_map(
+        &self,
+        map: &mut HashMap<K, V>,
+        scan_range: Option<&ScanRange<K>>,
+    ) -> Result<()> {
         if !self.snapshot.level_runs.is_empty() {
             for run_id in self.snapshot.level_runs.iter().rev().flatten() {
-                let records = self.load_run_records(run_id).await?;
+                let records = self.load_run_records(run_id, scan_range).await?;
                 Self::apply_records(map, records);
             }
         } else if let Some(id) = self.snapshot.checkpoint_id.as_ref() {
-            let records = self.load_run_records(id).await?;
+            let records = self.load_run_records(id, scan_range).await?;
             Self::apply_records(map, records);
         }
 
@@ -285,6 +398,16 @@ where
                 if id.seq < cursor {
                     continue;
                 }
+                if let Some(range) = scan_range {
+                    let seg_meta = self.store.segment.load_meta(&id).await?;
+                    if seg_meta.txn_id > self.snapshot.txn_id.0 {
+                        return Ok(());
+                    }
+                    if !Self::segment_might_overlap_scan_range(&seg_meta, range) {
+                        cursor = id.seq.saturating_add(1);
+                        continue;
+                    }
+                }
                 let bytes = self.store.segment.get(&id).await?;
                 let seg: Segment<K, V> = serde_json::from_slice(&bytes)
                     .map_err(|e| Error::Corrupt(format!("kv segment decode: {e}")))?;
@@ -292,6 +415,11 @@ where
                     return Ok(());
                 }
                 for record in seg.records.into_iter() {
+                    if let Some(range) = scan_range {
+                        if !Self::key_in_scan_range(&record.key, range) {
+                            continue;
+                        }
+                    }
                     match record.op {
                         Op::Put => {
                             if let Some(v) = record.value {
@@ -312,13 +440,13 @@ where
 
     async fn base_scan(&self) -> Result<Vec<(K, V)>> {
         let mut map: HashMap<K, V> = HashMap::new();
-        self.fold_into_map(&mut map).await?;
+        self.fold_into_map(&mut map, None).await?;
         Ok(map.into_iter().collect())
     }
 
     async fn base_scan_range(&self, range: ScanRange<K>) -> Result<Vec<(K, V)>> {
         let mut map: HashMap<K, V> = HashMap::new();
-        self.fold_into_map(&mut map).await?;
+        self.fold_into_map(&mut map, Some(&range)).await?;
         let mut out: Vec<(K, V)> = map.into_iter().collect();
         if let Some(start) = range.start.as_ref() {
             out.retain(|(k, _)| k >= start);
