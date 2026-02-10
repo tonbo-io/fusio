@@ -12,7 +12,7 @@ use serde::{de::DeserializeOwned, Serialize};
 use crate::{
     backoff::{classify_error, RetryClass},
     checkpoint::{CheckpointId, CheckpointStore},
-    head::{HeadJson, HeadStore, PutCondition},
+    head::{HeadJson, HeadStore, HeadTag, PutCondition},
     lease::{keeper::LeaseKeeper, LeaseHandle, LeaseStore},
     manifest::{Op, Record, Segment},
     retention::{DefaultRetention, RetentionPolicy},
@@ -590,6 +590,13 @@ where
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct CommitOutcome {
+    pub head_tag: HeadTag,
+    pub head: HeadJson,
+}
+
 /// Writable session with staged operations.
 #[must_use = "Sessions hold a lease; call commit().await or end().await before dropping"]
 pub struct WriteSession<K, V, HS, SS, CS, LS, E = DefaultExecutor, R = DefaultRetention>
@@ -724,7 +731,11 @@ where
     }
 
     #[tracing::instrument(skip(self), fields(txn_id = %self.inner.snapshot().txn_id.0.saturating_add(1)))]
-    pub async fn commit(mut self) -> Result<()> {
+    pub async fn commit(self) -> Result<CommitOutcome> {
+        self.commit_inner().await
+    }
+
+    async fn commit_inner(mut self) -> Result<CommitOutcome> {
         let snapshot = self.inner.snapshot().clone();
         let store = self.inner.store().clone();
         let backoff_policy = store.opts.backoff;
@@ -843,12 +854,15 @@ where
             };
 
             match store.head.put(&new_head, cond).await {
-                Ok(_) => {
+                Ok(head_tag) => {
                     tracing::info!(txn_id = %next_txn, "commit succeeded");
                     if let Some(lease) = self.inner.lease_mut().take() {
                         let _ = store.leases.release(lease).await;
                     }
-                    return Ok(());
+                    return Ok(CommitOutcome {
+                        head_tag,
+                        head: new_head,
+                    });
                 }
                 Err(e) => match classify_error(&e) {
                     RetryClass::RetryTransient => {
@@ -905,7 +919,7 @@ mod tests {
     use super::*;
     use crate::{
         checkpoint::CheckpointStoreImpl,
-        head::HeadStoreImpl,
+        head::{HeadStore, HeadStoreImpl},
         lease::LeaseStoreImpl,
         manifest::Manifest,
         segment::SegmentStoreImpl,
@@ -937,6 +951,25 @@ mod tests {
                 .await
                 .unwrap();
             assert!(active.is_empty());
+        })
+    }
+
+    #[rstest]
+    fn write_session_commit_returns_latest_head(in_memory_stores: InMemoryStores) {
+        block_on(async move {
+            let manifest = test_utils::string_in_memory_manifest(in_memory_stores.clone());
+
+            let mut writer = manifest.session_write().await.unwrap();
+            writer.put("k".into(), "v".into());
+            let outcome = writer.commit().await.unwrap();
+
+            assert_eq!(outcome.head.version, 1);
+            assert_eq!(outcome.head.last_txn_id, 1);
+            assert_eq!(outcome.head.last_segment_seq, Some(1));
+
+            let (head, tag) = in_memory_stores.head.load().await.unwrap().unwrap();
+            assert_eq!(head, outcome.head);
+            assert_eq!(tag, outcome.head_tag);
         })
     }
 
@@ -1088,7 +1121,7 @@ mod tests {
             assert_eq!(keys_equal_to_v1, 2);
 
             session.put(key, "v2".to_owned());
-            return session.commit().await; // This should fail for one of the transactions
+            return session.commit().await.map(|_| ()); // This should fail for one of the transactions
         }
 
         // 2. Run both transactions concurrently.
