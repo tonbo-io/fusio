@@ -1,4 +1,4 @@
-use std::{future::Future, sync::Arc};
+use std::{future::Future, sync::Arc, time::Duration};
 
 use fusio::executor::{Executor, Timer};
 use fusio_core::MaybeSend;
@@ -10,6 +10,9 @@ use crate::{
     types::Error,
     DefaultExecutor,
 };
+
+/// Default minimum interval between opportunistic orphan-recovery attempts.
+pub const DEFAULT_ORPHAN_RECOVERY_INTERVAL: Duration = Duration::from_secs(3);
 
 /// ManifestContext shared across manifest components, parameterised by an executor that also
 /// implements the timer abstraction.
@@ -38,6 +41,9 @@ where
     pub run_block_target_bytes: usize,
     /// Max records per run data block.
     pub run_block_max_records: usize,
+    /// Minimum interval between opportunistic orphan-recovery attempts when opening write
+    /// sessions.
+    pub orphan_recovery_interval: Duration,
 }
 
 impl<E> ManifestContext<DefaultRetention, E>
@@ -57,6 +63,7 @@ where
             run_bloom_enabled: true,
             run_block_target_bytes: 256 * 1024,
             run_block_max_records: 4096,
+            orphan_recovery_interval: DEFAULT_ORPHAN_RECOVERY_INTERVAL,
         }
     }
 }
@@ -124,6 +131,7 @@ where
             run_bloom_enabled: self.run_bloom_enabled,
             run_block_target_bytes: self.run_block_target_bytes,
             run_block_max_records: self.run_block_max_records,
+            orphan_recovery_interval: self.orphan_recovery_interval,
         }
     }
 
@@ -218,6 +226,27 @@ where
     /// Mutably configure max records per run data block (minimum 1).
     pub fn set_run_block_max_records(&mut self, max_records: usize) {
         self.run_block_max_records = max_records.max(1);
+    }
+
+    /// Configure the minimum interval between opportunistic orphan-recovery attempts.
+    /// `Duration::ZERO` is normalized to the crate default interval.
+    pub fn with_orphan_recovery_interval(mut self, interval: Duration) -> Self {
+        self.orphan_recovery_interval = normalize_orphan_recovery_interval(interval);
+        self
+    }
+
+    /// Mutably configure the minimum interval between opportunistic orphan-recovery attempts.
+    /// `Duration::ZERO` is normalized to the crate default interval.
+    pub fn set_orphan_recovery_interval(&mut self, interval: Duration) {
+        self.orphan_recovery_interval = normalize_orphan_recovery_interval(interval);
+    }
+}
+
+fn normalize_orphan_recovery_interval(interval: Duration) -> Duration {
+    if interval.is_zero() {
+        DEFAULT_ORPHAN_RECOVERY_INTERVAL
+    } else {
+        interval
     }
 }
 

@@ -67,7 +67,7 @@ cfg_if::cfg_if! {
 }
 
 cfg_if::cfg_if! {
-    if #[cfg(any(feature = "tokio-http", feature = "web-http"))] {
+    if #[cfg(all(feature = "tokio-http", not(target_arch = "wasm32")))] {
         #[derive(Debug)]
         pub(crate) struct ReqwestHttpSend {
             client: reqwest::Client,
@@ -140,7 +140,7 @@ pub(crate) fn default_context() -> Context {
     }
 
     cfg_if::cfg_if! {
-        if #[cfg(any(feature = "tokio-http", feature = "web-http"))] {
+        if #[cfg(all(feature = "tokio-http", not(target_arch = "wasm32")))] {
             ctx = ctx.with_http_send(ReqwestHttpSend::default());
         }
     }
