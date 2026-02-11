@@ -2,7 +2,7 @@ use std::{
     collections::{BTreeMap, HashMap},
     hash::Hash,
     marker::PhantomData,
-    sync::Arc,
+    sync::{atomic::Ordering, Arc},
     time::Duration,
 };
 
@@ -738,6 +738,11 @@ where
     async fn commit_inner(mut self) -> Result<CommitOutcome> {
         let snapshot = self.inner.snapshot().clone();
         let store = self.inner.store().clone();
+        let mark_recovery_due = || {
+            store
+                .orphan_recovery_last_attempt_ms
+                .store(0, Ordering::Release);
+        };
         let backoff_policy = store.opts.backoff;
         let timer = store.opts.timer();
         let mut backoff_iter = backoff_policy.build_backoff();
@@ -789,6 +794,7 @@ where
             };
             if stale {
                 tracing::warn!(txn_id = %next_txn, "PRECONDITION FAILED on commit");
+                mark_recovery_due();
                 self.inner.release_lease_silent().await;
                 return Err(Error::PreconditionFailed);
             }
@@ -823,6 +829,9 @@ where
                             }
                         }
                         _ => {
+                            if matches!(e, Error::PreconditionFailed) {
+                                mark_recovery_due();
+                            }
                             self.inner.release_lease_silent().await;
                             return Err(e);
                         }
@@ -886,6 +895,7 @@ where
                     }
                     RetryClass::DurableConflict => {
                         tracing::warn!(txn_id = %next_txn, "PRECONDITION FAILED on commit");
+                        mark_recovery_due();
                         self.inner.release_lease_silent().await;
                         return Err(Error::PreconditionFailed);
                     }

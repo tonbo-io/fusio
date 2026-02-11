@@ -1,4 +1,7 @@
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicBool, AtomicU64},
+    Arc,
+};
 
 use fusio::executor::{Executor, Timer};
 
@@ -20,6 +23,9 @@ where
     pub(crate) checkpoint: CachedCheckpointStore<CS>,
     pub(crate) leases: LS,
     pub(crate) opts: Arc<ManifestContext<R, E>>,
+    pub(crate) orphan_recovery_last_attempt_ms: AtomicU64,
+    pub(crate) orphan_recovery_inflight: AtomicBool,
+    pub(crate) orphan_recovery_background_started: AtomicBool,
 }
 
 impl<HS, SS, CS, LS, E, R> Store<HS, SS, CS, LS, E, R>
@@ -44,6 +50,9 @@ where
             checkpoint,
             leases,
             opts,
+            orphan_recovery_last_attempt_ms: AtomicU64::new(0),
+            orphan_recovery_inflight: AtomicBool::new(false),
+            orphan_recovery_background_started: AtomicBool::new(false),
         }
     }
 }

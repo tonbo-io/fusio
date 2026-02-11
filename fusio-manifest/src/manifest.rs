@@ -1,8 +1,9 @@
 use std::{
+    any::TypeId,
     collections::HashSet,
     hash::Hash,
     marker::PhantomData,
-    sync::Arc,
+    sync::{atomic::Ordering, Arc},
     time::{Duration, SystemTime},
 };
 
@@ -22,7 +23,7 @@ use crate::{
     snapshot::{ScanRange, Snapshot},
     store::Store,
     types::{Error, Result, TxnId},
-    DefaultExecutor,
+    DefaultExecutor, NoopExecutor,
 };
 
 /// Operation on a key (crate-internal).
@@ -105,10 +106,172 @@ where
     }
 
     pub(crate) fn from_store(store: Arc<Store<HS, SS, CS, LS, E, R>>) -> Self {
-        Self {
+        let this = Self {
             _phantom: PhantomData,
             store,
+        };
+        this.start_orphan_recovery_loop();
+        this
+    }
+
+    fn wall_clock_now_ms(timer: &E) -> u64 {
+        timer
+            .system_time()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis()
+            .min(u128::from(u64::MAX)) as u64
+    }
+
+    fn supports_detached_background_loop() -> bool {
+        TypeId::of::<E>() != TypeId::of::<NoopExecutor>()
+    }
+
+    fn start_orphan_recovery_loop(&self) {
+        if !Self::supports_detached_background_loop() {
+            return;
         }
+        if self.store.opts.orphan_recovery_interval.is_zero() {
+            return;
+        }
+        if self
+            .store
+            .orphan_recovery_background_started
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return;
+        }
+
+        let interval = self.store.opts.orphan_recovery_interval;
+        let store = Arc::clone(&self.store);
+        let spawn_result = self.store.opts.spawn_task(async move {
+            let timer = store.opts.timer().clone();
+            loop {
+                timer.sleep(interval).await;
+
+                let now_ms = Self::wall_clock_now_ms(&timer);
+                if !Self::should_attempt_orphan_recovery_for_store(store.as_ref(), now_ms) {
+                    continue;
+                }
+                if store
+                    .orphan_recovery_inflight
+                    .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                    .is_err()
+                {
+                    continue;
+                }
+
+                let result = Self::recover_orphans_for_store(Arc::clone(&store)).await;
+                if result.is_err() {
+                    store
+                        .orphan_recovery_last_attempt_ms
+                        .store(0, Ordering::Release);
+                }
+                store
+                    .orphan_recovery_inflight
+                    .store(false, Ordering::Release);
+            }
+        });
+
+        if spawn_result.is_err() {
+            self.store
+                .orphan_recovery_background_started
+                .store(false, Ordering::Release);
+        }
+    }
+
+    fn should_attempt_orphan_recovery_for_store(
+        store: &Store<HS, SS, CS, LS, E, R>,
+        now_ms: u64,
+    ) -> bool {
+        let mut interval_ms = store
+            .opts
+            .orphan_recovery_interval
+            .as_millis()
+            .min(u128::from(u64::MAX)) as u64;
+        interval_ms = interval_ms.max(1);
+
+        loop {
+            let last = store
+                .orphan_recovery_last_attempt_ms
+                .load(Ordering::Acquire);
+            if last != 0 && now_ms.saturating_sub(last) < interval_ms {
+                return false;
+            }
+
+            match store.orphan_recovery_last_attempt_ms.compare_exchange(
+                last,
+                now_ms,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => return true,
+                Err(current) => {
+                    if current != 0 && now_ms.saturating_sub(current) < interval_ms {
+                        return false;
+                    }
+                }
+            }
+        }
+    }
+
+    fn should_attempt_orphan_recovery(&self, now_ms: u64) -> bool {
+        Self::should_attempt_orphan_recovery_for_store(self.store.as_ref(), now_ms)
+    }
+
+    async fn maybe_schedule_orphan_recovery(&self) -> Result<()> {
+        let now_ms = Self::wall_clock_now_ms(self.store.opts.timer());
+        if !self.should_attempt_orphan_recovery(now_ms) {
+            return Ok(());
+        }
+
+        if self
+            .store
+            .orphan_recovery_inflight
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return Ok(());
+        }
+
+        if !Self::supports_detached_background_loop() {
+            let result = Self::recover_orphans_for_store(Arc::clone(&self.store)).await;
+            if result.is_err() {
+                self.store
+                    .orphan_recovery_last_attempt_ms
+                    .store(0, Ordering::Release);
+            }
+            self.store
+                .orphan_recovery_inflight
+                .store(false, Ordering::Release);
+            return result.map(|_| ());
+        }
+
+        let store = Arc::clone(&self.store);
+        let spawn_result = self.store.opts.spawn_task(async move {
+            let result = Self::recover_orphans_for_store(Arc::clone(&store)).await;
+            if result.is_err() {
+                // Don't leave the gate closed after a failed attempt.
+                store
+                    .orphan_recovery_last_attempt_ms
+                    .store(0, Ordering::Release);
+            }
+            store
+                .orphan_recovery_inflight
+                .store(false, Ordering::Release);
+        });
+
+        if let Err(err) = spawn_result {
+            self.store
+                .orphan_recovery_inflight
+                .store(false, Ordering::Release);
+            self.store
+                .orphan_recovery_last_attempt_ms
+                .store(0, Ordering::Release);
+            return Err(err);
+        }
+        Ok(())
     }
 
     /// Build a `Compactor` over the same stores and context. Callers can use this to run
@@ -130,19 +293,18 @@ where
     /// - Yield between batches if recovery spans many windows to avoid starving other tasks.
     #[tracing::instrument(skip(self))]
     pub async fn recover_orphans(&self) -> Result<usize> {
-        let timer = self.store.opts.timer().clone();
-        let pol = self.store.opts.backoff;
+        Self::recover_orphans_for_store(Arc::clone(&self.store)).await
+    }
+
+    async fn recover_orphans_for_store(store: Arc<Store<HS, SS, CS, LS, E, R>>) -> Result<usize> {
+        let timer = store.opts.timer().clone();
+        let pol = store.opts.backoff;
         let mut backoff_iter = pol.build_backoff();
 
         loop {
-            let now_ms = timer
-                .system_time()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis()
-                .min(u128::from(u64::MAX)) as u64;
+            let now_ms = Self::wall_clock_now_ms(&timer);
             let now = Duration::from_millis(now_ms);
-            let active_txns: HashSet<u64> = match self.store.leases.list_active(now).await {
+            let active_txns: HashSet<u64> = match store.leases.list_active(now).await {
                 Ok(leases) => {
                     if leases
                         .iter()
@@ -166,7 +328,7 @@ where
             };
 
             // Load current head once and derive CAS condition for this attempt.
-            let loaded = self.store.head.load().await?;
+            let loaded = store.head.load().await?;
             let (cur, cond) = match loaded.clone() {
                 None => (
                     HeadJson {
@@ -194,7 +356,7 @@ where
 
             'probe: loop {
                 // List a window starting at the expected next sequence.
-                let ids = self.store.segment.list_from(expected, 256).await?;
+                let ids = store.segment.list_from(expected, 256).await?;
                 if ids.is_empty() {
                     break;
                 }
@@ -207,7 +369,7 @@ where
                         // Found a gap; stop adopting.
                         break 'probe;
                     }
-                    let txn_id = self.store.segment.load_meta(&id).await?.txn_id;
+                    let txn_id = store.segment.load_meta(&id).await?.txn_id;
                     if txn_id <= last_txn {
                         break 'probe;
                     }
@@ -241,7 +403,7 @@ where
                 merge_tree: cur.merge_tree.clone(),
             };
 
-            match self.store.head.put(&new_head, cond.clone()).await {
+            match store.head.put(&new_head, cond.clone()).await {
                 Ok(_t) => {
                     let adopted_seqs: Vec<u64> =
                         ((max_seq - adopted as u64 + 1)..=max_seq).collect();
@@ -291,8 +453,8 @@ where
     #[tracing::instrument(skip(self), fields(session_type = "write"))]
     pub async fn session_write(&self) -> Result<WriteSession<K, V, HS, SS, CS, LS, E, R>> {
         tracing::debug!("session_write started");
-        // Opportunistically adopt durable-but-unpublished segments before opening a writer.
-        self.recover_orphans().await?;
+        // Trigger orphan recovery in background when the throttle window permits.
+        self.maybe_schedule_orphan_recovery().await?;
         let snap = self.snapshot().await?;
         let ttl = self.store.opts.retention.lease_ttl();
         let next_txn = snap.txn_id.0.saturating_add(1);
@@ -433,7 +595,7 @@ mod tests {
         checkpoint::{CheckpointId, CheckpointMeta, CheckpointStore, CheckpointStoreImpl},
         context::ManifestContext,
         head::{HeadStore, HeadStoreImpl, HeadTag},
-        lease::{LeaseKind, LeaseStoreImpl},
+        lease::{ActiveLease, LeaseHandle, LeaseKind, LeaseStore, LeaseStoreImpl},
         retention::DefaultRetention,
         segment::SegmentStoreImpl,
         snapshot::ScanRange,
@@ -510,6 +672,72 @@ mod tests {
                 } else {
                     inner.put(&head_cloned, cond_cloned).await
                 }
+            }
+        }
+    }
+
+    #[derive(Clone)]
+    struct CountingLeaseStore<L> {
+        inner: L,
+        list_active_calls: Arc<AtomicUsize>,
+    }
+
+    impl<L> CountingLeaseStore<L>
+    where
+        L: LeaseStore,
+    {
+        fn new(inner: L) -> Self {
+            Self {
+                inner,
+                list_active_calls: Arc::new(AtomicUsize::new(0)),
+            }
+        }
+
+        fn list_active_calls(&self) -> usize {
+            self.list_active_calls.load(Ordering::SeqCst)
+        }
+    }
+
+    impl<L> LeaseStore for CountingLeaseStore<L>
+    where
+        L: LeaseStore,
+    {
+        fn create(
+            &self,
+            snapshot_txn_id: u64,
+            active_txn_id: Option<u64>,
+            head_tag: Option<HeadTag>,
+            kind: LeaseKind,
+            ttl: Duration,
+        ) -> impl MaybeSendFuture<Output = Result<LeaseHandle>> + '_ {
+            self.inner
+                .create(snapshot_txn_id, active_txn_id, head_tag, kind, ttl)
+        }
+
+        fn heartbeat(
+            &self,
+            lease: &LeaseHandle,
+            ttl: Duration,
+        ) -> impl MaybeSendFuture<Output = Result<(), Error>> + '_ {
+            self.inner.heartbeat(lease, ttl)
+        }
+
+        fn release(
+            &self,
+            lease: LeaseHandle,
+        ) -> impl MaybeSendFuture<Output = Result<(), Error>> + '_ {
+            self.inner.release(lease)
+        }
+
+        fn list_active(
+            &self,
+            now: Duration,
+        ) -> impl MaybeSendFuture<Output = Result<Vec<ActiveLease>, Error>> + '_ {
+            let inner = self.inner.clone();
+            let calls = self.list_active_calls.clone();
+            async move {
+                calls.fetch_add(1, Ordering::SeqCst);
+                inner.list_active(now).await
             }
         }
     }
@@ -807,6 +1035,64 @@ mod tests {
 
             writer.end().await.unwrap();
             assert!(ls.list_active(now_duration()).await.unwrap().is_empty());
+        })
+    }
+
+    #[rstest]
+    fn mem_session_write_throttles_orphan_recovery_by_interval(in_memory_stores: InMemoryStores) {
+        block_on(async move {
+            let leases = CountingLeaseStore::new(in_memory_stores.lease.clone());
+            let opts: ManifestContext<DefaultRetention, NoopExecutor> =
+                ManifestContext::new(NoopExecutor::default())
+                    .with_orphan_recovery_interval(Duration::from_secs(60));
+            let kv: Manifest<String, String, _, _, _, _, NoopExecutor> = Manifest::new_with_context(
+                in_memory_stores.head.clone(),
+                in_memory_stores.segment.clone(),
+                in_memory_stores.checkpoint.clone(),
+                leases.clone(),
+                Arc::new(opts),
+            );
+
+            let writer1 = kv.session_write().await.unwrap();
+            writer1.end().await.unwrap();
+
+            let writer2 = kv.session_write().await.unwrap();
+            writer2.end().await.unwrap();
+
+            assert_eq!(
+                leases.list_active_calls(),
+                1,
+                "orphan recovery should run once within the configured interval"
+            );
+        })
+    }
+
+    #[rstest]
+    fn mem_session_write_zero_interval_normalizes_to_default(in_memory_stores: InMemoryStores) {
+        block_on(async move {
+            let leases = CountingLeaseStore::new(in_memory_stores.lease.clone());
+            let opts: ManifestContext<DefaultRetention, NoopExecutor> =
+                ManifestContext::new(NoopExecutor::default())
+                    .with_orphan_recovery_interval(Duration::ZERO);
+            let kv: Manifest<String, String, _, _, _, _, NoopExecutor> = Manifest::new_with_context(
+                in_memory_stores.head.clone(),
+                in_memory_stores.segment.clone(),
+                in_memory_stores.checkpoint.clone(),
+                leases.clone(),
+                Arc::new(opts),
+            );
+
+            let writer1 = kv.session_write().await.unwrap();
+            writer1.end().await.unwrap();
+
+            let writer2 = kv.session_write().await.unwrap();
+            writer2.end().await.unwrap();
+
+            assert_eq!(
+                leases.list_active_calls(),
+                1,
+                "zero interval should normalize to throttled orphan-recovery behavior"
+            );
         })
     }
 
