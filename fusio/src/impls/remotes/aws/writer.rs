@@ -312,45 +312,26 @@ mod tests {
     ))]
     #[tokio::test]
     async fn test_s3() {
-        use std::sync::Arc;
-
         use bytes::Bytes;
 
         use crate::{
-            remotes::{
-                aws::{
-                    fs::{AmazonS3, AmazonS3Inner},
-                    multipart_upload::MultipartUpload,
-                    options::S3Options,
-                    writer::S3Writer,
-                    AwsCredential,
-                },
-                http::DynHttpClient,
+            remotes::aws::{
+                credential::AwsCredential, fs::AmazonS3Builder, multipart_upload::MultipartUpload,
+                writer::S3Writer,
             },
             Write,
         };
 
-        let region = "ap-southeast-2";
-        let options = S3Options {
-            endpoint: "http://localhost:9000/data".into(),
-            bucket: "data".to_string(),
-            credential: Some(AwsCredential {
+        let s3 = AmazonS3Builder::new("data".to_string())
+            .endpoint("http://localhost:9000".to_string())
+            .region("ap-southeast-2".to_string())
+            .credential(AwsCredential {
                 key_id: "user".to_string(),
                 secret_key: "password".to_string(),
                 token: None,
-            }),
-            region: region.into(),
-            sign_payload: true,
-            checksum: false,
-        };
-        let client = crate::impls::remotes::http::tokio::TokioClient::new();
-
-        let s3 = AmazonS3 {
-            inner: Arc::new(AmazonS3Inner {
-                options,
-                client: Box::new(client) as Box<dyn DynHttpClient>,
-            }),
-        };
+            })
+            .sign_payload(true)
+            .build();
 
         let upload = MultipartUpload::new(s3, "read-write.txt".into());
         let mut writer = S3Writer::new(Arc::new(upload));

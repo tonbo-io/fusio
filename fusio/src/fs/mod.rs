@@ -110,10 +110,7 @@ mod tests {
             fs::{Fs, OpenOptions},
             impls::disk::tokio::fs::TokioFs,
             path::Path,
-            remotes::{
-                aws::{credential::AwsCredential, fs::AmazonS3, options::S3Options, s3::S3File},
-                http::tokio::TokioClient,
-            },
+            remotes::aws::{credential::AwsCredential, fs::AmazonS3Builder, s3::S3File},
             DynFs, Read, Write,
         };
 
@@ -122,25 +119,18 @@ mod tests {
             .map_err(|err| Error::Path(Box::new(err)))?;
         let s3_path: Path = "s3_copy_test.file".into();
 
-        let key_id = "user".to_string();
-        let secret_key = "password".to_string();
-
-        let client = TokioClient::new();
-        let region = "ap-southeast-1";
-        let options = S3Options {
-            endpoint: "http://localhost:9000/data".into(),
-            bucket: "data".to_string(),
-            credential: Some(AwsCredential {
-                key_id,
-                secret_key,
-                token: None,
-            }),
-            region: region.into(),
-            sign_payload: true,
-            checksum: false,
-        };
-
-        let s3_fs = Arc::new(AmazonS3::new(Box::new(client), options));
+        let s3_fs = Arc::new(
+            AmazonS3Builder::new("data".to_string())
+                .endpoint("http://localhost:9000".to_string())
+                .region("ap-southeast-1".to_string())
+                .credential(AwsCredential {
+                    key_id: "user".to_string(),
+                    secret_key: "password".to_string(),
+                    token: None,
+                })
+                .sign_payload(true)
+                .build(),
+        );
         let local_fs = Arc::new(TokioFs);
 
         {

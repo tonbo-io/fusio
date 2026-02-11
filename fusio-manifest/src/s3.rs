@@ -105,6 +105,7 @@ where
     region: Option<String>,
     endpoint: Option<String>,
     credential: Option<AwsCredential>,
+    use_default_credential_provider: bool,
     sign_payload: bool,
     checksum: bool,
     opts: Arc<ManifestContext<R, E>>,
@@ -128,6 +129,7 @@ impl Builder<DefaultRetention, DefaultExecutor> {
             region: None,
             endpoint: None,
             credential: None,
+            use_default_credential_provider: false,
             sign_payload: false,
             checksum: false,
             opts: Arc::new(opts),
@@ -180,6 +182,15 @@ where
         self
     }
 
+    /// Use the default credential provider chain (env, profile, SSO, IRSA, ECS, IMDS).
+    ///
+    /// Available with the `tokio` feature or with `web` on `wasm32`.
+    #[cfg(any(feature = "tokio", all(feature = "web", target_arch = "wasm32")))]
+    pub fn default_credential_provider(mut self) -> Self {
+        self.use_default_credential_provider = true;
+        self
+    }
+
     /// Enable SigV4 payload signing (default: false). Recommended for AWS/MinIO.
     pub fn sign_payload(mut self, yes: bool) -> Self {
         self.sign_payload = yes;
@@ -212,6 +223,7 @@ where
             region: self.region,
             endpoint: self.endpoint,
             credential: self.credential,
+            use_default_credential_provider: self.use_default_credential_provider,
             sign_payload: self.sign_payload,
             checksum: self.checksum,
             opts: opts.into(),
@@ -223,6 +235,10 @@ where
         let mut b = AmazonS3Builder::new(self.bucket.clone());
         if let Some(cred) = self.credential {
             b = b.credential(cred);
+        }
+        #[cfg(any(feature = "tokio", all(feature = "web", target_arch = "wasm32")))]
+        if self.use_default_credential_provider {
+            b = b.default_credential_provider();
         }
         if let Some(ep) = self.endpoint {
             b = b.endpoint(ep);
@@ -256,6 +272,7 @@ where
             region: self.region.clone(),
             endpoint: self.endpoint.clone(),
             credential: self.credential.clone(),
+            use_default_credential_provider: self.use_default_credential_provider,
             sign_payload: self.sign_payload,
             checksum: self.checksum,
             opts: self.opts.clone(),

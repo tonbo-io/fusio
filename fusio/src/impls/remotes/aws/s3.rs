@@ -482,8 +482,8 @@ mod tests {
         let options = super::super::options::S3Options {
             endpoint: "https://s3.test".into(),
             bucket: "bucket".into(),
-            region: "us-east-1".into(),
-            credential: None,
+
+            signer: None,
             sign_payload: false,
             checksum: false,
         };
@@ -575,8 +575,8 @@ mod tests {
         let options = super::super::options::S3Options {
             endpoint: "https://s3.test".into(),
             bucket: "bucket".into(),
-            region: "us-east-1".into(),
-            credential: None,
+
+            signer: None,
             sign_payload: false,
             checksum: false,
         };
@@ -623,20 +623,10 @@ mod tests {
     #[cfg(all(feature = "tokio-http", not(feature = "completion-based")))]
     #[tokio::test]
     async fn write_and_read_s3_file() {
-        use std::sync::Arc;
-
         use crate::{
             fs::{Fs, OpenOptions},
             path::Path,
-            remotes::{
-                aws::{
-                    credential::AwsCredential,
-                    fs::{AmazonS3, AmazonS3Inner},
-                    options::S3Options,
-                    s3::S3File,
-                },
-                http::{tokio::TokioClient, DynHttpClient},
-            },
+            remotes::aws::{credential::AwsCredential, fs::AmazonS3Builder, s3::S3File},
             Read, Write,
         };
 
@@ -651,7 +641,6 @@ mod tests {
             .unwrap()
             .to_string();
 
-        let client = TokioClient::new();
         let bucket = std::option_env!("BUCKET_NAME")
             .expect("expected bucket not to be empty")
             .to_string();
@@ -660,25 +649,15 @@ mod tests {
             .to_string();
         let token = std::option_env!("AWS_SESSION_TOKEN").map(|v| v.to_string());
 
-        let options = S3Options {
-            endpoint: format!("https://{}.s3.{}.amazonaws.com", &bucket, &region),
-            bucket,
-            credential: Some(AwsCredential {
+        let s3 = AmazonS3Builder::new(bucket)
+            .region(region)
+            .credential(AwsCredential {
                 key_id,
                 secret_key,
                 token,
-            }),
-            region,
-            sign_payload: true,
-            checksum: false,
-        };
-
-        let s3 = AmazonS3 {
-            inner: Arc::new(AmazonS3Inner {
-                options,
-                client: Box::new(client) as Box<dyn DynHttpClient>,
-            }),
-        };
+            })
+            .sign_payload(true)
+            .build();
 
         let path: Path = "read-write.txt".into();
         let initial = b"The answer of life, universe and everthing";

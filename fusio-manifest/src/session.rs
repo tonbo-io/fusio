@@ -1121,7 +1121,8 @@ mod tests {
             assert_eq!(keys_equal_to_v1, 2);
 
             session.put(key, "v2".to_owned());
-            return session.commit().await.map(|_| ()); // This should fail for one of the transactions
+            return session.commit().await.map(|_| ()); // This should fail for one of the
+                                                       // transactions
         }
 
         // 2. Run both transactions concurrently.

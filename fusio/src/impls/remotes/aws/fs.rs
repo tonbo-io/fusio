@@ -14,7 +14,9 @@ use http_body_util::{BodyExt, Empty};
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-use super::{credential::AwsCredential, options::S3Options, S3Error, S3File};
+use super::{
+    context::default_context, credential::AwsCredential, options::S3Options, S3Error, S3File,
+};
 use crate::{
     error::Error,
     fs::{CasCondition, FileMeta, FileSystemTag, Fs, FsCas, OpenOptions},
@@ -34,6 +36,7 @@ pub struct AmazonS3Builder {
     region: String,
     bucket: String,
     credential: Option<AwsCredential>,
+    use_default_credential_provider: bool,
     sign_payload: bool,
     checksum: bool,
     client: Box<dyn DynHttpClient>,
@@ -61,6 +64,7 @@ impl AmazonS3Builder {
             region: "us-east-1".into(),
             bucket,
             credential: None,
+            use_default_credential_provider: false,
             sign_payload: false,
             checksum: false,
             client,
@@ -81,6 +85,17 @@ impl AmazonS3Builder {
 
     pub fn credential(mut self, credential: AwsCredential) -> Self {
         self.credential = Some(credential);
+        self
+    }
+
+    /// Use the default credential provider chain (env, profile, SSO, IRSA, ECS, IMDS).
+    ///
+    /// Requires `tokio-http` or `web-http` feature for full functionality (IMDS, ECS,
+    /// STS assume-role). Without an HTTP transport the provider chain falls back to
+    /// environment variables only.
+    #[cfg(any(feature = "tokio-http", feature = "web-http"))]
+    pub fn default_credential_provider(mut self) -> Self {
+        self.use_default_credential_provider = true;
         self
     }
 
@@ -106,14 +121,34 @@ impl AmazonS3Builder {
             )
         };
 
+        let signer = if let Some(cred) = &self.credential {
+            let mut provider =
+                reqsign_aws_v4::StaticCredentialProvider::new(&cred.key_id, &cred.secret_key);
+            if let Some(token) = &cred.token {
+                provider = provider.with_session_token(token);
+            }
+            Some(reqsign_core::Signer::new(
+                default_context(),
+                provider,
+                reqsign_aws_v4::RequestSigner::new("s3", &self.region),
+            ))
+        } else if self.use_default_credential_provider {
+            Some(reqsign_core::Signer::new(
+                default_context(),
+                reqsign_aws_v4::DefaultCredentialProvider::new(),
+                reqsign_aws_v4::RequestSigner::new("s3", &self.region),
+            ))
+        } else {
+            None
+        };
+
         AmazonS3 {
             #[allow(clippy::arc_with_non_send_sync)]
             inner: Arc::new(AmazonS3Inner {
                 options: S3Options {
                     endpoint,
                     bucket: self.bucket,
-                    region: self.region,
-                    credential: self.credential,
+                    signer,
                     sign_payload: self.sign_payload,
                     checksum: self.checksum,
                 },
@@ -590,45 +625,22 @@ mod tests {
     #[cfg(all(feature = "tokio-http", not(feature = "completion-based")))]
     #[tokio::test]
     async fn copy() {
-        use std::sync::Arc;
-
         use crate::{
-            remotes::{
-                aws::{
-                    credential::AwsCredential,
-                    fs::{AmazonS3, AmazonS3Inner},
-                    options::S3Options,
-                    s3::S3File,
-                },
-                http::{tokio::TokioClient, DynHttpClient},
-            },
+            remotes::aws::{credential::AwsCredential, fs::AmazonS3Builder, s3::S3File},
             Read, Write,
         };
 
-        let key_id = "user".to_string();
-        let secret_key = "password".to_string();
-
-        let client = TokioClient::new();
-        let region = "ap-southeast-1";
-        let options = S3Options {
-            endpoint: "http://localhost:9000/data".into(),
-            bucket: "data".to_string(),
-            credential: Some(AwsCredential {
-                key_id,
-                secret_key,
+        let s3 = AmazonS3Builder::new("data".to_string())
+            .endpoint("http://localhost:9000".to_string())
+            .region("ap-southeast-1".to_string())
+            .credential(AwsCredential {
+                key_id: "user".to_string(),
+                secret_key: "password".to_string(),
                 token: None,
-            }),
-            region: region.into(),
-            sign_payload: true,
-            checksum: true,
-        };
-
-        let s3 = AmazonS3 {
-            inner: Arc::new(AmazonS3Inner {
-                options,
-                client: Box::new(client) as Box<dyn DynHttpClient>,
-            }),
-        };
+            })
+            .sign_payload(true)
+            .checksum(true)
+            .build();
 
         let from_path: Path = "read-write.txt".into();
         let to_path: Path = "read-write-copy.txt".into();
