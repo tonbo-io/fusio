@@ -24,6 +24,7 @@ aws = [
     "serde",
     "serde_json",
     "serde_urlencoded",
+    "tokio?/process",
 ]
 bytes = ["dep:bytes", "fusio-core/bytes"]
 completion-based = ["fusio-core/completion-based"]

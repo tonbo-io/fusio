@@ -1,10 +1,7 @@
-use super::credential::AwsCredential;
-
 pub(crate) struct S3Options {
     pub(crate) endpoint: String,
     pub(crate) bucket: String,
-    pub(crate) region: String,
-    pub(crate) credential: Option<AwsCredential>,
+    pub(crate) signer: Option<reqsign_core::Signer<reqsign_aws_v4::Credential>>,
     pub(crate) sign_payload: bool,
     pub(crate) checksum: bool,
 }

@@ -1,3 +1,4 @@
+pub(crate) mod context;
 pub mod credential;
 mod error;
 #[cfg(feature = "fs")]
