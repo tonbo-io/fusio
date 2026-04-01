@@ -5,8 +5,8 @@ use std::{
     sync::{Arc, Mutex, OnceLock},
 };
 
-use async_trait::async_trait;
 use async_stream::stream;
+use async_trait::async_trait;
 use bytes::{Buf, Bytes};
 use chrono::{DateTime, Utc};
 use fusio_core::MaybeSendFuture;
@@ -17,9 +17,9 @@ use http::{
     HeaderValue, Method, Request, StatusCode,
 };
 use http_body_util::{BodyExt, Empty};
+use reqsign_core::{ProvideCredential, SignRequest};
 use serde::{Deserialize, Serialize};
 use url::Url;
-use reqsign_core::{ProvideCredential, SignRequest};
 
 use super::{
     context::default_context, credential::AwsCredential, options::S3Options, S3Error, S3File,
@@ -349,7 +349,9 @@ impl AmazonS3Builder {
         ) {
             (Some(cred), _, true) => Some(Arc::new(S3ExpressCredentialProvider {
                 bucket: self.bucket.clone(),
-                zone: s3_express_zone(trimmed_bucket).unwrap_or_default().to_string(),
+                zone: s3_express_zone(trimmed_bucket)
+                    .unwrap_or_default()
+                    .to_string(),
                 region: self.region.clone(),
                 base: S3ExpressBaseCredentialProvider::Static(reqsign_aws_v4::Credential {
                     access_key_id: cred.key_id.clone(),
@@ -360,7 +362,9 @@ impl AmazonS3Builder {
             })),
             (None, true, true) => Some(Arc::new(S3ExpressCredentialProvider {
                 bucket: self.bucket.clone(),
-                zone: s3_express_zone(trimmed_bucket).unwrap_or_default().to_string(),
+                zone: s3_express_zone(trimmed_bucket)
+                    .unwrap_or_default()
+                    .to_string(),
                 region: self.region.clone(),
                 base: S3ExpressBaseCredentialProvider::Default,
             })),
@@ -946,7 +950,11 @@ mod tests {
     #[cfg(feature = "tokio-http")]
     #[tokio::test]
     async fn s3_express_paged_list_probe() {
-        use std::{env, pin::pin, time::{SystemTime, UNIX_EPOCH}};
+        use std::{
+            env,
+            pin::pin,
+            time::{SystemTime, UNIX_EPOCH},
+        };
 
         use fusio_core::Write;
         use futures_util::StreamExt;

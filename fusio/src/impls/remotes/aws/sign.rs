@@ -2,8 +2,7 @@ use bytes::Bytes;
 use http::{HeaderName, HeaderValue, Request};
 use http_body::Body;
 use http_body_util::BodyExt;
-use reqsign_core::hash as reqsign_hash;
-use reqsign_core::{ProvideCredential, SignRequest};
+use reqsign_core::{hash as reqsign_hash, ProvideCredential, SignRequest};
 
 use super::{context::default_context, options::S3Options, CHECKSUM_HEADER};
 
