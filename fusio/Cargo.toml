@@ -88,6 +88,7 @@ path = "../benches/monoio.rs"
 required-features = ["monoio"]
 
 [dependencies]
+async-trait = { workspace = true }
 async-stream = { workspace = true, optional = true }
 bytes = { workspace = true, optional = true }
 cfg-if = { workspace = true }

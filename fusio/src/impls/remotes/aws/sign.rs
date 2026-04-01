@@ -3,8 +3,9 @@ use http::{HeaderName, HeaderValue, Request};
 use http_body::Body;
 use http_body_util::BodyExt;
 use reqsign_core::hash as reqsign_hash;
+use reqsign_core::{ProvideCredential, SignRequest};
 
-use super::{options::S3Options, CHECKSUM_HEADER};
+use super::{context::default_context, options::S3Options, CHECKSUM_HEADER};
 
 #[derive(Debug, thiserror::Error)]
 pub enum AuthorizeError {
@@ -67,6 +68,25 @@ where
         self.checksum(options).await?;
 
         let Some(signer) = &options.signer else {
+            if let (Some(provider), Some(region)) =
+                (&options.s3_express_provider, &options.s3_express_region)
+            {
+                let ctx = default_context();
+                let credential = provider.provide_credential(&ctx).await?;
+                let (mut parts, _) = http::Request::new(()).into_parts();
+                parts.method = self.method().clone();
+                parts.uri = self.uri().clone();
+                parts.headers = self.headers().clone();
+
+                reqsign_aws_v4::RequestSigner::new("s3express", region)
+                    .sign_request(&ctx, &mut parts, credential.as_ref(), None)
+                    .await?;
+
+                *self.method_mut() = parts.method;
+                *self.uri_mut() = parts.uri;
+                *self.headers_mut() = parts.headers;
+            }
+
             return Ok(());
         };
 
