@@ -484,6 +484,8 @@ mod tests {
             bucket: "bucket".into(),
 
             signer: None,
+            s3_express_provider: None,
+            s3_express_region: None,
             sign_payload: false,
             checksum: false,
         };
@@ -577,6 +579,8 @@ mod tests {
             bucket: "bucket".into(),
 
             signer: None,
+            s3_express_provider: None,
+            s3_express_region: None,
             sign_payload: false,
             checksum: false,
         };

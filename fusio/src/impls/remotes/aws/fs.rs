@@ -1,16 +1,23 @@
 use core::pin::Pin;
-use std::{collections::HashMap, str::FromStr, sync::Arc};
+use std::{
+    collections::HashMap,
+    str::FromStr,
+    sync::{Arc, Mutex, OnceLock},
+};
 
 use async_stream::stream;
+use async_trait::async_trait;
 use bytes::{Buf, Bytes};
 use chrono::{DateTime, Utc};
 use fusio_core::MaybeSendFuture;
 use futures_core::Stream;
+use futures_util::lock::Mutex as AsyncMutex;
 use http::{
-    header::{self},
-    Method, Request, StatusCode,
+    header::{self, HOST},
+    HeaderValue, Method, Request, StatusCode,
 };
 use http_body_util::{BodyExt, Empty};
+use reqsign_core::{ProvideCredential, SignRequest};
 use serde::{Deserialize, Serialize};
 use url::Url;
 
@@ -31,12 +38,204 @@ use crate::{
     },
 };
 
+#[derive(Debug, Clone)]
+enum S3ExpressBaseCredentialProvider {
+    Static(reqsign_aws_v4::Credential),
+    Default,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct S3ExpressCredentialProvider {
+    bucket: String,
+    zone: String,
+    region: String,
+    base: S3ExpressBaseCredentialProvider,
+}
+
+type SharedS3ExpressSession = Arc<AsyncMutex<Option<reqsign_aws_v4::Credential>>>;
+
+fn s3_express_session_cache() -> &'static Mutex<HashMap<String, SharedS3ExpressSession>> {
+    static CACHE: OnceLock<Mutex<HashMap<String, SharedS3ExpressSession>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn is_s3_express_session_valid(credential: &reqsign_aws_v4::Credential) -> bool {
+    if credential.access_key_id.is_empty() || credential.secret_access_key.is_empty() {
+        return false;
+    }
+
+    credential
+        .expires_in
+        .is_none_or(|expires_at| expires_at > Utc::now() + chrono::TimeDelta::seconds(5))
+}
+
+impl S3ExpressCredentialProvider {
+    fn debug_enabled() -> bool {
+        std::env::var("FUSIO_S3_EXPRESS_DEBUG").as_deref() == Ok("1")
+    }
+
+    fn cache_key(&self, access_key_id: &str) -> String {
+        format!(
+            "{}:{}:{}:{}",
+            self.bucket, self.zone, self.region, access_key_id
+        )
+    }
+
+    fn session_slot(&self, access_key_id: &str) -> SharedS3ExpressSession {
+        let mut cache = s3_express_session_cache()
+            .lock()
+            .expect("s3 express session cache lock poisoned");
+        cache
+            .entry(self.cache_key(access_key_id))
+            .or_insert_with(|| Arc::new(AsyncMutex::new(None)))
+            .clone()
+    }
+
+    async fn base_credential(
+        &self,
+        ctx: &reqsign_core::Context,
+    ) -> reqsign_core::Result<reqsign_aws_v4::Credential> {
+        match &self.base {
+            S3ExpressBaseCredentialProvider::Static(cred) => Ok(cred.clone()),
+            S3ExpressBaseCredentialProvider::Default => {
+                reqsign_aws_v4::DefaultCredentialProvider::new()
+                    .provide_credential(ctx)
+                    .await?
+                    .ok_or_else(|| {
+                        reqsign_core::Error::unexpected(
+                            "no AWS credential available for S3 Express session".to_string(),
+                        )
+                    })
+            }
+        }
+    }
+
+    async fn create_session(
+        &self,
+        ctx: &reqsign_core::Context,
+        base_cred: &reqsign_aws_v4::Credential,
+    ) -> reqsign_core::Result<reqsign_aws_v4::Credential> {
+        let authority = format!(
+            "{}.s3express-{}.{}.amazonaws.com",
+            self.bucket, self.zone, self.region
+        );
+        let request = Request::builder()
+            .method(Method::GET)
+            .uri(format!("https://{authority}/?session"))
+            .header(HOST, &authority)
+            .header("x-amz-content-sha256", reqsign_aws_v4::EMPTY_STRING_SHA256)
+            .header("x-amz-create-session-mode", "ReadWrite")
+            .body(Bytes::new())
+            .map_err(|err| {
+                reqsign_core::Error::unexpected(format!(
+                    "failed to build s3 express create-session request: {err}"
+                ))
+            })?;
+
+        let (mut parts, body) = request.into_parts();
+        let sign_cred = if let Some(token) = &base_cred.session_token {
+            parts.headers.insert(
+                "x-amz-security-token",
+                HeaderValue::from_str(token).map_err(|err| {
+                    reqsign_core::Error::unexpected(format!(
+                        "failed to encode aws session token header: {err}"
+                    ))
+                })?,
+            );
+            let mut cred = base_cred.clone();
+            cred.session_token = None;
+            cred
+        } else {
+            base_cred.clone()
+        };
+        reqsign_aws_v4::RequestSigner::new("s3express", &self.region)
+            .sign_request(ctx, &mut parts, Some(&sign_cred), None)
+            .await?;
+
+        let response = ctx.http_send(Request::from_parts(parts, body)).await?;
+        let status = response.status();
+        let body = response.into_body();
+        if !status.is_success() {
+            return Err(reqsign_core::Error::unexpected(format!(
+                "s3 express CreateSession failed with status {status}: {}",
+                String::from_utf8_lossy(&body)
+            )));
+        }
+
+        let parsed: CreateSessionResponse =
+            quick_xml::de::from_reader(body.reader()).map_err(|err| {
+                reqsign_core::Error::unexpected(format!(
+                    "failed to parse s3 express CreateSession response: {err}"
+                ))
+            })?;
+
+        if Self::debug_enabled() {
+            eprintln!(
+                "fusio s3-express: CreateSession bucket={} zone={} region={} expires_at={}",
+                self.bucket, self.zone, self.region, parsed.credentials.expiration
+            );
+        }
+
+        let expires_in = chrono::DateTime::parse_from_rfc3339(&parsed.credentials.expiration)
+            .map_err(|err| {
+                reqsign_core::Error::unexpected(format!(
+                    "failed to parse s3 express session expiration: {err}"
+                ))
+            })?;
+
+        Ok(reqsign_aws_v4::Credential {
+            access_key_id: parsed.credentials.access_key_id,
+            secret_access_key: parsed.credentials.secret_access_key,
+            session_token: Some(parsed.credentials.session_token),
+            expires_in: Some(expires_in.into()),
+        })
+    }
+}
+
+#[async_trait]
+impl reqsign_core::ProvideCredential for S3ExpressCredentialProvider {
+    type Credential = reqsign_aws_v4::Credential;
+
+    async fn provide_credential(
+        &self,
+        ctx: &reqsign_core::Context,
+    ) -> reqsign_core::Result<Option<Self::Credential>> {
+        let base_cred = self.base_credential(ctx).await?;
+        let session_slot = self.session_slot(&base_cred.access_key_id);
+        let mut cached = session_slot.lock().await;
+
+        if cached.as_ref().is_some_and(is_s3_express_session_valid) {
+            return Ok(cached.clone());
+        }
+
+        let session = self.create_session(ctx, &base_cred).await?;
+        *cached = Some(session.clone());
+        Ok(Some(session))
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename = "CreateSessionResult", rename_all = "PascalCase")]
+struct CreateSessionResponse {
+    credentials: CreateSessionCredentials,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct CreateSessionCredentials {
+    session_token: String,
+    secret_access_key: String,
+    access_key_id: String,
+    expiration: String,
+}
+
 pub struct AmazonS3Builder {
     endpoint: Option<String>,
     region: String,
     bucket: String,
     credential: Option<AwsCredential>,
     use_default_credential_provider: bool,
+    s3_express: bool,
     sign_payload: bool,
     checksum: bool,
     client: Box<dyn DynHttpClient>,
@@ -65,6 +264,7 @@ impl AmazonS3Builder {
             bucket,
             credential: None,
             use_default_credential_provider: false,
+            s3_express: false,
             sign_payload: false,
             checksum: false,
             client,
@@ -85,6 +285,16 @@ impl AmazonS3Builder {
 
     pub fn credential(mut self, credential: AwsCredential) -> Self {
         self.credential = Some(credential);
+        self
+    }
+
+    /// Enable S3 Express One Zone mode for directory buckets.
+    ///
+    /// When enabled, Fusio constructs zonal virtual-hosted endpoints and signs
+    /// requests with short-lived `CreateSession` credentials instead of using
+    /// path-style custom endpoints.
+    pub fn s3_express(mut self, s3_express: bool) -> Self {
+        self.s3_express = s3_express;
         self
     }
 
@@ -113,7 +323,18 @@ impl AmazonS3Builder {
         let trimmed_bucket = self.bucket.trim_start_matches('/');
         let endpoint = if let Some(endpoint) = self.endpoint {
             let trimmed_endpoint = endpoint.trim_end_matches('/');
-            format!("{}/{}/", trimmed_endpoint, trimmed_bucket)
+            if self.s3_express {
+                trimmed_endpoint.to_string()
+            } else {
+                format!("{}/{}/", trimmed_endpoint, trimmed_bucket)
+            }
+        } else if self.s3_express {
+            format!(
+                "https://{}.s3express-{}.{}.amazonaws.com",
+                trimmed_bucket,
+                s3_express_zone(trimmed_bucket).unwrap_or_default(),
+                self.region
+            )
         } else {
             format!(
                 "https://{}.s3.{}.amazonaws.com",
@@ -121,25 +342,59 @@ impl AmazonS3Builder {
             )
         };
 
-        let signer = if let Some(cred) = &self.credential {
-            let mut provider =
-                reqsign_aws_v4::StaticCredentialProvider::new(&cred.key_id, &cred.secret_key);
-            if let Some(token) = &cred.token {
-                provider = provider.with_session_token(token);
+        let s3_express_provider = match (
+            &self.credential,
+            self.use_default_credential_provider,
+            self.s3_express,
+        ) {
+            (Some(cred), _, true) => Some(Arc::new(S3ExpressCredentialProvider {
+                bucket: self.bucket.clone(),
+                zone: s3_express_zone(trimmed_bucket)
+                    .unwrap_or_default()
+                    .to_string(),
+                region: self.region.clone(),
+                base: S3ExpressBaseCredentialProvider::Static(reqsign_aws_v4::Credential {
+                    access_key_id: cred.key_id.clone(),
+                    secret_access_key: cred.secret_key.clone(),
+                    session_token: cred.token.clone(),
+                    expires_in: None,
+                }),
+            })),
+            (None, true, true) => Some(Arc::new(S3ExpressCredentialProvider {
+                bucket: self.bucket.clone(),
+                zone: s3_express_zone(trimmed_bucket)
+                    .unwrap_or_default()
+                    .to_string(),
+                region: self.region.clone(),
+                base: S3ExpressBaseCredentialProvider::Default,
+            })),
+            _ => None,
+        };
+
+        let signer = match (
+            &self.credential,
+            self.use_default_credential_provider,
+            self.s3_express,
+        ) {
+            (Some(_), _, true) | (None, true, true) => None,
+            (Some(cred), _, false) => {
+                let mut provider =
+                    reqsign_aws_v4::StaticCredentialProvider::new(&cred.key_id, &cred.secret_key);
+                if let Some(token) = &cred.token {
+                    provider = provider.with_session_token(token);
+                }
+                Some(reqsign_core::Signer::new(
+                    default_context(),
+                    provider,
+                    reqsign_aws_v4::RequestSigner::new("s3", &self.region),
+                ))
             }
-            Some(reqsign_core::Signer::new(
-                default_context(),
-                provider,
-                reqsign_aws_v4::RequestSigner::new("s3", &self.region),
-            ))
-        } else if self.use_default_credential_provider {
-            Some(reqsign_core::Signer::new(
+            (None, true, false) => Some(reqsign_core::Signer::new(
                 default_context(),
                 reqsign_aws_v4::DefaultCredentialProvider::new(),
                 reqsign_aws_v4::RequestSigner::new("s3", &self.region),
-            ))
-        } else {
-            None
+            )),
+            (None, false, _) => None,
         };
 
         AmazonS3 {
@@ -149,6 +404,8 @@ impl AmazonS3Builder {
                     endpoint,
                     bucket: self.bucket,
                     signer,
+                    s3_express_provider,
+                    s3_express_region: self.s3_express.then(|| self.region.clone()),
                     sign_payload: self.sign_payload,
                     checksum: self.checksum,
                 },
@@ -156,6 +413,16 @@ impl AmazonS3Builder {
             }),
         }
     }
+}
+
+fn s3_express_zone(bucket: &str) -> Option<&str> {
+    let mut parts = bucket.rsplitn(3, "--");
+    let suffix = parts.next()?;
+    let zone = parts.next()?;
+    if suffix != "x-s3" || zone.is_empty() {
+        return None;
+    }
+    Some(zone)
 }
 
 #[derive(Clone)]
@@ -314,7 +581,13 @@ impl Fs for AmazonS3 {
         Ok(stream! {
             let mut next_token = None::<String>;
             loop {
-                let path = path.to_string();
+                let mut path = path.to_string();
+                if self.as_ref().options.endpoint.contains(".s3express-")
+                    && !path.is_empty()
+                    && !path.ends_with('/')
+                {
+                    path.push('/');
+                }
                 let mut query = vec![("list-type", "2"), ("prefix", path.as_str())];
                 if let Some(token) = next_token.as_ref() {
                     query.push(("continuation-token", token.as_str()));
@@ -346,6 +619,13 @@ impl Fs for AmazonS3 {
                     .map_err(|err| Error::Path(Box::new(err)))?;
 
                 if !response.status().is_success() {
+                    if S3ExpressCredentialProvider::debug_enabled() {
+                        eprintln!(
+                            "fusio s3-express: list failed url={} status={}",
+                            url,
+                            response.status()
+                        );
+                    }
                     yield Err(Error::Other(Box::new(HttpError::HttpNotSuccess {
                         status: response.status(),
                         body: String::from_utf8_lossy(
@@ -565,8 +845,53 @@ pub struct ListResponse {
 
 #[cfg(test)]
 mod tests {
+    use super::s3_express_zone;
     #[cfg(feature = "tokio-http")]
     use crate::{fs::Fs, path::Path};
+
+    #[test]
+    fn s3_express_zone_suffix_is_parsed() {
+        assert_eq!(
+            s3_express_zone("tonbo-bench-use1-az6-20260331--use1-az6--x-s3"),
+            Some("use1-az6")
+        );
+        assert_eq!(s3_express_zone("plain-bucket"), None);
+    }
+
+    #[test]
+    fn standard_custom_endpoint_remains_path_style() {
+        let s3 = super::AmazonS3Builder::new("bucket".to_string())
+            .endpoint("https://example.com".to_string())
+            .build();
+        assert_eq!(s3.as_ref().options.endpoint, "https://example.com/bucket/");
+    }
+
+    #[test]
+    fn s3_express_endpoint_uses_bucket_host() {
+        let s3 = super::AmazonS3Builder::new("bucket--use1-az6--x-s3".to_string())
+            .region("us-east-1".to_string())
+            .s3_express(true)
+            .build();
+        assert_eq!(
+            s3.as_ref().options.endpoint,
+            "https://bucket--use1-az6--x-s3.s3express-use1-az6.us-east-1.amazonaws.com"
+        );
+    }
+
+    #[test]
+    fn s3_express_custom_endpoint_is_not_rewritten() {
+        let s3 = super::AmazonS3Builder::new("bucket--use1-az6--x-s3".to_string())
+            .endpoint(
+                "https://bucket--use1-az6--x-s3.s3express-use1-az6.us-east-1.amazonaws.com"
+                    .to_string(),
+            )
+            .s3_express(true)
+            .build();
+        assert_eq!(
+            s3.as_ref().options.endpoint,
+            "https://bucket--use1-az6--x-s3.s3express-use1-az6.us-east-1.amazonaws.com"
+        );
+    }
 
     #[cfg(feature = "tokio-http")]
     #[tokio::test]
@@ -619,6 +944,78 @@ mod tests {
             let meta = meta.unwrap();
             s3.remove(&meta.path).await.unwrap();
         }
+    }
+
+    #[ignore]
+    #[cfg(feature = "tokio-http")]
+    #[tokio::test]
+    async fn s3_express_paged_list_probe() {
+        use std::{
+            env,
+            pin::pin,
+            time::{SystemTime, UNIX_EPOCH},
+        };
+
+        use fusio_core::Write;
+        use futures_util::StreamExt;
+
+        use super::*;
+
+        let bucket = match env::var("TONBO_S3_BUCKET") {
+            Ok(value) if !value.is_empty() => value,
+            _ => {
+                eprintln!("skipping S3 Express paged list probe");
+                return;
+            }
+        };
+        let key_id = env::var("TONBO_S3_ACCESS_KEY").expect("TONBO_S3_ACCESS_KEY");
+        let secret_key = env::var("TONBO_S3_SECRET_KEY").expect("TONBO_S3_SECRET_KEY");
+        let region = env::var("TONBO_S3_REGION").expect("TONBO_S3_REGION");
+        let endpoint = env::var("TONBO_S3_ENDPOINT").ok();
+        let token = env::var("TONBO_S3_SESSION_TOKEN").ok();
+        let probe_id = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time before unix epoch")
+            .as_secs();
+
+        let mut builder = AmazonS3Builder::new(bucket)
+            .credential(AwsCredential {
+                key_id,
+                secret_key,
+                token,
+            })
+            .region(region)
+            .s3_express(true)
+            .sign_payload(true);
+        if let Some(endpoint) = endpoint {
+            builder = builder.endpoint(endpoint);
+        }
+        let s3 = builder.build();
+
+        let dir = Path::parse(format!("probe/list-paged-{probe_id}")).expect("probe dir");
+        for idx in 0..1_200usize {
+            let file_path = dir.child(format!("file-{idx:04}.bin"));
+            let mut file = s3
+                .open_options(
+                    &file_path,
+                    OpenOptions::default().create(true).truncate(true),
+                )
+                .await
+                .expect("open probe file");
+            let (result, _) = file.write_all(vec![0u8; 1]).await;
+            result.expect("write probe file");
+            file.close().await.expect("close probe file");
+        }
+
+        let mut seen = 0usize;
+        let mut stream = pin!(s3.list(&dir).await.expect("list probe dir"));
+        while let Some(meta) = stream.next().await {
+            let meta = meta.expect("list entry");
+            seen = seen.saturating_add(1);
+            s3.remove(&meta.path).await.expect("remove probe file");
+        }
+
+        assert_eq!(seen, 1_200);
     }
 
     #[ignore]
